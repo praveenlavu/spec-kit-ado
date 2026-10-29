@@ -1,0 +1,46 @@
+name: commit-lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-commits:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit messages (subject format + length, body required)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          # Annotation text from untrusted data (CLI stderr, branch names): one line, no control chars, UTF-8-safe 300-char cut
+          ann() { python3 -I -c 'import re,sys;t=re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]"," ",sys.stdin.buffer.read().decode("utf-8","replace"));sys.stdout.buffer.write(t[:300].encode())'; }
+          fail=0
+          for sha in $(git rev-list "origin/${BASE_REF}..HEAD" --no-merges); do
+            subject=$(git log -1 --format='%s' "$sha")
+            body=$(git log -1 --format='%b' "$sha")
+            type_re='^(feat|fix|docs|test|refactor|chore|ci|perf|build|revert)(\([^)]+\))?: .+'
+            if ! printf '%s' "$subject" | grep -qE "$type_re"; then
+              echo "::error::$sha: subject must match 'type: summary' (types: feat|fix|docs|test|refactor|chore|ci|perf|build|revert) - got: $(printf '%s' "$subject" | ann)"
+              fail=1
+            fi
+            if [ "${#subject}" -gt 72 ]; then
+              echo "::error::$sha: subject is ${#subject} chars (max 72) - GitHub truncates it: $(printf '%s' "$subject" | ann)"
+              fail=1
+            fi
+            case "$subject" in
+              feat*|fix*)
+                if [ -z "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+                  echo "::error::$sha: feat/fix commits require a body (task + AC detail): $(printf '%s' "$subject" | ann)"
+                  fail=1
+                fi
+                ;;
+            esac
+          done
+          [ "$fail" -eq 0 ] && echo "All commit messages pass." || exit 1

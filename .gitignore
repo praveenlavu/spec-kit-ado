@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.scrub-denylist
+.ado/
+dist/
+ado.config.json
+.superpowers/
+bundle/.specify/
+docs/superpowers/

@@ -1,0 +1,445 @@
+import argparse
+import json
+import sys
+from datetime import date
+
+from pathlib import Path
+
+from . import __version__, attachments, branch, comments, dod, done, gate, prs, push, questions, tasks, workitems
+from .auth import AuthError
+from .client import AdoClient, AdoError
+from .config import Config, ConfigError, ConfigInvalid
+from .setup_cmd import run_setup
+
+
+def _fields(pairs):
+    bad = next((p for p in pairs if "=" not in p), None)
+    if bad is not None:
+        raise ValueError(f"--field expects Name=Value: {bad}")
+    fields = dict(pair.partition("=")[::2] for pair in pairs)
+    if any(name.lower() == "system.parent" for name in fields):
+        raise ValueError("--field System.Parent is not applied by ADO; use: ado link <id> --parent <n>")
+    return fields
+
+
+def _tasks_path(client, args):
+    if args.source:
+        path = Path(args.source)
+    else:
+        ledger = dod.dod_file(client.config.dod_path, args.id)
+        try:
+            spec_dir = dod.ledger_spec_dir(ledger.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as e:
+            raise ValueError(f"no --from given and cannot read ledger {ledger} ({e.__class__.__name__}); "
+                             f"pass --from PATH or run `ado dod {args.id} --spec-dir DIR`")
+        if not spec_dir:
+            raise ValueError(f"no --from given and {ledger} has no spec dir; "
+                             f"pass --from PATH or run `ado dod {args.id} --refresh --spec-dir DIR`")
+        path = Path(spec_dir) / "tasks.md"
+    if not path.is_file():
+        raise ValueError(f"tasks file not found: {path}")
+    return path
+
+
+def _plan(args, text):
+    """--expect-plan: refuse an --apply whose plan is not the approved file (writes the fresh one to
+    <file>.new). --plan-out: write the preview and drop a stale <file>.new. Runs before any write."""
+    if args.expect_plan:
+        approved = Path(args.expect_plan)
+        try:  # text mode on both sides, so the newline translation of --plan-out on Windows still matches
+            same = approved.read_text(encoding="utf-8") == push.gate_preview(text, args.expect_plan)
+        except (OSError, UnicodeDecodeError):
+            same = False
+        if not same:
+            fresh = Path(f"{approved}.new")
+            fresh.parent.mkdir(parents=True, exist_ok=True)
+            fresh.write_text(push.gate_preview(text, fresh), encoding="utf-8")
+            raise ValueError(f"plan changed since approval — re-run the preview and approve again "
+                             f"(the current plan is in {fresh})")
+    if args.plan_out:
+        out = Path(args.plan_out)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(push.gate_preview(text, args.plan_out), encoding="utf-8")
+        Path(f"{out}.new").unlink(missing_ok=True)
+
+
+def _push(client, args):
+    path = _tasks_path(client, args)
+    try:
+        parsed = tasks.parse_tasks(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as e:
+        raise ValueError(f"cannot read {path}: {e}")
+    ops = push.plan_push(client, args.id, parsed)  # read-only: GET/WIQL only
+    _plan(args, push.render_plan(args.id, ops))
+    result = push.apply_push(client, args.id, ops) if args.apply else {}
+    return {"parent": args.id, "from": str(path), "applied": args.apply, "ops": ops, **result}
+
+
+def _done(client, args):
+    path = dod.dod_file(client.config.dod_path, args.id)
+    try:
+        ledger_md = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        raise ValueError(f"cannot read ledger {path} ({e.__class__.__name__}); run `ado dod {args.id}` first")
+    chk = done.check(ledger_md)
+    work_item = None
+    if chk["ready"] or not args.apply:  # one read-only GET drives the preview, the idempotent apply and `already_done` (CI must not move a done story)
+        try:
+            work_item = workitems.get(client, args.id)
+        except (AdoError, AuthError):
+            if args.apply:
+                raise  # never write blind
+    known = {"already_done": done._status(work_item, "", client.config.done_state)[0]} if work_item else {}
+    _plan(args, done.render_plan(args.id, chk, client.config, work_item))
+    result = done.apply(client, args.id, path, work_item) if args.apply and chk["ready"] else {}
+    return {"id": args.id, "applied": bool(args.apply and chk["ready"]), **chk, **known, **result}
+
+
+def _read_body(path):
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        raise ValueError(f"cannot read body file {path} ({e.__class__.__name__})")
+
+
+def _task_status(client, args):
+    """(unticked ids or None, preview row). Missing tasks.md / spec dir never blocks: it is only noted."""
+    try:
+        path = _tasks_path(client, argparse.Namespace(source=None, id=args.id))
+        parsed = tasks.parse_tasks(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError, UnicodeDecodeError):
+        return None, ("tasks", "not checked (no tasks.md)")
+    if not parsed:
+        # An emptied tasks.md (R3 N3) must not read as "nothing to check" while the board still tracks Tasks for it.
+        try:
+            tracked = [m.group(1) for c in workitems.children(client, args.id)
+                       if c.get("state") != client.config.removed_state and (m := push._TAG_RE.match(c.get("title") or ""))]
+        except (AdoError, ValueError, KeyError, TypeError):
+            tracked = []
+        if tracked:
+            return tracked, ("draft", f"yes — {path} lists no tasks but {len(tracked)} Task(s) tracked on the board "
+                                      f"({', '.join(tracked)}); was it emptied?")
+        return None, ("tasks", f"not checked (no tasks found in {path})")
+    open_ids = [t["id"] for t in parsed if not t["done"]]
+    if not open_ids:
+        return [], ("tasks", f"all {len(parsed)} ticked")
+    return open_ids, ("draft", f"yes — {len(open_ids)} unticked task(s): {', '.join(open_ids)}")
+
+
+def _pr(client, args):
+    cfg = client.config
+    azure = cfg.repo_host == "azure"
+    if args.pr_command == "comment":
+        if not azure:
+            raise ValueError("`ado pr comment` is Azure Repos only; on GitHub use `gh pr comment`")
+        if not cfg.repository:
+            raise ValueError("repo_host is azure but `repository` is not set in ado.config.json")
+        return prs.azure_comment(client, cfg.repository, args.pr_id, _read_body(args.body_file))
+    if azure and not cfg.repository:
+        raise ValueError("repo_host is azure but `repository` is not set in ado.config.json")
+    if args.from_prepared:
+        if any((args.title, args.body_file, args.base, args.head)):
+            raise ValueError("--from-prepared cannot be combined with --title/--body-file/--base/--head")
+        args.title, args.base, args.head, args.body_file = prs.load_prepared()
+    else:
+        if args.push:
+            raise ValueError("--push needs --from-prepared")
+        if not all((args.title, args.body_file, args.base, args.head)):
+            raise ValueError("--title, --body-file, --base and --head are required (or use --from-prepared)")
+    prs.check_branch("base", args.base)
+    prs.check_branch("head", args.head)
+    if why := prs.review_blocks(args.id, cfg.review_block_on, args.head, cfg.dod_path, push=args.push):
+        raise ValueError(f"refusing to open a PR: {why}")
+    open_ids, tasks_row = _task_status(client, args)
+    if open_ids and not args.allow_incomplete:
+        raise ValueError(f"refusing to open a PR: {len(open_ids)} unticked task(s) in tasks.md: {', '.join(open_ids)}. "
+                         "Finish them, or pass --allow-incomplete to open it as a draft")
+    draft = bool(open_ids)
+    body = _read_body(args.body_file)
+    title = prs.with_ab_ref(args.title, args.id)
+    host = "azure" if azure else "github"
+    _plan(args, prs.render_plan(host, title, prs.azure_description(body) if azure else body, args.base, args.head,
+                                [args.id], tasks_row))
+    info = {"applied": args.apply, "host": host, "title": title, "base": args.base, "head": args.head}
+    if not args.apply:
+        return info
+    if args.push and (pushed := prs.push_branch(args.head)).get("error"):
+        return pushed
+    if azure:
+        res = prs.azure_create(client, cfg.repository, args.head, args.base, title, body, [args.id], draft)
+        if res.get("pullRequestId"):
+            res["work_items_linked"], note = prs.ensure_work_item_links(client, cfg.repository, res, [args.id])
+            if note:
+                print(f"note: {note}", file=sys.stderr)
+    else:
+        res = prs.github_create(title, args.body_file, args.base, args.head, draft)
+    return res if res.get("error") else {**info, **res}
+
+
+def dispatch(client, args):
+    if args.command == "pr":
+        return _pr(client, args)
+    if args.command == "done":
+        return _done(client, args)
+    if args.command == "push":
+        return _push(client, args)
+    if args.command == "branch":
+        branch.require_work_tree()  # before the ADO request
+        if args.link:
+            p = branch.link_plan(client, args.id)  # read-only
+            _plan(args, branch.render_link_plan(p))
+            do = args.apply and p["action"] == "link"
+            if do:
+                workitems.add_relation(client, args.id, branch.link_value(p["url"]))
+            return {**p, "applied": do}
+        title = (workitems.get(client, args.id).get("fields") or {}).get("System.Title", "")
+        p = branch.plan(args.id, title, client.config.branch_prefix)
+        return branch.apply(p) if args.apply else {**p, "applied": False}
+    if args.command == "get":
+        return workitems.get(client, args.id)
+    if args.command == "query":
+        return workitems.query(client, args.wiql)
+    if args.command == "create":
+        return workitems.create(client, args.type, args.title, _fields(args.field))
+    if args.command == "update":
+        return workitems.update(client, args.id, args.state, _fields(args.field))
+    if args.command == "comments":
+        out = comments.safe_out(args.out or f".ado/context/{args.id}.md")  # before any request
+        found = comments.fetch(client, args.id)
+        comments.write(args.id, found, out)
+        return found
+    if args.command == "attachments":
+        out_dir = attachments.safe_dir(args.dir or f".ado/attachments/{args.id}") if args.download else None
+        return attachments.fetch(client, args.id, out_dir)  # out_dir is checked before any request
+    if args.command == "comment":
+        return workitems.comment(client, args.id, args.text)
+    if args.command == "link":
+        return workitems.link(client, args.id, args.to, args.url, args.parent)
+    if args.command == "attach":
+        return attachments.attach(client, args.id, args.files, args.comment)
+    if args.command == "dod":
+        wi = workitems.get(client, args.id)
+        dod_dir = args.dir or client.config.dod_path
+        existed = dod.dod_file(dod_dir, args.id).exists()
+        path = dod.write_dod(
+            wi, dod_dir, client.config.organization, client.config.project,
+            synced=date.today().isoformat(), force=args.force, refresh=args.refresh,
+            spec_dir=getattr(args, "spec_dir", None) or "",
+        )
+        action = "refreshed" if (args.refresh and existed) else ("overwritten" if existed else "created")
+        return {"path": str(path), "action": action, **dod.ac_stats(wi)}
+    if args.command == "questions":
+        path = dod.dod_file(client.config.dod_path, args.id)
+        try:
+            parsed = questions.parse_questions(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as e:
+            raise ValueError(f"cannot read ledger {path} ({e.__class__.__name__}); run `ado dod {args.id}` first")
+        if not (args.post or args.plan_out):
+            return parsed
+        plan = questions.plan_post(client, args.id, parsed)  # read-only: GET only
+        _plan(args, questions.render_plan(args.id, plan, parsed["unparsed"]))
+        if args.apply:
+            questions.apply_post(client, args.id, plan)
+        return {"id": args.id, "applied": args.apply, "action": plan["action"], "comment_id": plan["comment_id"]}
+    if args.command == "gate":
+        path = dod.dod_file(client.config.dod_path, args.id)
+        if not path.exists():
+            return {"ledger": "missing", "blocking": False,
+                    "note": f"no ledger at {path} — run `ado dod {args.id}` to enable tracking"}
+        # dod_path comes from the PR's config: read the ledger as confined as any file under --src
+        ledger_md = gate._read(path, args.src, set())
+        if ledger_md is None:
+            return {"ledger": "unreadable", "blocking": False,
+                    "note": f"ledger at {path} exists but is unreadable — advisory only"}
+        tests = {**gate.DEFAULT_TESTS, **client.config.gate["tests"]}
+        work_item, reason = None, gate.UNREACHABLE
+        if getattr(args, "offline", False):
+            reason = "offline — drift not checked"
+        else:
+            try:
+                work_item = workitems.get(client, args.id)
+            except (AdoError, AuthError):
+                pass  # missing info (no story, no token) never blocks: drift is simply not checked
+        skipped = set()
+        sources = gate.discover_tests(args.src, tests, skipped)
+        changed = {f: t for f in (args.changed or []) if (t := gate._read(f, args.src, skipped)) is not None}
+        return gate.run_gate(ledger_md, sources, changed, work_item, skipped=len(skipped),
+                             block=client.config.gate["block"], tests=tests, reason=reason,
+                             commits=gate.check_commits(args.src, args.id, getattr(args, "base", None)))
+    raise SystemExit(2)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="ado", description="Azure DevOps work-item CLI")
+    parser.add_argument("--version", action="version", version=__version__)
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("setup", help="Configure this repo/team and verify access (read-only)")
+    p = sub.add_parser("get", help="Get a work item (with relations)")
+    p.add_argument("id", type=int)
+    p = sub.add_parser("query", help="Run a WIQL query")
+    p.add_argument("wiql")
+    p = sub.add_parser("create", help="Create a work item")
+    p.add_argument("--type", required=True)
+    p.add_argument("--title", required=True)
+    p.add_argument("--field", action="append", default=[], metavar="Name=Value")
+    p = sub.add_parser("update", help="Update fields / transition state")
+    p.add_argument("id", type=int)
+    p.add_argument("--state")
+    p.add_argument("--field", action="append", default=[], metavar="Name=Value")
+    p = sub.add_parser("comment", help="Add a comment (System.History)")
+    p.add_argument("id", type=int)
+    p.add_argument("text")
+    p = sub.add_parser("comments", help="Read a story's discussion (authors scrubbed); writes .ado/context/<id>.md")
+    p.add_argument("id", type=int)
+    p.add_argument("--out", metavar="PATH", help="markdown file (default: .ado/context/<id>.md)")
+    p = sub.add_parser("link", help="Link to another work item, a parent, or a URL")
+    p.add_argument("id", type=int)
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--to", type=int, help="related work item")
+    g.add_argument("--parent", type=int, help="set the parent work item")
+    g.add_argument("--url")
+    p = sub.add_parser("attach", help="Attach sensitive-data-safe doc files (.md/.svg/.txt)")
+    p.add_argument("id", type=int)
+    p.add_argument("files", nargs="+")
+    p.add_argument("--comment", default="")
+    p = sub.add_parser("attachments", help="List a story's attached files; --download saves the allowed ones (read-only)")
+    p.add_argument("id", type=int)
+    p.add_argument("--download", action="store_true",
+                   help="save allowlisted files from ADO hosts only (5 MB cap each)")
+    p.add_argument("--dir", help="download dir inside .ado/attachments/ (default: .ado/attachments/<id>)")
+    p = sub.add_parser("branch", help="Name the local feature branch <branch_prefix>ab<id>-<slug> from the story "
+                       "(dry run unless --apply; never pushes)")
+    p.add_argument("id", type=int, nargs="?")
+    p.add_argument("--apply", action="store_true", help="create, rename (a Spec Kit branch made for this spec, with no upstream) or "
+                   "switch to the branch; the default branch is never renamed")
+    p.add_argument("--id-from", metavar="NAME", help="print the story id the branch NAME is tied to (exit 1 if none)")
+    p.add_argument("--link", action="store_true", help="Azure Repos: add the pushed current branch to the story's "
+                   "Development section (dry run unless --apply; needs a PAT with Code: Read and Project and Team: Read)")
+    p.add_argument("--plan-out", metavar="PATH", help="with --link: write the markdown plan here")
+    p.add_argument("--expect-plan", metavar="PATH",
+                   help="with --link --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+    p = sub.add_parser("dod", help="Seed/refresh the DoD ledger (dod/DoD_<id>.md) from a story")
+    p.add_argument("id", type=int)
+    p.add_argument("--force", action="store_true", help="overwrite an existing ledger")
+    p.add_argument("--refresh", action="store_true", help="re-pull section 1, preserve authored sections")
+    p.add_argument("--dir", help="output dir (default: config dod_path)")
+    p.add_argument("--spec-dir", help="Spec Kit feature dir recorded in the ledger (kept on --refresh)")
+    p = sub.add_parser("questions", help="List the ledger's open and answered questions; --post sends the open ones "
+                       "to the story as one comment (dry run unless --apply)")
+    p.add_argument("id", type=int)
+    p.add_argument("--post", action="store_true", help="plan posting the open questions as one comment (add or edit)")
+    p.add_argument("--apply", action="store_true", help="with --post: perform the write (default: plan only)")
+    p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
+    p.add_argument("--expect-plan", metavar="PATH",
+                   help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+    p = sub.add_parser("gate",
+                       help="Advisory DoD gate: AC<->test traceability, assertions, AC drift, evidence")
+    p.add_argument("id", type=int)
+    p.add_argument("--src", default=".", help="repo dir to scan for existing tests")
+    p.add_argument("--changed", nargs="*", default=[], help="changed files (PR diff)")
+    p.add_argument("--base", metavar="REF",
+                   help="ref the PR targets, e.g. origin/main: commits in REF..HEAD must reference the story (default: origin/HEAD)")
+    p.add_argument("--offline", action="store_true", help="skip the ADO fetch (AC drift not checked)")
+    p.add_argument("--summary-out", metavar="PATH", help="write a markdown summary here (also when the gate cannot run)")
+
+    p = sub.add_parser("push", help="Mirror tasks.md into child Tasks under a story (dry run unless --apply)")
+    p.add_argument("id", type=int, help="parent story id")
+    p.add_argument("--from", dest="source", metavar="PATH", help="tasks.md (default: <ledger spec dir>/tasks.md)")
+    p.add_argument("--apply", action="store_true", help="perform the writes (default: plan only, no writes)")
+    p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here")
+    p.add_argument("--expect-plan", metavar="PATH",
+                   help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+
+    p = sub.add_parser("done", help="Close a story if its DoD checklist is complete (dry run unless --apply)")
+    p.add_argument("id", type=int)
+    p.add_argument("--apply", action="store_true", help="attach the ledger and transition (default: plan only)")
+    p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here")
+    p.add_argument("--expect-plan", metavar="PATH",
+                   help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+
+    p = sub.add_parser("pr", help="Open/comment on a pull request (GitHub via gh, or Azure Repos)")
+    psub = p.add_subparsers(dest="pr_command", required=True)
+    q = psub.add_parser("create", help="Create a PR linked to a work item (dry run unless --apply)")
+    q.add_argument("id", type=int, help="work item id (AB#<id> is ensured in the title)")
+    q.add_argument("--title")
+    q.add_argument("--body-file", metavar="F")
+    q.add_argument("--base")
+    q.add_argument("--head")
+    q.add_argument("--from-prepared", action="store_true",
+                   help="read title/base/head from .ado/pr-args.json and the body from .ado/pr-body.md")
+    q.add_argument("--push", action="store_true",
+                   help="with --from-prepared --apply: `git push -u origin <head>` before creating the PR")
+    q.add_argument("--allow-incomplete", action="store_true",
+                   help="open the PR as a draft when tasks.md has unticked tasks (default: refuse)")
+    q.add_argument("--apply", action="store_true", help="create the PR (default: plan only, no writes)")
+    q.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here")
+    q.add_argument("--expect-plan", metavar="PATH",
+                   help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+    q = psub.add_parser("comment", help="Comment on an Azure Repos PR")
+    q.add_argument("pr_id", type=int)
+    q.add_argument("--body-file", required=True, metavar="F")
+
+    args = parser.parse_args(argv)
+    if getattr(args, "expect_plan", None) and not args.apply:
+        parser.error("--expect-plan needs --apply")
+    if args.command == "questions" and args.apply and not args.post:
+        parser.error("--apply needs --post")
+    if getattr(args, "dir", None) and args.command == "attachments" and not args.download:
+        parser.error("--dir needs --download")
+    if args.command == "branch":
+        if (args.id is None) == (args.id_from is None):
+            parser.error("give a story id or --id-from NAME (not both)")
+        if args.id_from is not None and (args.apply or args.link):
+            parser.error("--id-from takes no --apply or --link")
+        if (args.plan_out or args.expect_plan) and not args.link:
+            parser.error("--plan-out and --expect-plan need --link")
+        if args.id is not None and not 1 <= args.id <= prs.MAX_ID:
+            parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
+    err = None
+    try:
+        if args.command == "setup":
+            return run_setup()
+        if args.command == "branch" and args.id_from is not None:  # local only: no token, no request
+            out = prs.story_from_branch(args.id_from, Config.load().branch_prefix)
+        else:
+            client = AdoClient(Config.load())
+            out = dispatch(client, args)
+    except (ConfigError, AuthError, dod.DodExists, ValueError) as e:
+        # 3 (invalid config) lets CI fail closed: `gate`, and `branch --id-from` (the Azure gate reads its story id with it)
+        fail_closed = args.command == "gate" or (args.command == "branch" and args.id_from is not None)
+        err, code = e, 3 if fail_closed and isinstance(e, ConfigInvalid) else 2
+    except AdoError as e:
+        err, code = e, 1
+    if err is not None:
+        print(f"error: {err}", file=sys.stderr)
+    else:
+        print(json.dumps(out, indent=2))
+    if getattr(args, "summary_out", None):  # after the JSON, so a write failure cannot hide a blocking result
+        summary = Path(args.summary_out)
+        try:
+            summary.parent.mkdir(parents=True, exist_ok=True)
+            summary.write_text(gate.render_error(err) if err is not None else gate.render_summary(out), encoding="utf-8")
+        except OSError:  # advisory output only: keep the gate's own exit code
+            print("warning: could not write the --summary-out file", file=sys.stderr)
+    if err is not None:
+        return code
+    if args.command == "branch" and out is None:
+        return 1
+    if args.command == "pr" and out.get("error"):
+        return 1
+    if args.command == "attach" and out["failed"]:
+        return 1
+    if args.command == "attachments" and any("error" in a for a in out):
+        return 1
+    if args.command == "push" and out.get("failed"):
+        return 1
+    if args.command == "done" and (not out["ready"] or out.get("failed") or out.get("error")):
+        return 1
+    if args.command == "gate" and out.get("blocking"):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,130 @@
+name: ADO link on merge (reusable)
+# Call from a consumer repo, e.g.:
+#   uses: praveenlavu/spec-kit-ado/.github/workflows/ado-link-on-merge.yml@v0
+#   secrets: { ADO_TOKEN: ${{ secrets.ADO_TOKEN }} }
+on:
+  workflow_call:
+    inputs:
+      transition-state:
+        description: "Optional state to set (e.g. Resolved). Empty = comment only."
+        type: string
+        default: ""
+      close-story:
+        description: "Attach the completed ledger and move the story to done_state when every DoD box is ticked."
+        type: boolean
+        default: false
+      config-path:
+        description: "Path to ado.config.json in the caller repo"
+        type: string
+        default: "ado.config.json"
+      toolkit-ref:
+        description: "Ref of praveenlavu/spec-kit-ado to install"
+        type: string
+        default: "v0"
+    secrets:
+      ADO_TOKEN:
+        required: true
+      TOOLKIT_READ_TOKEN:
+        description: "Needed only while the toolkit repo is private; falls back to github.token"
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  ado-update:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract AB# ids (injection-safe via env)
+        id: ab
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          ids=$(printf '%s\n%s' "$PR_TITLE" "$PR_BODY" \
+            | grep -oE '(^|[^A-Za-z0-9])AB#[1-9][0-9]*' | grep -oE '[0-9]+$' | sort -u | tr '\n' ' ' || true)
+          echo "ids=$ids" >> "$GITHUB_OUTPUT"
+          if [ -z "$ids" ]; then echo "No AB# reference found - nothing to do."; fi
+      - uses: actions/checkout@v4
+        if: steps.ab.outputs.ids != ''
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        if: steps.ab.outputs.ids != ''
+        with:
+          repository: praveenlavu/spec-kit-ado
+          ref: ${{ inputs.toolkit-ref }}
+          token: ${{ secrets.TOOLKIT_READ_TOKEN || github.token }}
+          path: .ado-toolkit
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        if: steps.ab.outputs.ids != ''
+        with:
+          python-version: "3.11"
+      - name: Install toolkit
+        if: steps.ab.outputs.ids != ''
+        run: pip install --quiet ./.ado-toolkit && rm -rf .ado-toolkit
+      - name: Comment, optionally transition, and close out each work item
+        if: steps.ab.outputs.ids != ''
+        env:
+          ADO_TOKEN: ${{ secrets.ADO_TOKEN }}
+          ADO_CONFIG: ${{ github.workspace }}/${{ inputs.config-path }}
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          STATE: ${{ inputs.transition-state }}
+          CLOSE_STORY: ${{ inputs.close-story }}
+          IDS: ${{ steps.ab.outputs.ids }}
+        run: |
+          : "${RUNNER_TEMP:?RUNNER_TEMP is not set - refusing to write scratch files into the checkout}"
+          # ledger path comes from dod_path in the PR's config: sanitised like every untrusted annotation text
+          ann() { python3 -I -c 'import re,sys;t=re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]"," ",sys.stdin.buffer.read().decode("utf-8","replace"));sys.stdout.buffer.write(t[:300].encode())'; }
+          dod_dir=$(python3 -I -c 'import json,os;print(json.load(open(os.environ["ADO_CONFIG"])).get("dod_path","dod"))' 2>/dev/null || echo dod)
+          # Closes one story out. Returns 0 only when the story is in done_state (closed now or before), so the optional transition is skipped.
+          close_out() {
+            ledger="${dod_dir}/DoD_${id}.md"
+            if [ ! -f "$ledger" ]; then
+              echo "$id: no ledger at $(printf '%s' "$ledger" | ann) - skipped."
+              return 1
+            fi
+            # Dry run first: only a genuinely not-ready ledger is a quiet notice.
+            ado done "$id" --plan-out "${RUNNER_TEMP}/plan_${id}.md" > "${RUNNER_TEMP}/done_${id}.json" 2> "${RUNNER_TEMP}/done_${id}.err" || true
+            st=$(python3 -I -c 'import json,sys;r=json.load(open(sys.argv[1]));print("true" if r["ready"] else "false", "done" if r.get("already_done") is True else "open")' "${RUNNER_TEMP}/done_${id}.json" 2>/dev/null || echo "unknown open")
+            ready=${st% *}
+            # A story already in done_state is never transitioned, whatever happened to its ledger: every note ends in $keep and the function returns 0.
+            keep=; [ "${st#* }" = done ] && keep=" - already done, state left unchanged"
+            if [ "$ready" = true ]; then
+              ado done "$id" --apply > "${RUNNER_TEMP}/apply_${id}.json" 2> "${RUNNER_TEMP}/ado.err" && applied=true || applied=false
+              # the apply read is authoritative too: the dry-run GET may have failed or the story moved since
+              [ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1])).get("already_done") is True)' "${RUNNER_TEMP}/apply_${id}.json" 2>/dev/null)" = True ] && keep=" - already done, state left unchanged"
+              if [ "$applied" = true ]; then
+                # only fixed words reach the log: the JSON is reduced to one of five tokens
+                outcome=$(python3 -I -c 'import json,sys;r=json.load(open(sys.argv[1]));print("failed" if r.get("failed") or r.get("error") or not r.get("state") else ("done" if r.get("already_done") else "closed") + ("-attached" if r.get("attached") else ""))' "${RUNNER_TEMP}/apply_${id}.json" 2>/dev/null || echo unreadable)
+                case "$outcome" in
+                  closed-attached) echo "$id: DoD complete - ledger attached, story closed." ;;
+                  closed) echo "$id: DoD complete - ledger was already attached, story closed." ;;
+                  done) echo "$id: already done - ledger already attached, nothing to do." ;;
+                  done-attached) echo "$id: already done - ledger attached now, state left as is." ;;
+                  *) echo "::warning::$id: ado done --apply returned an unreadable result - check the work item$keep"; [ -n "$keep" ]; return ;;
+                esac
+                return 0
+              fi
+              echo "::warning::$id: DoD ready but ado done --apply failed - ledger may not be attached: $(ann < "${RUNNER_TEMP}/ado.err")$keep"
+            elif [ "$ready" = false ]; then
+              echo "::notice::$id: DoD not ready (unticked items) - ledger not attached.$keep"
+            else
+              echo "::warning::$id: could not evaluate the DoD ledger (check ADO_TOKEN and config): $(ann < "${RUNNER_TEMP}/done_${id}.err")"
+            fi
+            [ -n "$keep" ]
+          }
+          for id in $IDS; do
+            ado comment "$id" "Merged via PR #${PR_NUM}: ${PR_URL}" > /dev/null 2> "${RUNNER_TEMP}/ado.err" \
+              || echo "::warning::$id: could not comment on the work item (check ADO_TOKEN and config): $(ann < "${RUNNER_TEMP}/ado.err")"
+            # Closing is opt-in and runs BEFORE any transition: a story already moved to done_state would be skipped by `ado done`.
+            closed=false
+            case "$CLOSE_STORY" in [Tt]rue) close_out && closed=true ;; esac
+            if [ -n "$STATE" ] && [ "$closed" = false ]; then
+              ado update "$id" --state "$STATE" > /dev/null 2> "${RUNNER_TEMP}/ado.err" \
+                || echo "::warning::$id: could not set state '$STATE': $(ann < "${RUNNER_TEMP}/ado.err")"
+            fi
+          done

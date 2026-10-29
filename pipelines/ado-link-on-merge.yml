@@ -1,0 +1,101 @@
+# ADO link on merge (step template). Consume from a pipeline that runs on the target branch
+# (CI trigger, not a PR build); see pipelines/README.md for the resources.repositories block:
+#   - template: pipelines/ado-link-on-merge.yml@spec-kit-ado
+# Work item ids (AB#<n>) come from the merge commit message (Azure Repos puts the PR title
+# and description there).
+parameters:
+  - name: transitionState
+    type: string
+    default: ''   # e.g. Resolved. Empty = comment only.
+  - name: closeStory
+    type: boolean
+    default: false   # true = attach the completed ledger and move the story to done_state
+  - name: configPath
+    type: string
+    default: ado.config.json
+  - name: repoPath
+    type: string
+    default: repo   # where `self` is checked out, relative to $(Agent.BuildDirectory)
+
+steps:
+  - checkout: self
+    path: ${{ parameters.repoPath }}
+    fetchDepth: 0
+    persistCredentials: false
+    condition: ne(variables['Build.Reason'], 'PullRequest')
+  - checkout: spec-kit-ado
+    path: spec-kit-ado-toolkit
+    persistCredentials: false
+    condition: ne(variables['Build.Reason'], 'PullRequest')
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.11'
+    condition: ne(variables['Build.Reason'], 'PullRequest')
+  - script: pip install --quiet $(Agent.BuildDirectory)/spec-kit-ado-toolkit
+    displayName: Install spec-kit-ado toolkit
+    condition: ne(variables['Build.Reason'], 'PullRequest')
+  - script: |
+      : "${AGENT_TEMPDIRECTORY:?AGENT_TEMPDIRECTORY is not set - refusing to write scratch files into the checkout}"
+      ids=$(git log -1 --format=%B | grep -oE '(^|[^A-Za-z0-9])AB#[1-9][0-9]*' | grep -oE '[0-9]+$' | sort -u | tr '\n' ' ' || true)
+      if [ -z "$ids" ]; then echo "No AB# reference in the merge commit - nothing to do."; exit 0; fi
+      # ledger path comes from dod_path in the PR's config: sanitised like every untrusted annotation text
+      ann() { python3 -I -c 'import re,sys;t=re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]"," ",sys.stdin.buffer.read().decode("utf-8","replace"));sys.stdout.buffer.write(t.replace("#","# ")[:300].encode())'; }
+      dod_dir=$(python3 -I -c 'import json,os;print(json.load(open(os.environ["ADO_CONFIG"])).get("dod_path","dod"))' 2>/dev/null || echo dod)
+      # Closes one story out. Returns 0 only when the story is in done_state (closed now or before), so the optional transition is skipped.
+      close_out() {
+        ledger="${dod_dir}/DoD_${id}.md"
+        if [ ! -f "$ledger" ]; then
+          echo "$id: no ledger at $(printf '%s' "$ledger" | ann) - skipped."
+          return 1
+        fi
+        # Dry run first: only a genuinely not-ready ledger is a quiet info line.
+        ado done "$id" --plan-out "${AGENT_TEMPDIRECTORY}/plan_${id}.md" > "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/done_${id}.err" || true
+        st=$(python3 -I -c 'import json,sys;r=json.load(open(sys.argv[1]));print("true" if r["ready"] else "false", "done" if r.get("already_done") is True else "open")' "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2>/dev/null || echo "unknown open")
+        ready=${st% *}
+        # A story already in done_state is never transitioned, whatever happened to its ledger: every note ends in $keep and the function returns 0.
+        keep=; [ "${st#* }" = done ] && keep=" - already done, state left unchanged"
+        if [ "$ready" = true ]; then
+          ado done "$id" --apply > "${AGENT_TEMPDIRECTORY}/apply_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/ado.err" && applied=true || applied=false
+          # the apply read is authoritative too: the dry-run GET may have failed or the story moved since
+          [ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1])).get("already_done") is True)' "${AGENT_TEMPDIRECTORY}/apply_${id}.json" 2>/dev/null)" = True ] && keep=" - already done, state left unchanged"
+          if [ "$applied" = true ]; then
+            # only fixed words reach the log: the JSON is reduced to one of five tokens
+            outcome=$(python3 -I -c 'import json,sys;r=json.load(open(sys.argv[1]));print("failed" if r.get("failed") or r.get("error") or not r.get("state") else ("done" if r.get("already_done") else "closed") + ("-attached" if r.get("attached") else ""))' "${AGENT_TEMPDIRECTORY}/apply_${id}.json" 2>/dev/null || echo unreadable)
+            case "$outcome" in
+              closed-attached) echo "$id: DoD complete - ledger attached, story closed." ;;
+              closed) echo "$id: DoD complete - ledger was already attached, story closed." ;;
+              done) echo "$id: already done - ledger already attached, nothing to do." ;;
+              done-attached) echo "$id: already done - ledger attached now, state left as is." ;;
+              *) echo "##vso[task.logissue type=warning]$id: ado done --apply returned an unreadable result - check the work item$keep"; [ -n "$keep" ]; return ;;
+            esac
+            return 0
+          fi
+          echo "##vso[task.logissue type=warning]$id: DoD ready but ado done --apply failed - ledger may not be attached: $(ann < "${AGENT_TEMPDIRECTORY}/ado.err")$keep"
+        elif [ "$ready" = false ]; then
+          echo "$id: DoD not ready (unticked items) - ledger not attached.$keep"
+        else
+          echo "##vso[task.logissue type=warning]$id: could not evaluate the DoD ledger (check the build identity's access and config): $(ann < "${AGENT_TEMPDIRECTORY}/done_${id}.err")"
+        fi
+        [ -n "$keep" ]
+      }
+      for id in $ids; do
+        ado comment "$id" "Merged to ${BRANCH} in commit ${SOURCE_VERSION:0:8}." > /dev/null 2> "${AGENT_TEMPDIRECTORY}/ado.err" \
+          || echo "##vso[task.logissue type=warning]$id: could not comment on the work item (check the build identity's access and config): $(ann < "${AGENT_TEMPDIRECTORY}/ado.err")"
+        # Closing is opt-in (closeStory renders as True/False) and runs BEFORE any transition: a story already moved to done_state would be skipped by `ado done`.
+        closed=false
+        case "$CLOSE_STORY" in [Tt]rue) close_out && closed=true ;; esac
+        if [ -n "$STATE" ] && [ "$closed" = false ]; then
+          ado update "$id" --state "$STATE" > /dev/null 2> "${AGENT_TEMPDIRECTORY}/ado.err" \
+            || echo "##vso[task.logissue type=warning]$id: could not set state '$STATE': $(ann < "${AGENT_TEMPDIRECTORY}/ado.err")"
+        fi
+      done
+    displayName: Comment, optionally transition, and close out each work item
+    workingDirectory: $(Agent.BuildDirectory)/${{ parameters.repoPath }}
+    condition: ne(variables['Build.Reason'], 'PullRequest')
+    env:
+      ADO_TOKEN: $(System.AccessToken)
+      ADO_CONFIG: $(Agent.BuildDirectory)/${{ parameters.repoPath }}/${{ parameters.configPath }}
+      STATE: ${{ parameters.transitionState }}
+      CLOSE_STORY: ${{ parameters.closeStory }}
+      BRANCH: $(Build.SourceBranchName)
+      SOURCE_VERSION: $(Build.SourceVersion)

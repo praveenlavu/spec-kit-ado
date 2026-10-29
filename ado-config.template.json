@@ -1,0 +1,15 @@
+{
+  "organization": "contoso",
+  "project": "Fabrikam",
+  "api_version": "7.1",
+  "dod_path": "dod",
+  "gate": {"tests": {}, "block": []},
+  "attachments_allow": [".md", ".svg", ".txt"],
+  "review_block_on": [],
+  "active_state": "Active",
+  "task_type": "Task",
+  "repo_host": "github",
+  "repository": "",
+  "branch_prefix": "feature/",
+  "stack": {"kit": "", "phases": {}}
+}

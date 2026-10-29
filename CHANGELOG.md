@@ -1,0 +1,300 @@
+# Changelog
+
+All notable changes are listed here. Versions follow [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md).
+
+## 0.2.0 — 2026-10-29
+
+Feature release: the story's discussion and attachments are read, open questions go to the
+board, the feature branch is named from the story, and the gate, review and PR steps close
+the holes found in end-to-end runs.
+
+### Added
+
+- Workflow: `ado-lifecycle` takes an `integration` input (default `auto`) and passes it to
+  every command step, and lists the integrations it was written for under
+  `requires.integrations.any`.
+- Workflow: each write (questions, task push, task sync, PR) is a preview, gate and apply loop
+  that re-previews and re-asks when the apply step finds the plan changed.
+- Workflow: after `pull` and its review gate, the open questions are posted to the story.
+- CLI: `ado comments <id>` reads the story discussion (all pages, author names removed,
+  mentions replaced) into `.ado/context/<id>.md`, which is gitignored.
+- CLI: `ado attachments <id> [--download]` lists the story's attached files and downloads the
+  ones on `attachments_allow` into `.ado/attachments/<id>/`.
+- CLI: `ado questions <id>` lists the ledger's open questions (section 2 format
+  `- [ ] Q<n>: <question> → <answer | _(open)_> · owner: <role>`); `--post` previews and
+  posts them as one story comment, and re-posting edits that comment instead of adding one.
+- CLI: `ado branch <id>` names the feature branch `<branch_prefix>ab<id>-<slug>` (`--apply` creates it, or
+  renames the Spec Kit branch made for this spec); `--id-from <name>` prints the story id of a branch;
+  on Azure Repos `--link` adds the pushed branch to the story's Development section.
+- CLI: `ado link <id> --parent <n>` sets the story's parent.
+- CLI: `--expect-plan <file>` on `push`, `done`, `pr create`, `questions --post` and `branch --link`
+  re-renders the plan and refuses (exit 2, writes `<file>.new`) when it no longer matches the
+  approved preview.
+- Gate: `open_questions` (open items in ledger section 2) and `commits_without_story` (commits in
+  `<base>..HEAD` without `AB#<id>`) join the checks `gate.block` can name; `ado gate --base REF`
+  sets the base.
+- Gate and review commands accept `--workflow` and then never ask the human.
+- Review: seven planes, adding Fresh eyes (diff and commit messages only) and Story and business
+  context (story, acceptance criteria, `.ado/context`, ledger answers).
+- Config: `branch_prefix`, `removed_state`; `ado setup` detects `story_type`, `done_state` and
+  `removed_state` from the project and adds `.ado/` to `.gitignore`.
+- `SECURITY.md`, a `license` field in `pyproject.toml`, and an `.extensionignore` that keeps
+  development-only files out of consumer installs.
+
+### Changed
+
+- `ado push` shows each task's state change and old title in the preview, cuts titles to
+  255 characters (marked, stable on re-runs), reports a child that sits in `removed_state`
+  as removed, flags extra children carrying the same task tag as duplicates, and keeps the
+  created work item id when a later step fails.
+- `ado link <id> --parent <n>` replaces `--field System.Parent=...`, which ADO does not apply: that field
+  now errors and says to use `ado link --parent`.
+- `ado done --apply` refuses when it cannot read the story first, instead of writing blind.
+- The GitHub gate finds its PR comment by a hidden marker (`<!-- spec-kit-ado:gate -->`) instead of editing
+  the last comment, so the first run after upgrading posts a new comment.
+- `ado branch --link` needs a PAT with Code: Read (it looks up the repository id), and opening or commenting
+  on Azure Repos PRs needs a token allowed to write to Azure Repos; both are documented in
+  `docs/configuration.md`.
+- `speckit.ado.plan` and `speckit.ado.pr` read the PO's replies (`ado comments`) and update the answers in
+  ledger section 2; `speckit.ado.status` lists the open questions (`ado questions`).
+- `ado done` is idempotent: a story already in the done state, or a ledger already attached,
+  is not written again, and the plan says so.
+- The DoD ledger is written atomically; a failed refresh keeps the old ledger.
+- The gate keeps its offline checks when no token is available.
+- The client honours `Retry-After` on HTTP 429 (capped at 60 s), retries writes on 429 only, and
+  names an invalid or under-scoped PAT when ADO answers with a sign-in page (203/HTML).
+- Commits made by `speckit.ado.implement` end with `AB#<id>`.
+- `speckit.ado.pr` commits the spec directory and ledger before the preview, links the ledger in the PR
+  body at that commit, and `speckit.ado.review` records the commit it reviewed.
+- A task-push plan too long for the approval gate's 200-line display starts with a warning line that
+  points at the full file.
+- A workflow run that ends with unfinished tasks says `INCOMPLETE: <tasks>` and the review gate says to reject it.
+- A hard-coded secret in a diff is a `blocker`; a new review marks earlier ones in the ledger `superseded`.
+- `speckit.ado.pull` takes the acceptance-criteria length (`ac_chars`, `ac_thin`) from `ado dod` instead of counting by hand.
+- Docs: README, AGENTS.md, `rules/hitl.md` and `docs/configuration.md` cover every new verb, flag and key.
+
+### Fixed
+
+- `VERSIONING.md` records that `v0` follows breaking changes while the major version is 0 (pin an exact tag for stability; rollback moves `v0` back), and the go-public checklist in `docs/catalog-submission.md` now publishes from a fresh squashed repository with identity, scrub, tag-content and `v0`-last checks.
+- An emptied `tasks.md` no longer slips through (live recheck: `implement` left an empty file and a normal PR opened). `ado pr create` treats a `tasks.md` with no tasks as unfinished while the board still tracks `[sk:…]` Tasks for the story (refuses; `--allow-incomplete` opens a draft that says why), the `ado push` preview opens with a warning when every tracked Task would be an orphan, and `commands/implement.md` says never to delete or reword task lines.
+- `ado questions --post` lists the questions closed as `assumed:` with their assumption under "The team assumed these; reply if one is wrong:". Before, re-posting after `plan-with-answers` rewrote the comment to only the new question and the product owner never saw what had been settled for them (found in the live recheck).
+- A review block written below ledger section 5 (seen in the live recheck, where it stopped the PR step) is now prevented and diagnosed: `commands/review.md` and `commands/gate.md` say to insert it directly above `## 5.`, and `ado pr create` says when a `### Review` block exists outside section 4.
+- `workflows/ado-lifecycle/README.md` documents `specify workflow status` and `resume` (it re-runs only the unfinished step), that a gate pauses the run without a terminal, and the manual order for catching a stopped run up (sync Tasks, gate, review, PR body, resume).
+- Review reads a fresh story discussion: the workflow runs `ado comments` (new step `refresh-context`) right before `review`, and `commands/review.md` makes the refresh required, or the `Story fit:` line must say `story discussion not refreshed`. Before, the review used a stale `.ado/context/<id>.md` and missed a product-owner comment posted after pull.
+- Plan and implement agree on PO answers: behaviour from an answered `Q<n>` (the product owner's answer, or an assumption the operator accepted at `wait-po-answers`) counts as covered when the spec and the task cite `(Q<n>)`. Before, the plan folded a PO answer into new requirements and tasks and implement then refused them as "not in the AC", ending the run with `INCOMPLETE`. Behaviour with neither an AC nor a cited answered question still stops and asks. `commands/tasks.md` keeps the `(Q<n>)` citation in the task text.
+- Workflow: a question the second plan run (`plan-with-answers`) raises is now posted to the story. A new `answers-questions-loop` (preview, gate, apply) follows that step; before, `commands/plan.md` promised a post step that did not exist, and the question stayed open, unseen by the product owner, and blocked `ado done`.
+- `ado pr create --apply` on Azure Repos reads the new PR's work items back and adds the story's Pull Request link when Azure dropped it (seen once in the live rerun: the request carried `workItemRefs`, the PR came back unlinked). The result gains `work_items_linked`; if the check or the repair fails, a note goes to stderr and the PR result is still returned. The PR plan says on Azure that the link may be added, and `commands/pr.md` and `rules/hitl.md` count it under the same yes.
+- Docs and hints: `ado setup` and `ado branch --link` read the project record, which Microsoft documents as needing **Project and Team: Read**; the PAT scope lists now say so (previously only Code: Read was named for `--link`).
+- `ado comments` also scrubs plain-text email addresses typed into a comment (`[email]`), not only `@mention` links, before the text reaches the JSON and `.ado/context/<id>.md`.
+- `ado branch` slug: the 40-character cap now drops a half-cut last word (`…-by-status-and`, not `…-by-status-and-ro`); a single word longer than the room is still cut hard.
+- Workflow: approving `wait-po-answers` without the product owner's replies no longer halts the run after
+  `implement`. The gate said you could accept the plan's assumptions, but the unanswered `Q<n>` lines stayed open and
+  `gate-check` (with `open_questions` in `gate.block`) stopped the run late. `plan-with-answers` now gets
+  `--close-assumed` and records each still-unanswered question as `- [x] Q<n>: … → assumed: <assumption> · owner: PO`
+  (kept in ledger section 2 for review); the gate message says so.
+- Workflow: questions the agent raises reach the product owner. `ado questions --post` sends only ledger
+  `Q<n>` lines, but `plan --workflow` wrote its open points as `Needs human decision` prose and `pull` left
+  spec ambiguities in the spec, so nothing was posted and the run went on with them unresolved. In
+  `--workflow` mode both commands now write what the product owner can answer as
+  `- [ ] Q<n>: <question> → _(open)_ · owner: PO`, and `ado-lifecycle` posts them again after `plan`
+  (`plan-questions-loop`, behind its own gate), then waits at a `wait-po-answers` gate and re-runs `plan`
+  (`plan-with-answers`) so the replies reach the ledger and the plan before `tasks`. The run does not wait
+  by itself: the gate is where the operator waits.
+- Link-on-merge (GitHub and Azure) closes the story before it applies `transition-state`. With the
+  transition equal to `done_state` the old order moved the story first, so `ado done` saw it closed,
+  attached nothing and the log still said "ledger attached, story closed". The log now reports what
+  `ado done --apply` did, and a story the close left in `done_state` is not transitioned again.
+  A story that was already in `done_state` is never moved by `transition-state`, even when the ledger
+  attach fails or the ledger is not ready (the log says "state left unchanged"); `ado done` now always
+  prints `already_done` (also on a dry run and when it exits 1). A story that is not done keeps the old
+  behaviour. The check runs only where `ado done` runs: with `close-story` on and a ledger present.
+  `ado done --apply` on a story that is already in `done_state` attaches the ledger when it is not
+  attached yet (state untouched, and the preview says so) instead of skipping it.
+- The workflow clears prepared PR files before `pr-prepare`, and its gate step is `speckit.ado.gate` followed by a
+  `gate-check` that halts on a blocking result.
+- Ledger: a `## N.` heading inside a code fence or `<!-- -->` comment is no longer a section. `ado done`, the
+  gate, `ado questions` and `ado dod --refresh` read the real sections only (a fenced `## 5.` ticked `[x]` could
+  report "ready to close"; a fenced `## 2.` made `--refresh` drop sections 2-3). An unclosed fence or comment makes
+  `done` not ready, adds a `ledger_unclosed` note to the gate (an `open_questions` finding for `gate.block`), and
+  makes `--refresh` refuse (exit 2) unless it was left open in section 1, which `--refresh` still repairs.
+- A review stays fresh across the `speckit.ado.pr` step-2a commit. The spec dir was exempt only if its
+  `spec.md` or `tasks.md` was already committed at the reviewed SHA, but the documented flow commits it
+  after the review, so `ado pr create` called every review stale. A spec dir that did not exist at the
+  reviewed SHA now counts when the head commit has a regular `spec.md` or `tasks.md` in it. The path
+  still comes from the ledger at the reviewed SHA, and any other file changed after the review is stale.
+
+### Breaking
+
+- CI branch guards and `ado branch --id-from` accept only `<branch_prefix>ab<id>-<slug>` (for example
+  `feature/ab1001-count-active-members`) or `AB#<id>` in the name. The old "any digit run" rule and plain
+  `feature/<n>-…` names no longer match, so Spec Kit's `NNN-slug` branches are never read as stories.
+  The reusable branch guard reads the prefix from `branch_prefix` in `ado.config.json` (there is no
+  `branch-prefix` input), so CI and `ado branch` cannot disagree. Rename branches that still use the old
+  shape, or set `branch_prefix` to match.
+- `AB#<id>` matching is stricter in the GitHub gate, the Azure gate, link-on-merge (GitHub and Azure) and the
+  branch rule: it is case-sensitive, a whole token (not glued to a letter or digit before it), and the id
+  starts with 1-9. `ab#12`, `fooAB#12` and `AB#007` no longer match, so the gate is skipped and
+  link-on-merge does nothing for them.
+- A `gate.tests` glob with an unbalanced `[`, a glob over 200 characters, or a regex over 500 characters (or one
+  that does not compile) is now rejected when the config loads (exit 3 for `ado gate`). Config errors name the
+  entry or field by position and no longer print the offending text.
+- `ado gate` (and `ado branch --id-from`) exit 3 for an invalid `ado.config.json`, and the GitHub gate, the
+  Azure gate and the workflow `gate-check` fail on it instead of staying advisory. Unknown `gate.block` or
+  `review_block_on` names are rejected, and control characters in any config string are rejected.
+  A missing config file or token still exits 2 and stays advisory.
+- `ado pr create` refuses when `review_block_on` is set and the review is missing, blocking or stale, and when
+  the spec directory's `tasks.md` has unticked tasks. Use `--allow-incomplete` to open a draft PR.
+- `ado setup` now detects and writes `done_state`, `story_type` and `removed_state` from the project. A
+  config written before this keeps the `Done` default when `done_state` is absent, which exists only on
+  Scrum and Basic projects, so on Agile (`Closed`) and CMMI projects `ado done` and `ado push` stay broken
+  until you re-run `ado setup`. `ado setup` fills in only absent keys, so a config copied from the 0.1.1 template, which
+  holds `"done_state": "Done"`, keeps it: delete `done_state` (and any wrong `story_type` or `removed_state`) before
+  re-running it. The shipped template no longer sets `story_type`, `done_state` or `removed_state`.
+- Gate: acceptance criteria are now counted from the `### Acceptance Criteria` lines in ledger section 1 (AC-1 is the
+  first line), not from the rows of section 3. A 0.1.1 ledger whose section 3 is empty, still holds the
+  placeholder row or has fewer rows than section 1 has AC lines now reports the missing ones as unmapped, and blocks
+  when `ac_traceability` is in `gate.block`. (An empty section 3 used to be "not evaluated": it is now checked
+  against the AC lines in section 1.) Migrate: give each AC a row in section 3
+  naming its test, e.g. `| AC-2 | ... | tests/test_x.py::test_y | ... |`. A ledger with no AC lines and no AC rows is
+  still not evaluated.
+- Gate: Python tests named in section 3 are now checked one by one with `ast`, so a mapped test whose own body has no
+  assertion is an `assertion` finding (blocking when `assertion` is in `gate.block`); other languages keep the
+  file-level check and add a note.
+- `ado gate` reads only regular files of at most 1 MiB that resolve under `--src`, and the ledger must live under
+  `--src` too. A symlinked test file or ledger, a file outside `--src` (for example `--src src` with the ledger in
+  `dod/` beside it) and an oversize file are no longer read: the gate reports the ledger unreadable (advisory) or
+  counts the file as skipped. Run it with `--src .` from the repo root, as the CI templates do.
+- Ledger sections are found fence-aware: a `## N.` heading inside a code fence or `<!-- -->` comment is not a section.
+  A ledger with an unclosed fence or comment is now "not ready" for `ado done`, adds a `ledger_unclosed` note to the
+  gate (an `open_questions` finding, so it blocks when `open_questions` is in `gate.block`), and `ado dod <id> --refresh`
+  refuses it (exit 2) unless the fence was left open in section 1. Close the fence, or use `--force`.
+- `ado done <id> --apply` on a story already in `done_state` now attaches the ledger when it is not attached yet (the
+  state is left alone), and it refuses (instead of writing blind) when it cannot read the story first.
+- `--field System.Parent=...` (on `ado create` and `ado update`) is rejected with an error that points to
+  `ado link <id> --parent <n>`.
+- Link-on-merge (GitHub and Azure) now runs `ado done` (when `close-story` is set) before `transition-state`, and does
+  not transition a story the close left in `done_state`. A `transition-state` equal to `done_state` therefore closes the
+  story with the ledger attached instead of moving it first, but only when `close-story` is true and the ledger is ready.
+- The `ado-lifecycle` workflow has new inputs, steps and gates: an `integration` input (default `auto`), the `questions-loop`,
+  `plan-questions-loop`, `wait-po-answers` gate and `plan-with-answers` steps, and `gate-check`, which halts the run on a
+  blocking gate or an invalid config. A run now stops at `wait-po-answers` until you approve it, and in `--workflow`
+  mode `pull` and `plan` write the PO's open points as `- [ ] Q<n>: ... → _(open)_ · owner: PO` ledger lines, which are
+  the only questions `ado questions --post` sends. Remove and re-add the workflow, and start new runs.
+- The extension requires the `ado` CLI 0.2.0 or later (`requires.tools` in `extension.yml`); upgrade the CLI
+  before using the 0.2.0 extension.
+
+### Security
+
+- Story text copied into the ledger is escaped so it cannot open a code fence or HTML comment that hides or
+  forges later ledger sections.
+- Story comments and attachments are untrusted data: `speckit.ado.pull` and the review treat them as context
+  only, never as instructions, and keep them in the gitignored `.ado/context/`; author fields are dropped
+  and mention anchors become `@user`, but a name typed into comment text stays in that gitignored file.
+- The questions comment starts with a visible `[spec-kit-ado:questions]` marker and is edited only when the
+  token's own user wrote it.
+- The gate and the PR review-freshness checks run git with `--no-replace-objects`, so replace refs and
+  grafts cannot change what they see.
+- CI annotations that echo untrusted text (CLI stderr, branch names, config paths) are flattened to one
+  line and cut at 300 characters; the Azure templates also space a `#` so no `##vso[` command can form.
+- Attachment downloads send the token only to the configured organization's Azure DevOps host, accept only
+  `AttachedFile` relations with a safe name on `attachments_allow`, keep files under `.ado/attachments/`, and
+  stop reading at 5 MB of bytes actually received.
+- `ado gate` reads only regular files of at most 1 MiB that resolve under `--src` (test discovery and
+  `--changed`): symlinks are never followed, and FIFOs, devices and oversize files are skipped and counted
+  in the summary, so a PR cannot use symlinks plus its own `gate.tests` regexes to probe files outside the
+  repo. The GitHub gate workflow now posts the PR comment in a second step, so the step that runs `ado gate`
+  no longer holds `GH_TOKEN`.
+  The ledger `ado gate` reads (its path comes from the PR's config) goes through the same rules, so a
+  symlinked or special-file ledger is reported as unreadable instead of read.
+- The gate templates (GitHub and Azure) ran `python3 -c` inside the PR checkout, so a PR-committed module with a
+  standard-library name (such as `json.py`) ran with the tokens in the environment, and wrote scratch files
+  into the checkout, where a PR-committed symlink with the same name was written through: `gate.json`,
+  `gate.md` and `changed.bin` in the GitHub template, `gate.json` only in the Azure template (its other
+  scratch files were already in `AGENT_TEMPDIRECTORY`). They now run `python3 -I`, keep the scratch files in the runner or agent temp directory
+  (`RUNNER_TEMP`, `AGENT_TEMPDIRECTORY`), and the step fails loudly if that variable is unset. Consumers who reference
+  the templates at `@v0` get this automatically; consumers who copied them must re-copy them.
+- `speckit.ado.pr` no longer puts the story-sourced PR title on a shell line: the interactive preview and apply
+  use `ado pr create <id> --from-prepared` with the title written to `.ado/pr-args.json`, like the workflow
+  path, so `$(...)` or backticks in a story title cannot run on the developer's machine. A doc test now
+  rejects `--title`, `--body` and quoted `"<placeholder>"` values in any command doc's shell block.
+
+## 0.1.1 — 2026-10-27
+
+Hardening release.
+
+### Changed
+
+- `speckit.ado.setup` verifies the organization, project and token against Azure DevOps
+  before it stores anything.
+- `ado.config.json` is validated when it is loaded, with clear errors, and is read and
+  written as UTF-8.
+- `--field` requires `Name=Value`; anything else is rejected instead of guessed at.
+- The token is looked up once per run, and `ado gate --offline` needs no token.
+- Azure Repos PR descriptions are cut to the 4000-character limit, ending with a
+  truncation marker (the full text stays in the ledger).
+- `ado gate --summary-out <file>` writes the gate comment markdown, so the GitHub and Azure
+  CI templates are much shorter. On GitHub the gate keeps one comment and updates it on
+  each run instead of adding a new one.
+- A gate that could not run now also emits a CI warning annotation (GitHub `::warning::`,
+  Azure `##vso[task.logissue type=warning]`) next to the PR comment.
+- `gate.tests` regexes and `dod_path` are validated when the config is loaded.
+- Prompt fixes: routed commands never receive `--workflow` or other `speckit.ado` control
+  flags; `speckit.ado.plan` says when drift was not checked; review findings describe the
+  failing input by kind, never by value; `speckit.ado.pr` documents the Azure description cap.
+
+### Removed
+
+- The legacy `dod-gate` command alias and `dod_gate` config key.
+
+### Breaking
+
+- A config that still has a `dod_gate` key now fails with a clear error (exit 2) instead of
+  being ignored: move `dod_gate.block` to `gate.block`. The 0.1.0 alias and key are removed
+  in this patch release by decision of the maintainer.
+- The extension now requires the `ado` CLI 0.1.1 or later (`requires.tools` in
+  `extension.yml`); upgrade the CLI before using the 0.1.1 extension.
+
+## 0.1.0 — 2026-10-27
+
+First release.
+
+### Added
+
+- Spec Kit extension `ado` with 12 commands: `speckit.ado.setup`, `speckit.ado.constitution`,
+  `speckit.ado.pull`, `speckit.ado.plan`, `speckit.ado.tasks`, `speckit.ado.push`,
+  `speckit.ado.implement`, `speckit.ado.gate`, `speckit.ado.review`, `speckit.ado.pr`,
+  `speckit.ado.status` and `speckit.ado.done`.
+- Two optional hooks: `after_tasks` offers `speckit.ado.push`, `after_implement` offers
+  `speckit.ado.gate`.
+- `ado` CLI (Python 3.9+, standard library only): `setup`, `get`, `query`, `create`,
+  `update`, `comment`, `link`, `attach`, `dod`, `gate` (alias `dod-gate`), `push`,
+  `done`, `pr create`, `pr comment`. Batch verbs are dry runs unless `--apply`;
+  `--plan-out` writes the preview. The REST client retries only reads (GET and WIQL
+  queries) on 429/5xx/network errors, never a create or update; each request times out
+  after 30 seconds; network and malformed-response errors exit 1.
+- DoD ledger per story (`dod/DoD_<id>.md`) with acceptance criteria copied as verbatim
+  text (ADO HTML converted to plain text; table cells, line breaks and numbered lists
+  kept), an AC hash for drift detection, and an AC → test → evidence table.
+- Gate: AC-to-test traceability, assertion-free test files, AC drift and missing
+  evidence, with default test globs for Python, JS/TS, Java/Kotlin, C#, Go and Apex.
+  Advisory unless a check is listed in `gate.block`.
+- Phase routing to installed stack kits through a confirmed phase map, with core Spec Kit
+  as the default.
+- HITL contract (`rules/hitl.md`) and routing rules (`rules/routing.md`).
+- `ado-lifecycle` workflow with preview → gate → apply for every board or PR change, and
+  a bundle that installs the extension and the workflow together. Every gate shows a plan
+  file written by an `ado … --plan-out` shell step just before it, including the PR
+  preview (`pr-preview`), never by an agent step. Command steps get `--workflow` and make
+  no ADO writes; a second push triplet after implement syncs ticked Tasks behind a gate.
+  The move to Active is not automated in workflow runs. The workflow ends at the open
+  PR; the story closes after merge (CI `close-story`, or `speckit.ado.done` by hand).
+- Reusable GitHub Actions workflows and Azure Pipelines templates: gate on PR, branch
+  guard, link on merge. Link on merge comments on the story and optionally transitions
+  it. Closing is opt-in: with `close-story: true` (`closeStory: true` on Azure
+  Pipelines), after merge it attaches the completed ledger and moves the story to
+  `done_state`; only if every DoD box is ticked.
+- The GitHub reusable workflows delete the toolkit checkout (`.ado-toolkit`) right after
+  installing it, so `ado gate --src .` never counts the toolkit's own tests as yours.
+- README table of per-agent command names: skill-based agents (Claude Code, Copilot,
+  Cursor) use `/speckit-ado-<verb>`; command-file agents use `/speckit.ado.<verb>`.
+- Scrub check for secrets and denylisted terms, run in CI.

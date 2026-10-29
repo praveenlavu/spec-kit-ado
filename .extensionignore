@@ -1,0 +1,27 @@
+# Development-only content: never copied into a consumer project.
+src/
+tests/
+scripts/
+pipelines/
+.github/
+docs/superpowers/
+pyproject.toml
+.venv/
+# Local/private working files (also gitignored) — keep out of `--dev` installs.
+.git/
+.superpowers/
+.scrub-denylist
+.pytest_cache/
+__pycache__/
+ado.config.json
+.ado/
+
+# Repository-only files: not needed by an installed extension.
+bundle/
+catalog/
+workflows/
+docs/catalog-submission.md
+CONTRIBUTING.md
+VERSIONING.md
+CLAUDE.md
+SECURITY.md

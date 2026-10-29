@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spec-kit-ado"
+version = "0.2.0"
+license = {text = "MIT"}
+description = "Azure DevOps CLI for spec-kit-ado: work items, DoD ledger, gate, task push"
+requires-python = ">=3.9"
+
+[project.scripts]
+ado = "ado.__main__:main"
+
+[project.optional-dependencies]
+dev = ["pytest", "pyyaml"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,302 @@
+schema_version: "1.0"
+workflow:
+  id: "ado-lifecycle"
+  name: "ADO story lifecycle"
+  version: "0.2.0"
+  author: "praveenlavu"
+  description: "Azure DevOps story to an open PR: spec, plan, tasks, push, implement, gate, review, PR. Every board or PR change is preview, human gate, apply. The story closes after merge."
+
+requires:
+  speckit_version: ">=0.9.0"
+  integrations:
+    # Advisory, non-exhaustive hint (same list as upstream's speckit workflow); the workflow
+    # runs on any integration the project was initialized with.
+    any:
+      - "alquimia"
+      - "claude"
+      - "copilot"
+      - "gemini"
+      - "opencode"
+
+inputs:
+  story_id:
+    type: number
+    required: true
+    prompt: "Azure DevOps story ID"
+  integration:
+    type: string
+    default: "auto"
+    prompt: "Integration to use (e.g. claude, copilot, gemini; 'auto' uses the project's initialized integration)"
+
+# Each command step runs the agent once with no chance to reply, so every ADO-changing
+# step is a triplet: shell preview (--plan-out) -> gate (show_file) -> shell --apply.
+# The apply passes --expect-plan with the preview's file and the same flags, so it re-renders the
+# plan and refuses (exit 2, fresh plan in <file>.new) unless it is exactly what the gate showed.
+# Each triplet sits in a do-while loop: a refused apply ends its step cleanly (only that exit 2 with
+# a fresh <file>.new is swallowed) and the loop runs the preview and the gate again. So a failed
+# apply resumed after an edit (`specify workflow resume`, which re-runs only the unfinished step)
+# re-previews and re-asks instead of applying an unapproved plan or getting stuck. Any other
+# failure stops the run as before. The *-applied step after each loop stops the run if the plan
+# still differed when the loop hit its 10-iteration cap; then start a new run.
+# Command steps that could write ADO get `--workflow`, which makes them skip every ADO write;
+# pull, plan, gate and review also get it so they never stop to ask: open decisions go to
+# ledger section 2 (`Q<n>` lines with owner: PO for the product owner; the questions triplets post those).
+# Every command step sets `integration: "{{ inputs.integration }}"` (default "auto" = the project's
+# initialized integration); without it the engine fails with "integration None".
+# Only inputs.story_id (a number) is interpolated into any run; gate messages are constant.
+# The run ends at the open PR: closing happens after merge (CI close-story, or speckit.ado.done).
+steps:
+  - id: pull
+    command: speckit.ado.pull
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.story_id }} --workflow"
+
+  - id: review-spec
+    type: gate
+    message: "Review the spec, the open questions in ledger section 2 and the ledger's 'Needs human decision' list before approving."
+    options: [approve, reject]
+    on_reject: abort
+
+  # Questions raised by pull (spec ambiguities). The apply is a no-op when none are open or the comment is current.
+  - id: questions-loop
+    type: do-while
+    condition: "{{ steps.questions-apply.output.stderr | contains('plan changed since approval') }}"
+    steps:
+      - id: questions-preview
+        type: shell
+        run: "ado questions {{ inputs.story_id }} --post --plan-out .ado/plan-questions.md"
+
+      - id: approve-questions
+        type: gate
+        message: "Approve posting these open questions to the story in Azure Boards (or updating the existing questions comment). The plan file is shown below (the gate shows at most 200 lines). If the preview starts with ⚠, open the file and read it in full before approving. If it says nothing to post, approve to continue."
+        show_file: .ado/plan-questions.md
+        options: [approve, reject]
+        on_reject: abort
+
+      - id: questions-apply
+        type: shell
+        run: "ado questions {{ inputs.story_id }} --post --apply --expect-plan .ado/plan-questions.md || { [ $? -eq 2 ] && [ -e .ado/plan-questions.md.new ]; }"
+
+  - id: questions-applied
+    type: shell
+    run: "if [ -e .ado/plan-questions.md.new ]; then echo 'spec-kit-ado: the questions plan kept changing after approval; start a new run' >&2; exit 1; fi"
+
+  - id: plan
+    command: speckit.ado.plan
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.story_id }} --workflow"
+
+  # Questions the plan phase raised (ledger section 2 `Q<n>` lines, owner: PO). The same marked comment is edited,
+  # so this adds only what pull's did not post. Its own plan file: the first loop's `.new` guard stays independent.
+  - id: plan-questions-loop
+    type: do-while
+    condition: "{{ steps.plan-questions-apply.output.stderr | contains('plan changed since approval') }}"
+    steps:
+      - id: plan-questions-preview
+        type: shell
+        run: "ado questions {{ inputs.story_id }} --post --plan-out .ado/plan-questions-after-plan.md"
+
+      - id: approve-plan-questions
+        type: gate
+        message: "Approve posting the questions the plan raised to the story in Azure Boards (or updating the existing questions comment). The plan file is shown below (the gate shows at most 200 lines). If the preview starts with ⚠, open the file and read it in full before approving. If it says nothing to post, approve to continue."
+        show_file: .ado/plan-questions-after-plan.md
+        options: [approve, reject]
+        on_reject: abort
+
+      - id: plan-questions-apply
+        type: shell
+        run: "ado questions {{ inputs.story_id }} --post --apply --expect-plan .ado/plan-questions-after-plan.md || { [ $? -eq 2 ] && [ -e .ado/plan-questions-after-plan.md.new ]; }"
+
+  - id: plan-questions-applied
+    type: shell
+    run: "if [ -e .ado/plan-questions-after-plan.md.new ]; then echo 'spec-kit-ado: the plan questions plan kept changing after approval; start a new run' >&2; exit 1; fi"
+
+  # The engine cannot loop back, so the wait is a gate and the answers are read by a second plan run.
+  # The run does not wait by itself: the operator waits at this gate until the product owner replies.
+  # `--close-assumed` makes the second plan run record each still-unanswered question as `assumed:` (an open one would halt gate-check).
+  - id: wait-po-answers
+    type: gate
+    message: "The questions the plan raised are posted on the story. Approve once the product owner has answered them. Approving without their answers accepts the plan's stated assumptions: the next step reads the replies into the ledger, records each question still unanswered as `assumed: <assumption>` (ticked, and kept in ledger section 2 for review) and revises the plan. Reject to stop."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: plan-with-answers
+    command: speckit.ado.plan
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.story_id }} --workflow --close-assumed"
+
+  # Questions the second plan run raised (R3 B1): never shown at wait-po-answers, so they stay open; post them so the
+  # product owner sees them. They stay open until answered: the ledger's "no open questions" box cannot be ticked, so `ado done` reports the story not ready.
+  - id: answers-questions-loop
+    type: do-while
+    condition: "{{ steps.answers-questions-apply.output.stderr | contains('plan changed since approval') }}"
+    steps:
+      - id: answers-questions-preview
+        type: shell
+        run: "ado questions {{ inputs.story_id }} --post --plan-out .ado/plan-questions-after-answers.md"
+
+      - id: approve-answers-questions
+        type: gate
+        message: "Approve posting the questions the revised plan raised to the story in Azure Boards (or updating the existing questions comment). They stay open in ledger section 2 until the product owner answers, and the story cannot be closed before then. The comment is rewritten from section 2, so a question the operator accepted as assumed is listed under 'The team assumed these' with its assumption: read the plan file for what the product owner will see. The plan file is shown below (the gate shows at most 200 lines). If the preview starts with ⚠, open the file and read it in full before approving. If it says nothing to post, approve to continue."
+        show_file: .ado/plan-questions-after-answers.md
+        options: [approve, reject]
+        on_reject: abort
+
+      - id: answers-questions-apply
+        type: shell
+        run: "ado questions {{ inputs.story_id }} --post --apply --expect-plan .ado/plan-questions-after-answers.md || { [ $? -eq 2 ] && [ -e .ado/plan-questions-after-answers.md.new ]; }"
+
+  - id: answers-questions-applied
+    type: shell
+    run: "if [ -e .ado/plan-questions-after-answers.md.new ]; then echo 'spec-kit-ado: the answers questions plan kept changing after approval; start a new run' >&2; exit 1; fi"
+
+  - id: review-plan
+    type: gate
+    message: "Review the plan, the spec, the open questions in ledger section 2 and the ledger's 'Needs human decision' list before approving."
+    options: [approve, reject]
+    on_reject: abort
+
+  - id: tasks
+    command: speckit.ado.tasks
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.story_id }}"
+
+  - id: push-loop
+    type: do-while
+    condition: "{{ steps.push-apply.output.stderr | contains('plan changed since approval') }}"
+    steps:
+      - id: push-preview
+        type: shell
+        run: "ado push {{ inputs.story_id }} --plan-out .ado/plan-push.md"
+
+      - id: approve-push
+        type: gate
+        message: "Approve creating or updating these child Tasks in Azure Boards. The plan file is shown below (the gate shows at most 200 lines). If the preview starts with ⚠, open the file and read it in full before approving."
+        show_file: .ado/plan-push.md
+        options: [approve, reject]
+        on_reject: abort
+
+      - id: push-apply
+        type: shell
+        run: "ado push {{ inputs.story_id }} --apply --expect-plan .ado/plan-push.md || { [ $? -eq 2 ] && [ -e .ado/plan-push.md.new ]; }"
+
+  - id: push-applied
+    type: shell
+    run: "if [ -e .ado/plan-push.md.new ]; then echo 'spec-kit-ado: the push plan kept changing after approval; start a new run' >&2; exit 1; fi"
+
+  - id: implement
+    command: speckit.ado.implement
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.story_id }} --workflow"
+
+  - id: sync-loop
+    type: do-while
+    condition: "{{ steps.sync-apply.output.stderr | contains('plan changed since approval') }}"
+    steps:
+      - id: sync-preview
+        type: shell
+        run: "ado push {{ inputs.story_id }} --plan-out .ado/plan-sync.md"
+
+      - id: approve-sync
+        type: gate
+        message: "Approve syncing the Task states ticked during implement to Azure Boards. The plan file is shown below (the gate shows at most 200 lines). If the preview starts with ⚠, open the file and read it in full before approving."
+        show_file: .ado/plan-sync.md
+        options: [approve, reject]
+        on_reject: abort
+
+      - id: sync-apply
+        type: shell
+        run: "ado push {{ inputs.story_id }} --apply --expect-plan .ado/plan-sync.md || { [ $? -eq 2 ] && [ -e .ado/plan-sync.md.new ]; }"
+
+  - id: sync-applied
+    type: shell
+    run: "if [ -e .ado/plan-sync.md.new ]; then echo 'spec-kit-ado: the sync plan kept changing after approval; start a new run' >&2; exit 1; fi"
+
+  # The gate command runs `ado gate` and appends the result to ledger section 4 (a shell step could not).
+  - id: gate
+    command: speckit.ado.gate
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.story_id }} --workflow"
+
+  # Exit 1 (gate.block failed) and exit 3 (invalid ado.config.json) halt the run; missing info exits 0, other errors (2, e.g. no config) do not halt.
+  - id: gate-check
+    type: shell
+    # bash, not the engine's sh (arrays are bash-only); a read loop, not mapfile, so macOS bash 3.2 works.
+    # File names go through a NUL-delimited file, never into the script text. A failed diff runs the
+    # gate without --changed (missing info never blocks).
+    run: |
+      bash <<'EOF'
+      base=$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || echo origin/main)
+      args=()
+      tmp=$(mktemp) && git diff -z --name-only "$base...HEAD" > "$tmp" 2>/dev/null && ok=1 || ok=
+      if [ -n "$ok" ]; then
+        while IFS= read -r -d '' f; do args+=("./$f"); done < "$tmp"  # ./ prefix: a name like -x must not parse as an option
+        [ "${#args[@]}" -eq 0 ] || args=(--changed "${args[@]}")
+      else
+        echo "spec-kit-ado: changed files unavailable - assertion check skipped" >&2
+      fi
+      rm -f "$tmp"
+      code=0
+      ado gate {{ inputs.story_id }} --src . --base "$base" "${args[@]}" > /dev/null < /dev/null || code=$?
+      [ "$code" -ne 1 ] && [ "$code" -ne 3 ]
+      EOF
+
+  # R3 B5: the review reads .ado/context/<id>.md; refresh it so a PO comment posted after pull is not missed.
+  # Read-only, stdout dropped (the file is the product); a failure only warns, the review then says it was not refreshed.
+  - id: refresh-context
+    type: shell
+    run: "ado comments {{ inputs.story_id }} > /dev/null || echo 'spec-kit-ado: could not refresh the story discussion; the review will use the file on disk' >&2"
+
+  - id: review
+    command: speckit.ado.review
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.story_id }} --workflow"
+
+  - id: review-review
+    type: gate
+    message: "Review the findings logged in the ledger before opening the PR. Reject if implement reported INCOMPLETE tasks: the run aborts and cannot be resumed; finish by hand as the README's recovery section says."
+    options: [approve, reject]
+    on_reject: abort
+
+  # Clears files an earlier run left: a refused pr-prepare writes nothing, so pr-preview would send them.
+  - id: pr-clear
+    type: shell
+    run: "rm -f .ado/pr-args.json .ado/pr-body.md"
+
+  - id: pr-prepare
+    command: speckit.ado.pr
+    integration: "{{ inputs.integration }}"
+    input:
+      args: "{{ inputs.story_id }} --prepare-only"
+
+  - id: pr-loop
+    type: do-while
+    condition: "{{ steps.pr-apply.output.stderr | contains('plan changed since approval') }}"
+    steps:
+      # The CLI, not the agent, writes the preview the gate shows, with pr-apply's own flags
+      # (--push too, so both skip the remote-diverged review check; F11 ruling).
+      - id: pr-preview
+        type: shell
+        run: "ado pr create {{ inputs.story_id }} --from-prepared --push --plan-out .ado/plan-pr.md"
+
+      - id: approve-pr
+        type: gate
+        message: "Approve pushing the head branch and opening this pull request. The plan file is shown below (the gate shows at most 200 lines). If the preview starts with ⚠, open the file and read it in full before approving."
+        show_file: .ado/plan-pr.md
+        options: [approve, reject]
+        on_reject: abort
+
+      - id: pr-apply
+        type: shell
+        run: "ado pr create {{ inputs.story_id }} --from-prepared --push --apply --expect-plan .ado/plan-pr.md || { [ $? -eq 2 ] && [ -e .ado/plan-pr.md.new ]; }"
+
+  - id: pr-applied
+    type: shell
+    run: "if [ -e .ado/plan-pr.md.new ]; then echo 'spec-kit-ado: the PR plan kept changing after approval; start a new run' >&2; exit 1; fi"

@@ -1,0 +1,66 @@
+# ADO branch guard (step template) for Azure Repos PR validation builds.
+#   - template: pipelines/ado-branch-guard.yml@spec-kit-ado
+# Fails only when the source branch is not tied to a story by the `ado branch --id-from` rule
+# (<branch_prefix>ab<id>-<slug>, or AB#<id>; branch_prefix comes from ado.config.json) or `ado get`
+# says that story does not exist (HTTP 404). Missing config/token (ado exit 2), an invalid config (exit 3: the gate
+# fails on that, not this guard) or any other ADO error is a warning, never a failure.
+parameters:
+  - name: configPath
+    type: string
+    default: ado.config.json
+  - name: repoPath
+    type: string
+    default: repo   # where `self` is checked out, relative to $(Agent.BuildDirectory)
+
+steps:
+  - checkout: self
+    path: ${{ parameters.repoPath }}
+    fetchDepth: 0
+    persistCredentials: false
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+  - checkout: spec-kit-ado
+    path: spec-kit-ado-toolkit
+    persistCredentials: false
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+  - task: UsePythonVersion@0
+    inputs:
+      versionSpec: '3.11'
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+  - script: pip install --quiet $(Agent.BuildDirectory)/spec-kit-ado-toolkit
+    displayName: Install spec-kit-ado toolkit
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+  - script: |
+      : "${AGENT_TEMPDIRECTORY:?AGENT_TEMPDIRECTORY is not set - refusing to write scratch files into the checkout}"
+      # Annotation text from untrusted data (CLI stderr, branch names): one line, no control chars, UTF-8-safe 300-char cut ('#' -> '# ' so no ##vso command can form)
+      ann() { python3 -I -c 'import re,sys;t=re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]"," ",sys.stdin.buffer.read().decode("utf-8","replace"));sys.stdout.buffer.write(t.replace("#","# ")[:300].encode())'; }
+      branch=${SOURCE_BRANCH#refs/heads/}
+      code=0
+      id=$(ado branch --id-from="$branch" 2> "$AGENT_TEMPDIRECTORY/id.err") || code=$?
+      if [ "$code" -eq 1 ]; then
+        echo "##vso[task.logissue type=error]Branch '$(printf '%s' "$branch" | ann)' is not tied to a work item (expected <branch_prefix>ab<id>-<slug>, e.g. feature/ab1001-thing, or AB#<id>)."
+        exit 1
+      fi
+      if [ "$code" -ne 0 ]; then  # no config (2), invalid config (3; ado-gate fails on it, not this guard), ado missing (127), ...: advisory, never red
+        echo "##vso[task.logissue type=warning]Could not read the story id from the branch (ado exit $code, branch not checked): $(ann < "$AGENT_TEMPDIRECTORY/id.err")"
+        exit 0
+      fi
+      code=0
+      ado get "$id" > /dev/null 2> "$AGENT_TEMPDIRECTORY/get.err" || code=$?
+      if [ "$code" -eq 0 ]; then echo "Work item $id verified."; exit 0; fi
+      if [ "$code" -eq 2 ]; then
+        echo "##vso[task.logissue type=warning]Missing config or token - work item not verified (advisory)."
+        exit 0
+      fi
+      # Only a genuine not-found fails; any other error means ADO could not be checked.
+      if grep -q 'HTTP 404' "$AGENT_TEMPDIRECTORY/get.err"; then
+        echo "##vso[task.logissue type=error]Work item $id (from the branch name) does not exist (HTTP 404) - check the id or the project in ado.config.json."
+        exit 1
+      fi
+      echo "##vso[task.logissue type=warning]Work item $id could not be verified (ADO error, not a 404) - branch guard is advisory here."
+    displayName: Verify the branch is tied to an existing work item
+    workingDirectory: $(Agent.BuildDirectory)/${{ parameters.repoPath }}
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    env:
+      ADO_TOKEN: $(System.AccessToken)
+      ADO_CONFIG: $(Agent.BuildDirectory)/${{ parameters.repoPath }}/${{ parameters.configPath }}
+      SOURCE_BRANCH: $(System.PullRequest.SourceBranch)

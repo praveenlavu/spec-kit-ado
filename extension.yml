@@ -1,0 +1,80 @@
+schema_version: "1.0"
+
+extension:
+  id: "ado"
+  name: "Spec Kit for Azure DevOps — human-gated lifecycle"
+  version: "0.2.0"
+  description: "Run the full Spec Kit lifecycle from an ADO story back to Done, with human sign-off on every board change."
+  author: "praveenlavu"
+  repository: "https://github.com/praveenlavu/spec-kit-ado"
+  license: "MIT"
+  homepage: "https://github.com/praveenlavu/spec-kit-ado"
+
+requires:
+  speckit_version: ">=0.9.0"
+  tools:
+    - name: "ado"
+      version: ">=0.2.0"
+      required: true
+    - name: "git"
+      required: true
+    - name: "gh"
+      required: false
+
+provides:
+  commands:
+    - name: "speckit.ado.setup"
+      file: "commands/setup.md"
+      description: "Check tools, connect to Azure DevOps, and confirm which kit runs each lifecycle phase."
+    - name: "speckit.ado.constitution"
+      file: "commands/constitution.md"
+      description: "Append the ADO/HITL articles to the project constitution without replacing it."
+    - name: "speckit.ado.pull"
+      file: "commands/pull.md"
+      description: "Turn an ADO story into a spec and a DoD ledger; optionally move the story to active."
+    - name: "speckit.ado.plan"
+      file: "commands/plan.md"
+      description: "Route the plan phase and require ledger section 2 to be filled before finishing."
+    - name: "speckit.ado.tasks"
+      file: "commands/tasks.md"
+      description: "Route the tasks phase and make sure a standard tasks.md exists for push."
+    - name: "speckit.ado.implement"
+      file: "commands/implement.md"
+      description: "Route the implement phase with TDD, keep the ledger AC table current, tick ADO Tasks after approval."
+    - name: "speckit.ado.push"
+      file: "commands/push.md"
+      description: "Preview the child ADO Tasks for tasks.md, then create or update them after an explicit yes."
+    - name: "speckit.ado.gate"
+      file: "commands/gate.md"
+      description: "Run the DoD gate (traceability, assertions, AC drift, evidence) and log the result in the ledger."
+    - name: "speckit.ado.review"
+      file: "commands/review.md"
+      description: "Review the branch diff on seven planes against spec, ledger and story, verify findings, log them in the ledger."
+    - name: "speckit.ado.pr"
+      file: "commands/pr.md"
+      description: "Build the PR body from ledger, gate and review results, then open the PR after an explicit yes."
+    - name: "speckit.ado.status"
+      file: "commands/status.md"
+      description: "Read-only report: story state, ledger completeness, AC drift, traceability, child Task progress."
+    - name: "speckit.ado.done"
+      file: "commands/done.md"
+      description: "Check the DoD checklist, then attach the ledger and close the story after an explicit yes."
+
+hooks:
+  after_tasks:
+    command: "speckit.ado.push"
+    optional: true
+    prompt: "Push tasks to Azure Boards?"
+    description: "Preview child ADO Tasks for the new tasks.md (nothing is written without a yes)"
+  after_implement:
+    command: "speckit.ado.gate"
+    optional: true
+    prompt: "Run the ADO DoD gate now?"
+    description: "Check AC traceability, assertions and AC drift after implementation (read-only)"
+
+tags:
+  - "azure-devops"
+  - "issue-tracking"
+  - "hitl"
+  - "workflow"
+  - "governance"
