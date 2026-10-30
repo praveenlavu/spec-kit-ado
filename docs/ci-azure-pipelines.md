@@ -1,12 +1,13 @@
 # CI on Azure Pipelines
 
-For Azure Repos, `pipelines/` holds step templates with the same three behaviours as the
+For Azure Repos, `pipelines/` holds step templates with the same three behaviours (plus an optional fourth, secret-free template) as the
 GitHub workflows. Full template reference: [pipelines/README.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/pipelines/README.md).
 
 | Template | Run it from | What it does |
 |---|---|---|
 | `ado-gate.yml` | Branch policy build validation | Runs `ado gate --base origin/<target branch>` on the PR's changed files (so `commits_without_story` checks the PR's own commits) and posts the result as a PR thread with `ado pr comment`. Fails when the gate exits 1 with `"blocking": true`, or when `ado.config.json` is invalid (the story-id step fails the build with the error annotation `ADO gate FAILED: ado.config.json is invalid — <CLI message>`; no PR thread is posted, because `ado pr comment` needs the same config). The script first runs `ado strict mode --base origin/<target branch>` (local, no token): exit 3 fails the build with that same error annotation, exit 2 (no usable config) is advisory as before, and every other non-zero exit (a crash, 127 for no `ado`) fails the build too: the mode is then unknown. **Under a strict target** a branch with no story id (read by `ado branch --id-from <branch> --base origin/<target branch>`, so with the target's `branch_prefix`) fails the build instead of skipping the gate, and after `ado gate` it runs `ado strict check <id> --phase pr --head $(System.PullRequest.SourceCommitId) --base origin/<target branch>` with `ADO_TOKEN` taken out of that command's environment: its rule ids (never the ledger's text) are appended to the PR thread and the build fails on any non-zero exit. |
 | `ado-branch-guard.yml` | Branch policy build validation | Fails unless `ado branch --id-from` finds a story id in the source branch (`<branch_prefix>ab<id>-<slug>`, e.g. `feature/ab1001-thing`, or `AB#<id>`; `branch_prefix` comes from `ado.config.json`) and `ado get` does not answer HTTP 404 for it. Missing config or token is a warning. |
+| `ado-strict-verify.yml` | Branch policy build validation | Optional, secret-free strict re-run (see [Optional strict re-run template](#optional-strict-re-run-template-ado-strict-verifyyml-shipped-unrun)). Does nothing unless the target branch's `ado.config.json` is strict; then it runs `ado strict verify <id> --no-record --base origin/<target branch>` and fails the build on any non-zero exit. |
 | `ado-link-on-merge.yml` | CI trigger on the target branch | Comments on each `AB#<n>` in the merge commit message and optionally sets `transitionState`. With `closeStory: true`, after merge it attaches the completed ledger and moves the story to `done_state`; only if every DoD box is ticked. A strict `ado done` refusal (exit 2 with findings on stdout) is logged as `##vso[task.logissue type=error]<id>: strict done refused: <rule ids>` (ids only, at most 20, never the findings' text) and fails the build after every story has been handled; a refused story is not moved by `transitionState` either (the other stories are); the checkout is the detached, full-depth merged commit that holds the ledger and `Decisions_<id>.md`. |
 
 ## Setup
@@ -83,6 +84,24 @@ left in `done_state` is not transitioned again, and a story that was already clo
 attached if it is missing. A story that was already in `done_state` is never transitioned, even if that
 attach fails or the ledger is not ready (a warning says the state was left unchanged); this applies when
 `ado done` runs, i.e. a ledger exists.
+
+## Optional strict re-run template (`ado-strict-verify.yml`), SHIPPED UNRUN
+
+`pipelines/ado-strict-verify.yml` is the optional strict re-run job, SHIPPED UNRUN. It re-runs the recorded red and green commits in CI: `ado strict verify <id> --no-record --base origin/<PR base branch>` (nothing is written; the exit code is the verdict). It declares no secret, maps no token (no `$(System.AccessToken)`) and checks out with `persistCredentials: false` and `fetchDepth: 0`. It is the only check that cannot be satisfied by editing the ledger: the ledger is plain text, but the job re-runs the tests at the SHAs it names and proves that those commits fail and pass under the target branch's test command. It does not show that a test is meaningful: the PR still writes the tests at those commits (the fidelity verdicts and the human review gate cover that). HEAD = the PR head commit, as the gate's `--head`: the script checks out `HEAD_SHA` (`HEAD_SHA: $(System.PullRequest.SourceCommitId)`, 40 hex characters, else the build fails) with `git checkout --quiet --detach` before any `ado` call, instead of the merge commit PR validation checks out. It is **optional**: add it as its own build-validation job. The step condition is `Build.Reason == PullRequest`.
+
+**Shipped unrun.** Azure Pipelines hosted agents are billing-blocked in this project's environment, so this template has never run on an agent. It is covered by structural pins (no token mapped, `persistCredentials: false`, `fetchDepth: 0`, the exact command, the guards, the `PullRequest` condition), `bash -n` and real-bash tests with a fake `ado` (the same cases as the GitHub workflow, under `bash -e`, `bash -eo pipefail` and `bash --noprofile --norc`). Run it once on a real agent before you make it a required build.
+
+**What it does.** One script: `ado strict mode --base origin/<target branch>` first; only a strict config on **the target branch** lets it go on. With an advisory or absent target config, or a strict config that only the PR carries, it succeeds with a log line and nothing else, because the test command would come from the PR.
+Exit 3 and every other unexpected exit fail the build. Then `ado branch --id-from="$branch" --base origin/<target branch>` reads the story id as the gate does (none, under a strict target: the build fails), then `ado strict verify <id> --no-record --base origin/<target branch>` runs the test command from the target branch's config, the runner cloning the PR head into a scrubbed environment.
+Any non-zero exit fails the build; the log shows the rule ids (at most 20, `[A-Za-z0-9_-]` only, 40 characters each), never test output.
+
+**Security note: the template runs the project's test command on the PR's code.** It has no secret to steal, but a hostile PR can still run arbitrary code on the runner (the agent): network access and the agent's resources. Use Microsoft-hosted agents or ephemeral self-hosted agents, limit who can open PRs that trigger this build, and do not map any token or variable group into the step.
+
+```yaml
+  - job: strict_verify
+    steps:
+      - template: pipelines/ado-strict-verify.yml@spec-kit-ado
+```
 
 ## The PR comment
 

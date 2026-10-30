@@ -5,7 +5,6 @@ import signal
 import subprocess
 import sys
 import textwrap
-import threading
 import tempfile
 import time
 
@@ -85,26 +84,34 @@ def test_worktree_removed_on_success_failure_and_timeout(repo, made, command, ti
     _gone(repo, made)
 
 
-def test_checkout_removed_and_group_killed_on_a_real_sigint(repo, made, tmp_path):
-    head, pidfile = git(repo, "rev-parse", "HEAD"), tmp_path / "pid"
-    stop = threading.Event()
+# A process started in the background of a non-interactive shell (CI, `cmd &`) inherits SIGINT as IGNORED, and Python then installs no handler: the
+# child restores Python's own, so the test does not depend on how pytest was launched (that was the whole flake).
+_CHILD = ("import signal, sys; signal.signal(signal.SIGINT, signal.default_int_handler); sys.path.insert(0, sys.argv[1]); from ado import strict\n"
+          "strict.run_at(sys.argv[2], sys.argv[3], 'echo $$ > ' + sys.argv[4] + '; sleep 60 & wait', 30)")
 
-    def interrupt_when_running():  # SIGINT only once the shell has written its pid, however slow the checkout is
-        deadline = time.monotonic() + 10
-        while not stop.is_set() and time.monotonic() < deadline:
-            if pidfile.exists() and pidfile.read_text().strip():
-                os.kill(os.getpid(), signal.SIGINT)
-                return
-            time.sleep(0.05)
-    poller = threading.Thread(target=interrupt_when_running, daemon=True)
-    poller.start()
+
+def test_checkout_removed_and_group_killed_on_a_real_sigint(repo, tmp_path):
+    """A real SIGINT, sent to a CHILD python (never to the pytest process, no threads): no timing between a signal and the test's own frames."""
+    head, pidfile, tmp = git(repo, "rev-parse", "HEAD"), tmp_path / "pid", tmp_path / "tmp"
+    tmp.mkdir()
+    src = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src")
+    child = subprocess.Popen([sys.executable, "-c", _CHILD, src, str(repo), head, str(pidfile)], cwd=tmp_path, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, text=True, env={**os.environ, "TMPDIR": str(tmp)})  # its temp dirs are exactly the ones under `tmp`
     try:
-        with pytest.raises(KeyboardInterrupt):
-            strict.run_at(str(repo), head, f"echo $$ > {shlex.quote(str(pidfile))}; sleep 60 & wait", 30)
+        deadline = time.monotonic() + 90  # SIGINT only once the shell has written its pid, however slow the clone is
+        while time.monotonic() < deadline and child.poll() is None and not (pidfile.exists() and pidfile.read_text().strip()):
+            time.sleep(0.05)
+        assert child.poll() is None and pidfile.exists() and pidfile.read_text().strip(), "the command never started"
+        assert [d for d in os.listdir(tmp) if d.startswith("ado-strict-")]  # the checkout exists while the command runs
+        child.send_signal(signal.SIGINT)
+        _, err = child.communicate(timeout=60)
     finally:
-        stop.set()
-        poller.join()
-    _gone(repo, made)
+        if child.poll() is None:
+            child.kill()
+            child.communicate()
+    assert child.returncode != 0 and "KeyboardInterrupt" in err, (child.returncode, err)
+    assert os.listdir(tmp) == []  # the temp dir is gone
+    assert git(repo, "worktree", "list", "--porcelain").count("worktree ") == 1
     _dead(int(pidfile.read_text()))
 
 

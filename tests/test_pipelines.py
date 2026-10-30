@@ -7,6 +7,7 @@ import yaml
 
 PL_DIR = Path(__file__).resolve().parent.parent / "pipelines"
 NAMES = ["ado-link-on-merge", "ado-gate", "ado-branch-guard"]
+SECRETFREE = ["ado-strict-verify"]  # V3-14b: no token of any kind
 UNTRUSTED = re.compile(r"\$\((System\.PullRequest\.|Build\.SourceBranch|Build\.SourceVersionMessage)")
 
 
@@ -18,7 +19,7 @@ def scripts(name):
     return [s["script"] for s in load(name)["steps"] if "script" in s]
 
 
-@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("name", NAMES + SECRETFREE)
 def test_templates_have_parameters_and_steps(name):
     t = load(name)
     assert isinstance(t["parameters"], list) and t["parameters"]
@@ -36,14 +37,14 @@ def test_token_from_system_access_token(name):
         assert "set -x" not in s and "echo \"$ADO_TOKEN" not in s
 
 
-@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("name", NAMES + SECRETFREE)
 def test_no_untrusted_macros_in_script(name):
     for s in scripts(name):
         assert not UNTRUSTED.search(s), f"{name}: untrusted macro in script"
         assert "${{" not in s, f"{name}: template expression in script"
 
 
-@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("name", NAMES + SECRETFREE)
 def test_persist_credentials_false(name):
     checkouts = [s for s in load(name)["steps"] if "checkout" in s]
     assert {c["checkout"] for c in checkouts} >= {"self", "spec-kit-ado"}
@@ -85,7 +86,7 @@ def test_link_on_merge_dry_run_before_apply():
     assert "task.logissue type=warning" in script
 
 
-@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("name", NAMES + SECRETFREE)
 def test_checkouts_have_explicit_paths(name):
     by = {c["checkout"]: c for c in load(name)["steps"] if "checkout" in c}
     assert by["spec-kit-ado"]["path"] == "spec-kit-ado-toolkit"
@@ -139,3 +140,36 @@ def test_gate_reads_story_with_cli_rule():
     script = scripts("ado-gate")[-1]
     assert 'ado branch --id-from="$branch"' in script and "grep -oE '[0-9]+'" not in script
     assert load("ado-gate")["steps"][-1]["env"]["SOURCE_BRANCH"] == "$(System.PullRequest.SourceBranch)"
+
+
+# ---- V3-14b: the optional secret-free re-run job (shipped unrun: hosted agents are billing-blocked) ----
+def test_strict_verify_template_has_no_token_and_never_persists_credentials():
+    text = (PL_DIR / "ado-strict-verify.yml").read_text()
+    text = text.replace("env -u ADO_TOKEN ado strict verify ", "")  # the one allowed mention: the step drops a token it never maps, as the gate does
+    for word in ("ADO_TOKEN", "System.AccessToken", "SYSTEM_ACCESSTOKEN", "GH_TOKEN", "GITHUB_TOKEN", "pull_request_target", "secrets."):
+        assert word not in text, word  # the whole file, comments included
+    t = load("ado-strict-verify")
+    assert all("env" not in s or not {"ADO_TOKEN", "SYSTEM_ACCESSTOKEN"} & set(s["env"]) for s in t["steps"])
+    own, toolkit = [s for s in t["steps"] if "checkout" in s]
+    assert own["checkout"] == "self" and own["fetchDepth"] == 0 and own["persistCredentials"] is False
+    assert toolkit["checkout"] == "spec-kit-ado" and toolkit["persistCredentials"] is False
+    assert all(s["condition"] == "eq(variables['Build.Reason'], 'PullRequest')" for s in t["steps"])  # every step, PR validation only
+
+
+def test_strict_verify_template_runs_the_exact_command_after_the_mode_and_the_id():
+    (script,) = [s for s in scripts("ado-strict-verify") if "strict verify" in s]
+    mode = 'ado strict mode --base "origin/${TARGET_BRANCH#refs/heads/}" > "$AGENT_TEMPDIRECTORY/mode.json"'
+    ident = 'ado branch --id-from="$branch" --base "origin/${TARGET_BRANCH#refs/heads/}"'
+    verify = 'env -u ADO_TOKEN ado strict verify "$id" --no-record --base "origin/${TARGET_BRANCH#refs/heads/}" > "$AGENT_TEMPDIRECTORY/verify.json"'
+    checkout = 'git checkout --quiet --detach "$HEAD_SHA"'
+    assert script.index(checkout) < script.index(mode)  # the PR head first, before any ado call (as the gate's --head)
+    assert script.index(mode) < script.index(ident) < script.index(verify) and len(re.findall(r"(?m)^\s*(?:env -u ADO_TOKEN )?ado strict verify ", script)) == 1
+    assert "--record" not in script.replace("--no-record", "") and "ado gate" not in script and "ado pr comment" not in script
+    assert script.splitlines()[0] == ': "${AGENT_TEMPDIRECTORY:?AGENT_TEMPDIRECTORY is not set - refusing to write scratch files into the checkout}"'
+    for var in ("SOURCE_BRANCH", "TARGET_BRANCH"):
+        assert f': "${{{var}:?' in script
+    (step,) = [s for s in load("ado-strict-verify")["steps"] if "strict verify" in s.get("script", "")]
+    assert step["env"] == {"SOURCE_BRANCH": "$(System.PullRequest.SourceBranch)", "TARGET_BRANCH": "$(System.PullRequest.TargetBranch)",
+                           "HEAD_SHA": "$(System.PullRequest.SourceCommitId)"}
+    assert ': "${HEAD_SHA:?' in script
+    assert [p["name"] for p in load("ado-strict-verify")["parameters"]] == ["repoPath"]

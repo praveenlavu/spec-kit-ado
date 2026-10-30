@@ -1,6 +1,6 @@
 # CI on GitHub Actions
 
-Three reusable workflows in this repo's `.github/workflows/` can be called from a
+Four reusable workflows (the fourth is optional and secret-free) in this repo's `.github/workflows/` can be called from a
 GitHub repository whose work is tracked in Azure Boards. Reference them at the moving
 `v0` tag (see [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md)) or at a release tag such as `v0.2.0`.
 
@@ -8,9 +8,35 @@ GitHub repository whose work is tracked in Azure Boards. Reference them at the m
 |---|---|---|
 | `ado-gate.yml` | `pull_request` | Finds the first `AB#<id>` in the PR title or body, runs `ado gate --base origin/<PR base branch>` on the PR's changed files (so `commits_without_story` checks the PR's own commits), and posts the result as a PR comment. Fails the check when `ado gate` exits 1 with `"blocking": true`, or exits 3 (an invalid `ado.config.json`, e.g. a mistyped `gate.block` name; the comment says `ADO gate FAILED: ado.config.json is invalid: ...`). No `AB#` reference is a notice. A gate that cannot run (any other exit, e.g. 2 for a missing config, or 1 without `"blocking": true`) posts a "could not run" comment and emits a `::warning::` annotation, never a failure. Before anything else a **Resolve strict mode** step runs `ado strict mode --base origin/<PR base branch>` (local, no token): exit 3 fails the job (`::error::`, fixed text), exit 2 (no usable config) is advisory exactly as before, and every other non-zero exit (a crash, 127 for no `ado`) fails the job too: the mode is then unknown. **Under a strict target** a PR with no `AB#` reference fails the job (instead of the notice) and a **Strict check** step (no `ADO_TOKEN`, no `GH_TOKEN`) runs `ado strict check <id> --phase pr --head <PR head SHA> --base origin/<PR base branch>` after the gate: its rule ids (never the ledger's text) are appended to the PR comment and the last step fails the job on any non-zero exit. |
 | `ado-branch-guard.yml` | `pull_request` | Fails unless `ado branch --id-from` finds a story id in the branch name (`<branch_prefix>ab<id>-<slug>`, e.g. `feature/ab1001-thing`, or `AB#<id>` anywhere; `branch_prefix` is read from `ado.config.json`, default `feature/`) and `ado get` does not answer HTTP 404 for it. Spec Kit's own `001-x` branches carry no id and fail. Missing config or token, or an ADO error other than 404, is a warning. |
+| `ado-strict-verify.yml` | `pull_request` | Optional, secret-free strict re-run (see [Optional strict re-run job](#optional-strict-re-run-job-ado-strict-verifyyml-shipped-unrun)). Does nothing unless the target branch's `ado.config.json` is strict; then it runs `ado strict verify <id> --no-record --base origin/<PR base branch>` and fails the check on any non-zero exit. |
 | `ado-link-on-merge.yml` | `pull_request: closed` | For a merged PR, comments on every `AB#<id>` in the title or body and optionally sets `transition-state`. With `close-story: true`, after merge it attaches the completed ledger and moves the story to `done_state`; only if every DoD box is ticked. Per-item failures are warnings, except a strict `ado done` refusal (exit 2 with findings on stdout): it is annotated `::error::<id>: strict done refused: <rule ids>` (ids only, at most 20, never the findings' text) and fails the job after every story has been handled. A refused story is not moved by `transition-state` either (the other stories are). The workflow checks out the exact merged commit (`ref: ${{ github.event.pull_request.merge_commit_sha }}`, `fetch-depth: 0`, `persist-credentials: false`), a detached checkout that holds the PR's ledger and `Decisions_<id>.md`. |
 
 In strict mode `ado strict check` (L1 order evidence) reads git history: check out with `fetch-depth: 0`, since a shallow clone reports `sha-unknown`. In strict mode `ado done --apply` (the `close-story` step of `ado-link-on-merge.yml`) also runs the `done` strict check: the checkout must hold the merged `<dod_path>/DoD_<id>.md` and `Decisions_<id>.md`, which the merge-commit checkout does; a detached `HEAD` is enough for it (it needs no red or green commit).
+
+## Optional strict re-run job (`ado-strict-verify.yml`), SHIPPED UNRUN
+
+Optional strict re-run job, SHIPPED UNRUN. `ado-strict-verify.yml` re-runs the recorded red and green commits in CI: `ado strict verify <id> --no-record --base origin/<PR base branch>` (nothing is written; the exit code is the verdict). It declares no secret, sets no `ADO_TOKEN`, grants `contents: read` only and checks out with `persist-credentials: false` and `fetch-depth: 0`. It is the only check that cannot be satisfied by editing the ledger: the ledger is plain text, but the job re-runs the tests at the SHAs it names and proves that those commits fail and pass under the target branch's test command. It does not show that a test is meaningful: the PR still writes the tests at those commits (the fidelity verdicts and the human review gate cover that). HEAD = the PR head commit, as the gate's `--head` (the first checkout takes `ref: ${{ github.event.pull_request.head.sha }}`, not the merge commit). It is **optional**.
+
+**Shipped unrun.** GitHub Actions is billing-blocked in this project's environment, so this workflow has never run on a hosted runner. It is covered by structural pins
+(no secret or token reference, `permissions: contents: read`, the exact command, the guards, `persist-credentials: false` on every checkout, no `pull_request_target`), `bash -n` on every `run:` block and real-bash tests
+with a fake `ado` (strict and no story id: fail; strict and exit 0: pass; strict and exit 2: fail with sanitised rule ids only; advisory or absent target: a notice and nothing else; `ado strict mode` exit 3: fail), each under `bash -e`, `bash -eo pipefail` and `bash --noprofile --norc`.
+Run it once on a real runner before you make it a required check.
+
+**What it does.** (1) Installs the toolkit as the gate does and removes the checkout. (2) Reads the strict mode with `ado strict mode --base origin/<PR base branch>`: only a strict config on **the target branch** lets it go on; with an advisory or absent target config,
+or a strict config that only the PR carries, it succeeds with a notice and does nothing else, because the test command would come from the PR. Exit 3 (invalid config) and every other unexpected exit fail the job, as in the gate. (3) Reads the story id as the gate does (the first whole `AB#<n>` in the PR title or body, passed through `env:`);
+under a strict target no `AB#` fails the job. (4) Runs `ado strict verify <id> --no-record --base origin/<PR base branch>`: the test command comes from the target branch's config and the runner clones the PR head into a scrubbed environment. Any non-zero exit fails the job; the log shows the rule ids (at most 20, `[A-Za-z0-9_-]` only, 40 characters each) and never test output or finding text.
+
+**Security note: the job runs the project's test command on the PR's code.** It has no secret to steal (nothing to leak even from a fork), but a hostile PR can still run arbitrary code on the runner: network access and the runner's resources. Call it on `pull_request` only, never `pull_request_target`
+(the workflow refuses any other event); keep the repository's setting that requires approval for fork pull requests; use ephemeral (GitHub-hosted or one-shot self-hosted) runners and never a long-lived self-hosted runner with a network position inside your estate.
+The toolkit checkout uses the default credential, so the toolkit repository must be readable without `TOOLKIT_READ_TOKEN`; this workflow has no such secret. While `praveenlavu/spec-kit-ado` is private, the cross-repo `uses:` and that token-less toolkit checkout fail: the check goes red and never skips silently (fail closed), so vendor or fork the workflow until the repo is public.
+
+```yaml
+  verify:
+    if: github.event.action != 'closed'
+    uses: praveenlavu/spec-kit-ado/.github/workflows/ado-strict-verify.yml@v0
+    permissions:
+      contents: read        # no `secrets:` key: it takes none
+```
 
 ## Breaking in 0.2
 
@@ -65,7 +91,7 @@ jobs:
 
 ## Inputs
 
-All three accept:
+The first three accept (`ado-strict-verify.yml` takes only `toolkit-ref`):
 
 | Input | Default | Meaning |
 |---|---|---|

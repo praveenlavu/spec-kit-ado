@@ -1,0 +1,99 @@
+name: ADO strict verify (reusable, optional, secret-free)
+# OPTIONAL and SHIPPED UNRUN (hosted runners are billing-blocked in this project): covered by structural pins, `bash -n` and real-bash tests with a fake `ado` only.
+# Call from a consumer repo on the pull_request event only (never the privileged PR event), e.g.:
+#   uses: praveenlavu/spec-kit-ado/.github/workflows/ado-strict-verify.yml@v0
+# It declares no secret and holds no token. It re-runs `ado strict verify --no-record` (the red commit must fail, the green commit must pass) on the PR's code,
+# so editing the ledger alone cannot satisfy it (it does not show that a test is meaningful: the PR still writes the tests at those commits). SECURITY: it runs the project's test command on the PR's code: no secret to steal, but a hostile PR can still run
+# arbitrary code on the runner (network, resources). Use fork-PR approval gates and ephemeral runners.
+# It does nothing unless the TARGET branch's ado.config.json says mode: strict (read by `ado strict mode`): under any other target the test command would come from the PR.
+on:
+  workflow_call:
+    inputs:
+      toolkit-ref:
+        description: "Ref of praveenlavu/spec-kit-ado to install"
+        type: string
+        default: "v0"
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The PR head commit (as the gate's --head), not the pull_request merge commit: the HEAD test must judge the PR's own tip.
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: praveenlavu/spec-kit-ado
+          ref: ${{ inputs.toolkit-ref }}
+          path: .ado-toolkit
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install toolkit
+        # Remove the checkout so the toolkit's own tests are never mistaken for the consumer's.
+        run: pip install --quiet ./.ado-toolkit && rm -rf .ado-toolkit
+      - name: Resolve strict mode
+        # Local and read-only. Only a strict config ON THE TARGET BRANCH lets the job go on: that is where the test command comes from.
+        id: mode
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          : "${RUNNER_TEMP:?RUNNER_TEMP is not set - refusing to write scratch files into the checkout}"
+          : "${BASE_REF:?BASE_REF is not set - this job judges a pull request against its target branch}"
+          # CLI stderr is one fixed line, but it is still annotation text: one line, no control chars, 300-char cut
+          ann() { python3 -I -c 'import re,sys;t=re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]"," ",sys.stdin.buffer.read().decode("utf-8","replace"));sys.stdout.buffer.write(t[:300].encode())'; }
+          if [ "$EVENT_NAME" != pull_request ]; then echo "::error::spec-kit-ado: ado-strict-verify must be called on the pull_request event only"; exit 1; fi
+          rm -f "$RUNNER_TEMP/mode.json" "$RUNNER_TEMP/mode.err"
+          code=0
+          ado strict mode --base "origin/${BASE_REF}" > "$RUNNER_TEMP/mode.json" 2> "$RUNNER_TEMP/mode.err" || code=$?
+          # Exit 3: the target's (or the PR's) config cannot be trusted: fail closed. Exit 2 (no usable config) is advisory.
+          # Every other non-zero exit (a crash, 127 = no ado, a signal) means the mode is unknown: fail closed too.
+          if [ "$code" -eq 3 ]; then echo "::error::spec-kit-ado: ado.config.json is invalid or unreadable: $(ann < "$RUNNER_TEMP/mode.err")"; exit 3; fi
+          if [ "$code" -ne 0 ] && [ "$code" -ne 2 ]; then echo "::error::spec-kit-ado: could not determine the strict mode (ado strict mode exit $code): $(ann < "$RUNNER_TEMP/mode.err")"; exit 1; fi
+          state="advisory pull request"
+          [ "$code" -ne 0 ] || state=$(python3 -I -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d["mode"],d["source"])' "$RUNNER_TEMP/mode.json" 2>/dev/null) || state=unreadable
+          case "$state" in
+            "strict target branch") rerun=yes ;;
+            "strict pull request"|"advisory pull request") rerun=no ;;
+            *) echo "::error::spec-kit-ado: could not read the strict mode (unexpected output of ado strict mode)"; exit 1 ;;
+          esac
+          if [ "$rerun" = no ]; then echo "::notice::spec-kit-ado strict verify skipped: the target branch's ado.config.json is not strict, so the project's test command is not run (it would come from the PR)."; fi
+          echo "rerun=$rerun" >> "$GITHUB_OUTPUT"
+      - name: Resolve story id (first AB#<n> in title/body)
+        id: story
+        if: steps.mode.outputs.rerun == 'yes'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          id=$(printf '%s\n%s' "$PR_TITLE" "$PR_BODY" | grep -oE '(^|[^A-Za-z0-9])AB#[1-9][0-9]*' | grep -oE '[0-9]+$' | head -1 || true)
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          if [ -z "$id" ]; then echo "::error::spec-kit-ado strict mode: the PR title or body has no AB# reference, so the strict re-run cannot run and cannot be skipped."; exit 1; fi
+      - name: Re-run the recorded red and green commits
+        # The test command comes from the target branch's config; the runner clones the PR head into a scrubbed environment. Rule ids only in the log, never test output.
+        id: verify
+        if: steps.mode.outputs.rerun == 'yes'
+        env:
+          STORY_ID: ${{ steps.story.outputs.id }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          : "${RUNNER_TEMP:?RUNNER_TEMP is not set - refusing to write scratch files into the checkout}"
+          : "${STORY_ID:?STORY_ID is not set - the story id step did not run}"
+          : "${BASE_REF:?BASE_REF is not set - this job judges a pull request against its target branch}"
+          ann() { python3 -I -c 'import re,sys;t=re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]"," ",sys.stdin.buffer.read().decode("utf-8","replace"));sys.stdout.buffer.write(t[:300].encode())'; }
+          rm -f "$RUNNER_TEMP/verify.json" "$RUNNER_TEMP/verify.err"  # a stale file must never be this run's verdict
+          code=0
+          ado strict verify "$STORY_ID" --no-record --base "origin/${BASE_REF}" > "$RUNNER_TEMP/verify.json" 2> "$RUNNER_TEMP/verify.err" || code=$?
+          if [ -s "$RUNNER_TEMP/verify.err" ]; then echo "ado strict verify: $(ann < "$RUNNER_TEMP/verify.err")"; fi
+          if [ "$code" -eq 0 ]; then echo "spec-kit-ado: strict verify passed."; exit 0; fi
+          rules=$(python3 -I -c 'import json,re,sys;print(" ".join(re.sub("[^A-Za-z0-9_-]","",str(x["rule"]))[:40] for x in json.load(open(sys.argv[1]))["findings"][:20]))' "$RUNNER_TEMP/verify.json" 2>/dev/null) || rules=
+          echo "::error::spec-kit-ado: strict verify failed (exit $code) - rule ids: ${rules:-none (the run could not complete, see the job log)}"
+          exit 1

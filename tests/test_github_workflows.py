@@ -11,7 +11,8 @@ import yaml
 
 WF_DIR = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 REUSABLE = ["ado-link-on-merge", "ado-gate", "ado-branch-guard"]
-ALL = REUSABLE + ["ci", "commit-lint"]
+SECRETFREE = ["ado-strict-verify"]  # V3-14b: reusable, but declares no secret at all
+ALL = REUSABLE + SECRETFREE + ["ci", "commit-lint"]
 UNTRUSTED = re.compile(
     r"\$\{\{[^}]*(github\.event\.pull_request\.(title|body|head\.ref)|github\.head_ref)[^}]*\}\}"
 )
@@ -118,7 +119,7 @@ def test_every_workflow_has_least_privilege_permissions(name):
     assert extra == ({"pull-requests"} if name == "ado-gate" else set())
 
 
-@pytest.mark.parametrize("name", REUSABLE)
+@pytest.mark.parametrize("name", REUSABLE + SECRETFREE)
 def test_toolkit_checkout_does_not_persist_credentials(name):
     toolkit = [s for s in steps(load(name))
                if s.get("with", {}).get("repository") == "praveenlavu/spec-kit-ado"]
@@ -169,7 +170,7 @@ def test_link_on_merge_closes_story_only_when_opted_in():
     assert run.count("close_out") == 2 and 'case "$CLOSE_STORY" in [Tt]rue) close_out && closed=true ;; esac' in run
 
 
-@pytest.mark.parametrize("name", REUSABLE)
+@pytest.mark.parametrize("name", REUSABLE + SECRETFREE)
 def test_toolkit_checkout_removed_before_any_ado_call(name):
     # The toolkit's own tests must not be scanned as the consumer's (`ado gate --src .`).
     runs = "\n".join(s.get("run", "") for s in steps(load(name)))
@@ -191,7 +192,7 @@ def test_changed_names_prefixed_so_a_dash_name_is_not_an_option(path):
 
 
 def test_story_id_regexes_accept_any_length():
-    assert len(CI_FILES) == 6
+    assert len(CI_FILES) == 8
     for p in CI_FILES:
         text = p.read_text()
         assert "{3,6}" not in text and "3-6" not in text, p.name
@@ -403,9 +404,9 @@ def test_azure_gate_error_annotation_cannot_inject_a_vso_command(tmp_path):
 # ---- F30: every annotation that interpolates untrusted text goes through the `ann` sanitiser ----
 ANN_FAMILIES = {  # the shell function is byte-identical within a family (templates are copied one by one, so no shared file)
     "azure": ("##vso[task.logissue type=warning]", [ROOT / "pipelines" / "ado-gate.yml", ROOT / "pipelines" / "ado-branch-guard.yml",
-                                                    ROOT / "pipelines" / "ado-link-on-merge.yml"]),
+                                                    ROOT / "pipelines" / "ado-link-on-merge.yml", ROOT / "pipelines" / "ado-strict-verify.yml"]),
     "github": ("::warning::", [WF_DIR / "ado-branch-guard.yml", WF_DIR / "commit-lint.yml", WF_DIR / "ado-gate.yml",
-                               WF_DIR / "ado-link-on-merge.yml"]),
+                               WF_DIR / "ado-link-on-merge.yml", WF_DIR / "ado-strict-verify.yml"]),
 }
 ANN_FILES = [p for _, ps in ANN_FAMILIES.values() for p in ps]
 HOSTILE = {
@@ -466,7 +467,7 @@ def test_ann_neutralises_hostile_text_in_a_real_bash(tmp_path, family, name):
 
 def test_untrusted_text_in_annotations_always_goes_through_ann():
     risky = re.compile(r"\.err\b|\$branch|\$BRANCH|\$subject|\$\{?(SOURCE_BRANCH|PR_TITLE)")
-    annotation = re.compile(r"echo \"(##vso\[task\.logissue|::(error|warning|notice)::|ado gate: |ado strict (mode|check): )")  # log lines that carry CLI stderr count too
+    annotation = re.compile(r"echo \"(##vso\[task\.logissue|::(error|warning|notice)::|ado gate: |ado strict (mode|check|verify): )")  # log lines that carry CLI stderr count too
     uses_ann = re.compile(r"\| ann\)|ann < ")
     for p in ANN_FILES:
         lines = [l for l in p.read_text().splitlines() if annotation.search(l)]
@@ -599,6 +600,8 @@ MARKER_SCENARIOS = {  # every shell snippet with a python3 call, on a path that 
     "mode-github": lambda d: _gh_run(d, _gh("ado-gate", "mode"), MODE_ENV, ado='echo \'{"mode": "strict"}\'\n'),
     "strict-github": lambda d: _gh_run(d, _gh("ado-gate", "Strict check"), STRICT_ENV, ado=_findings_ado(d)),
     "enforce-github": lambda d: _gh_run(d, _gh("ado-gate", "Enforce strict check"), {}),
+    "verify-github": lambda d: _verify_job(d, _v_ado(d, verify_rc=2)),
+    "verify-azure": lambda d: _run_az_verify(d, _v_ado(d, verify_rc=2)),
     "gate-azure-strict": lambda d: _run_az(d),
     "link-github-refused": lambda d: _link_run(d, LINK_FILES[0], _refused_ado(d)),
     "link-azure-refused": lambda d: _link_run(d, LINK_FILES[1], _refused_ado(d)),
@@ -653,6 +656,9 @@ UNSET_SCENARIOS = {
     "mode-github": lambda d: _gh_run(d, _gh("ado-gate", "mode"), MODE_ENV, no_temp=True),
     "strict-github": lambda d: _gh_run(d, _gh("ado-gate", "Strict check"), STRICT_ENV, no_temp=True),
     "enforce-github": lambda d: _gh_run(d, _gh("ado-gate", "Enforce strict check"), {}, no_temp=True),
+    "verify-mode-github": lambda d: _gh_run(d, _gh(VERIFY_WF, "mode"), VERIFY_MODE_ENV, no_temp=True),
+    "verify-step-github": lambda d: _gh_run(d, _gh(VERIFY_WF, "verify"), VERIFY_STEP_ENV, no_temp=True),
+    "verify-azure": lambda d: _run_az_verify(d, _v_ado(d), temp=False),
 }
 
 
@@ -1258,3 +1264,272 @@ def test_link_on_merge_a_refused_story_is_never_transitioned_the_others_are(tmp_
 def test_link_on_merge_a_refused_story_is_not_moved_to_done_state_even_when_asked(tmp_path, path, shell_flags):
     rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path), state="Done")  # transition-state == done_state: the worst case
     assert rc == 1 and not any(c.startswith("update") for c in _calls(tmp_path)), _calls(tmp_path)
+
+
+# ======================================================================================================================
+# V3-14b: the optional secret-free CI re-run job (`ado strict verify --no-record`), shipped UNRUN (billing-blocked): structural pins,
+# `bash -n` (the parametrised test above covers both new files) and real-bash shim tests only.
+# ======================================================================================================================
+VERIFY_WF = "ado-strict-verify"
+VERIFY_GH = WF_DIR / "ado-strict-verify.yml"
+VERIFY_AZ = ROOT / "pipelines" / "ado-strict-verify.yml"
+VERIFY_IF = "steps.mode.outputs.rerun == 'yes'"
+VERIFY_MODE_ENV = {"BASE_REF": "main", "EVENT_NAME": "pull_request"}
+VERIFY_STEP_ENV = {"STORY_ID": "1001", "BASE_REF": "main"}
+VERIFY_CMD_GH = 'ado strict verify "$STORY_ID" --no-record --base "origin/${BASE_REF}"'
+VERIFY_CMD_AZ = 'env -u ADO_TOKEN ado strict verify "$id" --no-record --base "origin/${TARGET_BRANCH#refs/heads/}"'
+STRICT_TARGET = '{"mode": "strict", "source": "target branch"}'
+FORBIDDEN = ("ADO_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "System.AccessToken", "SYSTEM_ACCESSTOKEN", "secrets.", "github.token", "pull_request_target")
+
+
+@pytest.mark.parametrize("path", [VERIFY_GH, VERIFY_AZ], ids=["github", "azure"])
+def test_verify_templates_hold_no_secret_and_never_the_privileged_trigger(path):
+    text = path.read_text()
+    text = text.replace("env -u ADO_TOKEN ado strict verify ", "")  # the one allowed mention: the Azure step drops a token it never maps, as the gate does
+    for word in FORBIDDEN:  # the whole file, comments included: nothing here may even name a token or the privileged event
+        assert word not in text, (path.name, word)
+    assert not re.search(r"(^|\s)token:", text) and "--record" not in text.replace("--no-record", "")
+
+
+def test_github_verify_workflow_is_secret_free_and_least_privilege():
+    wf = load(VERIFY_WF)
+    call = triggers(wf)
+    assert list(call) == ["workflow_call"] and list(call["workflow_call"]) == ["inputs"]  # no `secrets:` block at all
+    assert list(call["workflow_call"]["inputs"]) == ["toolkit-ref"] and call["workflow_call"]["inputs"]["toolkit-ref"]["default"] == "v0"
+    assert wf["permissions"] == {"contents": "read"} and "env" not in wf
+    (job,) = wf["jobs"].values()
+    assert "env" not in job and "permissions" not in job and "secrets" not in job and "needs" not in job
+    checkouts = [s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout")]
+    assert len(checkouts) == 2 and all(c["with"]["persist-credentials"] is False for c in checkouts)  # every checkout
+    assert checkouts[0]["with"] == {"ref": "${{ github.event.pull_request.head.sha }}", "fetch-depth": 0, "persist-credentials": False}  # the PR head, not the merge commit
+    assert checkouts[1]["with"] == {"repository": "praveenlavu/spec-kit-ado", "ref": "${{ inputs.toolkit-ref }}", "path": ".ado-toolkit",
+                                    "persist-credentials": False}  # no `token:`: the default checkout credential, never persisted
+    for s in job["steps"]:
+        assert "env" not in s or not set(s["env"]) & {"ADO_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
+
+
+def test_github_verify_steps_run_in_order_and_use_exactly_the_verify_command():
+    names = [(s.get("id"), s["name"]) for s in steps(load(VERIFY_WF)) if "run" in s]
+    assert [i for i, _ in names] == [None, "mode", "story", "verify"]  # install, mode FIRST, story id, the re-run
+    mode, story, verify = (_gh(VERIFY_WF, k) for k in ("mode", "story", "verify"))
+    assert set(mode["env"]) == {"BASE_REF", "EVENT_NAME"} and mode["env"]["EVENT_NAME"] == "${{ github.event_name }}"
+    assert 'ado strict mode --base "origin/${BASE_REF}" > "$RUNNER_TEMP/mode.json"' in mode["run"]
+    assert "if" not in mode and story["if"] == VERIFY_IF and verify["if"] == VERIFY_IF
+    assert set(story["env"]) == {"PR_TITLE", "PR_BODY"} and set(verify["env"]) == {"STORY_ID", "BASE_REF"}
+    assert verify["env"]["STORY_ID"] == "${{ steps.story.outputs.id }}" and verify["env"]["BASE_REF"] == "${{ github.base_ref }}"
+    assert VERIFY_CMD_GH in verify["run"] and len(re.findall(r"(?m)^\s*ado strict verify ", verify["run"])) == 1  # one call, nothing else
+    assert not re.search(r"(?m)^\s*ado strict verify ", mode["run"] + story["run"])  # only the last step runs the project's tests
+    assert 'ado strict verify "$STORY_ID" --no-record --base "origin/${BASE_REF}" >' in verify["run"]  # nothing is appended to the command
+
+
+def test_github_verify_guards_and_story_id_rule_match_the_gate():
+    guard = ': "${RUNNER_TEMP:?RUNNER_TEMP is not set - refusing to write scratch files into the checkout}"'
+    for key in ("mode", "verify"):
+        assert _gh(VERIFY_WF, key)["run"].splitlines()[0] == guard
+    assert ': "${STORY_ID:?' in _gh(VERIFY_WF, "verify")["run"] and ': "${BASE_REF:?' in _gh(VERIFY_WF, "verify")["run"]
+    assert ': "${BASE_REF:?' in _gh(VERIFY_WF, "mode")["run"]
+    gate_id = next(l for l in _gh("ado-gate", "story")["run"].splitlines() if l.startswith("id=$("))
+    assert gate_id in _gh(VERIFY_WF, "story")["run"]  # the same first-AB#-token rule, copied byte for byte
+    assert "$PR_TITLE" in _gh(VERIFY_WF, "story")["run"] and "${{" not in "".join(s.get("run", "") for s in steps(load(VERIFY_WF)))
+
+
+def _v_ado(tmp_path, *, mode=STRICT_TARGET, mode_rc=0, id_rc=0, verify_rc=0, verify_doc=FINDINGS):
+    """A fake `ado` for the re-run job (GitHub: `strict mode`, `strict verify`; Azure also `branch --id-from=`). It logs every call."""
+    (tmp_path / "mode.json").write_text(mode)
+    (tmp_path / "verify.json").write_text(json.dumps(verify_doc))
+    return (LOG + 'case "$1 $2" in\n'
+            f' "strict mode") cat "{tmp_path}/mode.json"; echo "error: mode boom ::error::pwned" >&2; exit {mode_rc};;\n'
+            f' "branch --id-from="*) [ {id_rc} = 0 ] && echo 1001; exit {id_rc};;\n'
+            f' "strict verify") cat "{tmp_path}/verify.json"; echo "error: strict verify failed: boom ::error::pwned" >&2; exit {verify_rc};;\n'
+            'esac\nexit 0\n')
+
+
+def _verify_job(tmp_path, ado, *, title="AB#1001 fix", body="", event="pull_request"):
+    """The three GitHub steps in order, sharing one GITHUB_OUTPUT, with the `if:` of the later steps applied (pinned above)."""
+    rc, out = _gh_run(tmp_path, _gh(VERIFY_WF, "mode"), {**VERIFY_MODE_ENV, "EVENT_NAME": event}, ado=ado)
+    outputs = lambda: dict(l.split("=", 1) for l in _gho(tmp_path).splitlines())
+    if rc or outputs().get("rerun") != "yes":
+        return rc, out
+    rc, o = _gh_run(tmp_path, _gh(VERIFY_WF, "story"), {"PR_TITLE": title, "PR_BODY": body}, ado=ado)
+    out += o
+    if rc:
+        return rc, out
+    rc, o = _gh_run(tmp_path, _gh(VERIFY_WF, "verify"), {"STORY_ID": outputs()["id"], "BASE_REF": "main"}, ado=ado)
+    return rc, out + o
+
+
+def _run_az_verify(tmp_path, ado, *, branch="feature/ab1001-x", target="refs/heads/main", temp=True, with_ado=True, head_sha=SHA, git_rc=0,
+                   extra_env=None):
+    """The Azure template's one script, whole, as the agent runs it (`bash --noprofile --norc`, no -e unless a test asks)."""
+    step = next(s for s in yaml.safe_load(VERIFY_AZ.read_text())["steps"] if "strict verify" in s.get("script", ""))
+    assert set(step["env"]) == {"SOURCE_BRANCH", "TARGET_BRANCH", "HEAD_SHA"}  # no token of any kind
+    (tmp_path / "at").mkdir(exist_ok=True)
+    git = f'echo "$*" >> "{tmp_path}/git.log"\nexit {git_rc}\n'  # a fake git: the template's checkout of the PR head, logged apart from the `ado` calls
+    env = {"PATH": f"{_bin(tmp_path, git=git, **({'ado': ado} if with_ado else {}))}:/usr/bin:/bin", "HOME": str(tmp_path), "CALLS": str(tmp_path / "calls.log"),
+           "SOURCE_BRANCH": branch, "TARGET_BRANCH": target, "HEAD_SHA": head_sha, **(extra_env or {})}
+    if temp:
+        env["AGENT_TEMPDIRECTORY"] = str(tmp_path / "at")
+    (tmp_path / "step.sh").write_text(step["script"])
+    r = subprocess.run(["bash", *SHELL_FLAGS, str(tmp_path / "step.sh")], env=env, cwd=tmp_path, capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+
+
+def _rules_ok(out):
+    _assert_rule_ids_only(out)
+    assert "HOSTILE-DETAIL" not in out and "task.complete" not in out.replace("##vso[task.logissue", "")  # ado's stdout (the findings) is never logged
+    assert "pwned" not in "".join(l for l in out.splitlines() if l.startswith(("::error::pwn", "::set-output")))
+
+
+JOBS = {"github": lambda d, ado, **kw: _verify_job(d, ado, **kw), "azure": lambda d, ado, **kw: _run_az_verify(d, ado, **kw)}
+
+
+@pytest.fixture(params=list(JOBS))
+def job(request):
+    return request.param, JOBS[request.param]
+
+
+CALL_MODE = "strict mode --base origin/main | token=unset gh=unset"
+CALL_VERIFY = "strict verify 1001 --no-record --base origin/main | token=unset gh=unset"
+
+
+def _verify_calls(tmp_path, kind):
+    return [c for c in _calls(tmp_path) if not c.startswith("branch ")] if kind == "azure" else _calls(tmp_path)
+
+
+def test_verify_job_strict_target_runs_the_exact_command_and_passes(tmp_path, job, shell_flags):
+    kind, run = job
+    rc, out = run(tmp_path, _v_ado(tmp_path, verify_doc={"ok": True, "findings": []}))
+    assert rc == 0 and not [l for l in out.splitlines() if l.startswith("::error::")] and "type=error" not in out, out
+    assert _verify_calls(tmp_path, kind) == [CALL_MODE, CALL_VERIFY]  # no token reached either call, and nothing else ran
+
+
+def test_verify_job_exit_2_fails_the_job_and_lists_sanitised_rule_ids_only(tmp_path, job, shell_flags):
+    kind, run = job
+    rc, out = run(tmp_path, _v_ado(tmp_path, verify_rc=2))
+    assert rc == 1, out
+    _rules_ok(out)
+    assert "exit 2" in out and "boom" in out  # the CLI's own stderr line, flattened by ann
+    _assert_no_injected_command(out, VERIFY_GH if kind == "github" else VERIFY_AZ)
+    assert _verify_calls(tmp_path, kind) == [CALL_MODE, CALL_VERIFY]
+
+
+@pytest.mark.parametrize("rc_in,doc", [(1, {}), (127, {}), (139, {"nothing": 1}), (2, {"findings": "no"}), (2, {})])
+def test_verify_job_fails_closed_on_any_non_zero_exit_even_without_findings(tmp_path, job, rc_in, doc, shell_flags):
+    kind, run = job
+    rc, out = run(tmp_path, _v_ado(tmp_path, verify_rc=rc_in, verify_doc=doc))
+    assert rc == 1 and f"exit {rc_in}" in out and "none" in out, out
+
+
+def test_verify_job_strict_target_without_a_story_id_fails_and_never_runs_the_tests(tmp_path, job, shell_flags):
+    kind, run = job
+    kw = {"branch": "feature/no-id"} if kind == "azure" else {"title": "HOSTILE-TITLE ::set-output name=x::y", "body": "no ref"}
+    rc, out = run(tmp_path, _v_ado(tmp_path, id_rc=1), **kw)
+    assert rc == 1 and ("::error::" in out or "type=error" in out) and "HOSTILE" not in out and "set-output" not in out, out  # fixed text
+    assert not any(c.startswith("strict verify") for c in _calls(tmp_path))
+
+
+@pytest.mark.parametrize("mode", [
+    '{"mode": "advisory", "source": "pull request"}',      # the target is advisory: the test command would come from the PR
+    '{"mode": "strict", "source": "pull request"}',        # only the PR says strict: still the PR's command
+])
+def test_verify_job_runs_nothing_unless_the_target_branch_is_strict(tmp_path, job, mode, shell_flags):
+    kind, run = job
+    rc, out = run(tmp_path, _v_ado(tmp_path, mode=mode))
+    assert rc == 0 and "skipped" in out and "type=error" not in out and "::error::" not in out, out
+    assert _calls(tmp_path) == [CALL_MODE]  # no story-id call, no verify: nothing of the project ran
+    if kind == "github":
+        assert _gho(tmp_path) == "rerun=no\n"
+
+
+def test_verify_job_no_usable_config_exit_2_is_advisory_and_does_nothing(tmp_path, job, shell_flags):
+    kind, run = job
+    rc, out = run(tmp_path, _v_ado(tmp_path, mode="", mode_rc=2))
+    assert rc == 0 and "skipped" in out and _calls(tmp_path) == [CALL_MODE], out
+
+
+def test_verify_job_mode_exit_3_fails_closed(tmp_path, job, shell_flags):
+    kind, run = job
+    rc, out = run(tmp_path, _v_ado(tmp_path, mode="", mode_rc=3))
+    assert rc == (3 if kind == "github" else 1), out
+    assert ("::error::" in out or "type=error" in out) and "boom" in out
+    _assert_no_injected_command(out, VERIFY_GH if kind == "github" else VERIFY_AZ)
+    assert _calls(tmp_path) == [CALL_MODE]
+
+
+@pytest.mark.parametrize("rc_in", [1, 4, 126, 127, 139])
+def test_verify_job_mode_failure_other_than_2_or_3_fails_closed(tmp_path, job, rc_in, shell_flags):
+    kind, run = job
+    rc, out = run(tmp_path, _v_ado(tmp_path, mode="", mode_rc=rc_in))
+    assert rc == 1 and "could not determine the strict mode" in out and _calls(tmp_path) == [CALL_MODE], out
+
+
+def test_verify_job_without_ado_installed_fails_closed(tmp_path, job, shell_flags):
+    kind, run = job
+    rc, out = _gh_run(tmp_path, _gh(VERIFY_WF, "mode"), VERIFY_MODE_ENV) if kind == "github" else _run_az_verify(tmp_path, None, with_ado=False)
+    assert rc == 1 and "could not determine the strict mode" in out, out
+
+
+@pytest.mark.parametrize("mode", ["not json", '{"mode": "lax", "source": "target branch"}', "{}", '{"mode": "strict"}', "",
+                                  '{"mode": "strict\\n", "source": "target branch"}', '{"mode": "advisory", "source": "target branch"}'])
+def test_verify_job_unreadable_mode_output_fails_closed(tmp_path, job, mode, shell_flags):
+    kind, run = job
+    rc, out = run(tmp_path, _v_ado(tmp_path, mode=mode))
+    assert rc == 1 and ("::error::" in out or "type=error" in out) and _calls(tmp_path) == [CALL_MODE], out
+
+
+@pytest.mark.parametrize("event", ["pull_request_target", "push", "workflow_dispatch", ""])
+def test_github_verify_refuses_any_event_but_pull_request(tmp_path, event, shell_flags):
+    rc, out = _verify_job(tmp_path, _v_ado(tmp_path), event=event)
+    assert rc == 1 and "pull_request event only" in out and _calls(tmp_path) == [], out  # before any ado call
+
+
+def test_verify_story_id_is_the_first_whole_ab_token(tmp_path, shell_flags):
+    for title, body, want in (("fooAB#9 and AB#1001", "AB#2", "id=1001"), ("x", "see AB#77, AB#78", "id=77"), ("ab#5 AB#0 AB#", "", None)):
+        d = tmp_path / f"c{len(os.listdir(tmp_path))}"
+        d.mkdir()
+        rc, out = _gh_run(d, _gh(VERIFY_WF, "story"), {"PR_TITLE": title, "PR_BODY": body})
+        assert rc == (0 if want else 1) and (want is None or _gho(d) == want + "\n"), (title, out)
+
+
+def test_azure_verify_template_reads_the_id_with_the_target_config_and_runs_the_exact_command(tmp_path, shell_flags):
+    rc, out = _run_az_verify(tmp_path, _v_ado(tmp_path, verify_doc={"ok": True, "findings": []}), branch="refs/heads/feature/ab1001-x")
+    assert rc == 0, out
+    assert _calls(tmp_path)[:2] == [CALL_MODE, "branch --id-from=feature/ab1001-x --base origin/main | token=unset gh=unset"]
+    assert _calls(tmp_path)[2] == CALL_VERIFY
+
+
+def test_verify_job_scratch_files_are_stale_proof(tmp_path, shell_flags):
+    (tmp_path / "rt").mkdir()
+    (tmp_path / "rt" / "verify.json").write_text(json.dumps({"findings": [{"rule": "STALE"}]}))  # a stale file is never this run's findings
+    rc, out = _gh_run(tmp_path, _gh(VERIFY_WF, "verify"), VERIFY_STEP_ENV, ado=LOG + "exit 2\n")
+    assert rc == 1 and "STALE" not in out and "none" in out, out
+
+
+# ---- V3-14b fix round 1: verify the PR HEAD (as the gate's --head), not the pull_request merge commit ----
+def _git_log(tmp_path):
+    p = tmp_path / "git.log"
+    return p.read_text().splitlines() if p.exists() else []
+
+
+def test_azure_verify_checks_out_the_pr_head_before_any_ado_call(tmp_path, shell_flags):
+    rc, out = _run_az_verify(tmp_path, _v_ado(tmp_path, verify_doc={"ok": True, "findings": []}))
+    assert rc == 0, out
+    assert _git_log(tmp_path) == [f"checkout --quiet --detach {SHA}"] and _calls(tmp_path)[0] == CALL_MODE
+
+
+@pytest.mark.parametrize("sha", ["", "abc", "0123456789ABCDEF0123456789ABCDEF01234567", "g" * 40, "0" * 41, "--orphan", SHA + "\n" + SHA])
+def test_azure_verify_refuses_a_head_sha_that_is_not_40_hex_before_git_or_ado_run(tmp_path, sha, shell_flags):
+    rc, out = _run_az_verify(tmp_path, _v_ado(tmp_path), head_sha=sha)
+    assert rc == 1 and (sha == "" or "type=error" in out), out  # an empty value trips the `:?` guard instead
+    assert _git_log(tmp_path) == [] and _calls(tmp_path) == []
+
+
+def test_azure_verify_fails_closed_when_the_checkout_of_the_head_fails(tmp_path, shell_flags):
+    rc, out = _run_az_verify(tmp_path, _v_ado(tmp_path), git_rc=128)
+    assert rc == 1 and "could not check out the PR head" in out and "type=error" in out, out
+    assert _calls(tmp_path) == []  # no ado call, so no project code, on the wrong commit
+
+
+def test_azure_verify_drops_a_token_from_the_verify_call_only_as_the_gate_does(tmp_path, shell_flags):
+    rc, out = _run_az_verify(tmp_path, _v_ado(tmp_path, verify_doc={"ok": True, "findings": []}), extra_env={"ADO_TOKEN": "tok-secret"})
+    assert rc == 0 and _calls(tmp_path)[-1] == CALL_VERIFY and "tok-secret" not in out, out  # `env -u ADO_TOKEN`: the call sees none

@@ -970,3 +970,30 @@ def test_strict_ci_fix_round_documented():
     assert "not moved by the optional transition" in _flat("README.md") and "the refused story is not moved" in _flat("CHANGELOG.md")
     assert "is not moved by `transitionState`" in _flat("pipelines/README.md")
     assert "# Strict (the target branch's ado.config.json says mode: strict" in (ROOT / ".github" / "workflows" / "ado-gate.yml").read_text(encoding="utf-8")
+
+
+def test_strict_verify_job_documented_as_optional_unrun_and_hostile_code_capable():
+    """V3-14b: the optional secret-free re-run job."""
+    for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md", "README.md", "pipelines/README.md", "CHANGELOG.md"):
+        text = _flat(doc)
+        assert "ado-strict-verify.yml" in text and "SHIPPED UNRUN" in text, doc
+        assert "`ado strict verify <id> --no-record --base origin/" in text, doc
+        assert "no secret" in text and "cannot be satisfied by editing the ledger" in text, doc
+        assert "does not show that a test is meaningful" in text and "the PR still writes the tests at those commits" in text, doc
+        assert "cannot be faked" not in text and "cannot fake" not in text, doc
+    for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        text = _flat(doc)
+        assert "runs the project's test command on the PR's code" in text and "arbitrary code on the runner" in text, doc
+        assert "the target branch's `ado.config.json` is strict" in text and "nothing else" in text, doc
+        assert "ephemeral" in text and "billing" in text, doc
+    gh = _flat("docs/ci-github.md")
+    assert "`pull_request` only, never `pull_request_target`" in gh and "approval for fork pull requests" in gh
+    assert "pull_request_target" not in (ROOT / ".github" / "workflows" / "ado-strict-verify.yml").read_text(encoding="utf-8")
+
+
+def test_strict_verify_job_head_and_private_toolkit_documented():
+    for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        assert "HEAD = the PR head commit, as the gate's `--head`" in _flat(doc), doc
+    gh = _flat("docs/ci-github.md")
+    assert "While `praveenlavu/spec-kit-ado` is private" in gh and "fail closed" in gh and "vendor or fork the workflow until the repo is public" in gh
+    assert "`HEAD_SHA: $(System.PullRequest.SourceCommitId)`" in _flat("docs/ci-azure-pipelines.md")
