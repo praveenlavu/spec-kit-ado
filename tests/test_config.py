@@ -231,9 +231,13 @@ def test_review_block_on_must_be_list_of_strings(tmp_path, bad):
 
 
 @pytest.mark.parametrize("name", ["ac_traceability", "assertion", "ac_drift", "open_questions",
-                                  "commits_without_story"])
+                                  "commits_without_story", "open_decisions"])
 def test_known_gate_block_name_accepted(tmp_path, name):
     assert _write(tmp_path, gate={"block": [name]}).gate["block"] == [name]
+
+
+def test_config_accepts_open_decisions_in_gate_block(tmp_path):
+    assert _write(tmp_path, gate={"block": ["open_decisions"]}).gate["block"] == ["open_decisions"]
 
 
 def test_unknown_gate_block_name_is_config_error_listing_valid_set(tmp_path):
@@ -277,6 +281,7 @@ def test_gate_checks_match_run_gate_output_keys(tmp_path):
     block = _Everything()
     ledger = (f"# DoD — US1001\n- **AC hash:** {ac_hash(_wi('old'))}\n{SECTION2}\n"
               "- [ ] Q1: which database? → _(open)_ · owner: lead\n"
+              "- [ ] D1: use paging → _(open)_ · kind: decision · why: unspecified\n"
               "## 3. AC → tests (traceability)\n| AC | acceptance criterion | tests | commit/PR | status |\n"
               "|---|---|---|---|---|\n| AC-1 | does X | Gone.testX |  | red |\n## 4. Gate log\n")
     r = run_gate(ledger, {}, {"BTest.cls": "class BTest {}"}, _wi("new"), block=block,

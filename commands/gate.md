@@ -78,6 +78,7 @@ Report each part of the JSON in plain words:
 | `missing_evidence` | AC rows marked `green` with no commit/PR value |
 | `commits_without_story` | short SHAs of commits in `<base>..HEAD` (merge commits ignored) whose message lacks this story's `AB#<id>`; list them as advisory. `commits_note` says why nothing was checked (base not found, no `origin/HEAD` when `--base` is omitted, git failed); say **commits were NOT checked**, never "all commits reference the story" |
 | `open_questions` | ids of the open items (`Q<n>`) in ledger section 2 (it may hold `"?"` when section 2 is unparsed: that is the unclosed-fence case below, not a question); list them as advisory unless `gate.block` names `open_questions`. `open_questions_note` (present only when set) says section 2 could not be read because of an unclosed fence or comment: say the questions were **NOT checked** |
+| `open_decisions` | present only when the ledger has at least one `D<n>` decision line (any status): the ids of those still open or `rejected` (both unresolved; `validated` is resolved), in numeric order; `"?"` means a `D<n>` line could not be parsed or a fence or comment hides section 2: say decisions were **NOT fully checked** (it counts as open when `gate.block` names `open_decisions`). Absent means the ledger has no decision lines: say nothing about decisions. List them as advisory unless `gate.block` names `open_decisions` |
 | `ledger_unclosed` | present only when the ledger has an unclosed code fence or `<!-- -->` comment, which hides every section after it. Say so plainly: the sections after it were **NOT evaluated**, and the gate counts this as an `open_questions` finding. Ask the user to close the fence (or run `ado dod <id> --refresh` when it was left open in section 1) |
 | `skipped_note` | present only when files were skipped (symlink, outside `--src`, not a regular file, or over 1 MiB), as a count. Say that many files were **NOT read**; never imply every test file was checked |
 | `blocking` | whether a check the repo opted into blocking (`gate.block`) failed |
@@ -96,7 +97,7 @@ If the output is `ledger: missing` or `unreadable`, show the `note` and stop.
 
 Append a dated block to `## 4. Gate & review log`. If the section still holds the
 `_(none yet)_` placeholder, replace that line; otherwise add below earlier entries (directly above the `## 5.` heading,
-never at the end of the file) and never edit them.
+never at the end of the file) and never edit them. The `- open decisions:` line is written only when the ledger has decisions (`open_decisions` is present in the output); leave it out otherwise.
 
 ```markdown
 ### Gate — <YYYY-MM-DD> — `<base>...HEAD` @ `<short SHA>`
@@ -106,6 +107,7 @@ never at the end of the file) and never edit them.
 - missing evidence: <none | AC ids>
 - commits without AB#<id>: <none | short SHAs | not checked — <note>>
 - open questions: <none | Q ids | not checked — <open_questions_note>>
+- open decisions: <none | D ids>
 - ledger: <ok | UNCLOSED fence or comment — sections after it not evaluated>
 - files skipped: <none | skipped_note>
 - blocking: <yes | no>

@@ -165,7 +165,7 @@ Then, in each project:
 | `speckit.ado.tasks` | Routes the tasks phase; makes sure a standard `tasks.md` exists for push. | none |
 | `speckit.ado.push` | Previews the child Tasks for `tasks.md`, creates or updates them after a yes. Re-runs update, never duplicate. | child Tasks, after a yes |
 | `speckit.ado.implement` | Routes the implement phase with TDD, keeps the ledger AC table current, ticks ADO Tasks after a yes. | Task state, after a yes |
-| `speckit.ado.gate` | Runs the DoD gate (traceability, assertions, AC drift, evidence, `open_questions`, `commits_without_story`) and logs it in the ledger. | none |
+| `speckit.ado.gate` | Runs the DoD gate (traceability, assertions, AC drift, evidence, `open_questions`, `commits_without_story`, `open_decisions`) and logs it in the ledger. | none |
 | `speckit.ado.review` | Reviews the branch diff on seven planes (incl. fresh eyes and story fit) against spec, ledger and story, verifies findings, logs them. | none |
 | `speckit.ado.pr` | Builds the PR body from ledger, gate and review; opens the PR after a yes (a draft with `--allow-incomplete` when tasks are unticked); on Azure Repos can link the branch to the story. | PR (and the branch link), after a yes |
 | `speckit.ado.status` | Read-only report: story state, ledger completeness, AC drift, traceability, Task progress. | none |
@@ -250,7 +250,7 @@ name to reference a work item, and comment on (and optionally transition) the st
 after merge. Closing the story on merge is opt-in: with `close-story: true`
 (`closeStory: true` on Azure Pipelines), after merge it attaches the completed ledger
 and moves the story to `done_state`; only if every DoD box is ticked. The gate fails a
-PR only for checks listed in `gate.block` (`ac_traceability`, `assertion`, `ac_drift`, `open_questions`, `commits_without_story`); missing information never fails CI (with
+PR only for checks listed in `gate.block` (`ac_traceability`, `assertion`, `ac_drift`, `open_questions`, `commits_without_story`, `open_decisions`); missing information never fails CI (with
 `ac_traceability` blocking, an AC row with no test does fail it).
 
 In CI the PR's own `ado.config.json` is untrusted: an invalid one (including any string with a control character)

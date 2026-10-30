@@ -20,6 +20,8 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   Refuses (exit 2) without a terminal so an agent shell cannot do it by accident; not a security boundary (the strict gate,
   the decisions comment the PO sees and the ledger history are the enforcement). `--by` is a role (default `PO`), `--note`
   at most 300 characters without `<!--`, `-->` or code fences.
+- Gate: `open_decisions` (ids of open or rejected `D<n>` lines) is reported only when the ledger has `D<n>` lines, joins the
+  checks `gate.block` can name, and adds one line to the CI summary; ledgers without decision lines keep the v0.2 output.
 
 ## 0.2.0 — 2026-10-29
 

@@ -675,3 +675,25 @@ def test_decisions_resolve_documented_as_human_only():
     assert "Record the PO's verdict on a decision" in _flat("rules/hitl.md") and "Human only" in _flat("rules/hitl.md")
     assert "not a security boundary" in _flat("rules/hitl.md") and "not a security boundary" in _flat("CHANGELOG.md")
     assert "`ado decisions <id> --resolve D<n>" in _flat("CHANGELOG.md")
+
+
+def test_gate_open_decisions_documented():
+    gate, cfg = _flat("commands/gate.md"), _flat("docs/configuration.md")
+    assert "`open_decisions` | present only when the ledger has at least one `D<n>` decision line" in gate
+    assert "The `- open decisions:` line is written only when the ledger has decisions" in gate
+    assert gate.split("### Gate — <YYYY-MM-DD>", 1)[1].count("- open decisions: <none | D ids>") == 1
+    assert "Valid names are exactly the six below" in cfg and "`open_decisions` — ledger section 2" in cfg
+    assert "**only when the ledger has at least one `D<n>` line**" in cfg
+    for f in ("README.md", "docs/configuration.md"):
+        assert "`commits_without_story`, `open_decisions`" in _flat(f), f
+    for f in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        assert "`Open decisions`" in _flat(f), f
+    assert "Gate: `open_decisions`" in _flat("CHANGELOG.md")
+
+
+def test_gate_open_decisions_in_command_table_and_agents():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `speckit.ado.gate` |"))
+    assert "`open_decisions`" in row
+    assert "`open_decisions` (only when the ledger has `D<n>` lines)" in _flat("AGENTS.md")
+    assert "`\"?\"` means a `D<n>` line could not be parsed" in _flat("commands/gate.md")
+    assert "adds `?` to the list" in _flat("docs/configuration.md")

@@ -805,3 +805,69 @@ def test_gate_unclosed_opener_in_the_ledger_is_a_blocking_ledger_note(opener):
     advisory = run_gate(led, SOURCES, {})  # advises unless listed in gate.block
     assert not advisory["blocking"] and "Advisory" in render_summary(advisory)
     assert "ledger_unclosed" not in run_gate(LEDGER, SOURCES, {})
+
+
+# ---- V3-5: open_decisions ----
+from ado.decisions import HEADING as _DH  # noqa: E402
+
+_D_OPEN = "- [ ] D1: Use cursor paging → _(open)_ · kind: decision · why: the story names no page size"
+_D_VAL = "- [x] D2: Cap at 50 rows → validated · by: PO · note: agreed"
+_D_REJ = "- [x] D3: Skip audit log → rejected · by: PO · note: not acceptable"
+_D_OPEN10 = "- [ ] D10: Retry twice → _(open)_ · kind: assumption · why: unspecified"
+V02_KEYS = {"traceability", "assertion_gaps", "assertion_notes", "drift", "missing_evidence", "open_questions",
+            "commits_without_story", "blocked_by", "blocking"}  # the literal v0.2 advisory key set
+
+
+def _with_decisions(*lines):
+    return LEDGER.replace("## 3. AC", f"{_DH}\n" + "\n".join(lines) + "\n## 3. AC", 1)
+
+
+def test_open_decisions_absent_when_no_decision_lines():
+    assert set(run_gate(LEDGER, SOURCES, {})) == V02_KEYS
+    assert set(run_gate(_ledger_for("x"), {}, {})) == V02_KEYS  # the seeded template has the heading, no D line
+    assert "open_decisions" not in render_summary(run_gate(LEDGER, SOURCES, {}))
+
+
+def test_open_decisions_lists_ids_and_rejected_counts_as_open():
+    r = run_gate(_with_decisions(_D_OPEN10, _D_VAL, _D_REJ, _D_OPEN), SOURCES, {})
+    assert r["open_decisions"] == ["D1", "D3", "D10"]  # numeric order; validated is resolved
+    assert set(r) == V02_KEYS | {"open_decisions"}
+    assert run_gate(_with_decisions(_D_VAL), SOURCES, {})["open_decisions"] == []  # present, nothing open
+    assert run_gate(_with_decisions("- [ ] D4 not in the grammar"), SOURCES, {})["open_decisions"] == ["?"]  # unparsed D line: fail closed
+
+
+def test_open_decisions_blocks_only_when_listed():
+    ledger = _with_decisions(_D_OPEN)
+    assert run_gate(ledger, SOURCES, {})["blocking"] is False
+    r = run_gate(ledger, SOURCES, {}, block=["open_decisions"])
+    assert r["blocked_by"] == ["open_decisions"] and r["blocking"] is True
+    assert run_gate(_with_decisions(_D_VAL), SOURCES, {}, block=["open_decisions"])["blocking"] is False
+    assert run_gate(LEDGER, SOURCES, {}, block=["open_decisions"])["blocking"] is False
+
+
+def test_summary_line():
+    open_md = render_summary(run_gate(_with_decisions(_D_OPEN, _D_REJ), SOURCES, {}))
+    assert "- Open decisions in ledger section 2: `D1`, `D3`" in open_md.partition("**Advisory:**")[2]
+    blocked = render_summary(run_gate(_with_decisions(_D_OPEN), SOURCES, {}, block=["open_decisions"]))
+    assert "`D1`" in blocked.partition("**Blocking")[2].partition("**Advisory")[0]
+    assert "Open decisions: none" in render_summary(run_gate(_with_decisions(_D_VAL), SOURCES, {}))
+
+
+def test_open_decisions_fail_closed_on_malformed_or_hidden_d_lines():
+    bad = _with_decisions("- [ ] D4 not in the grammar")  # malformed-only D line
+    r = run_gate(bad, SOURCES, {}, block=["open_decisions"])
+    assert r["open_decisions"] == ["?"] and r["blocked_by"] == ["open_decisions"] and r["blocking"] is True
+    assert run_gate(bad, SOURCES, {})["blocking"] is False  # advisory unless listed
+    hidden = _with_decisions("```", _D_OPEN)  # an unclosed fence hides the D line: the key stays absent
+    r = run_gate(hidden, SOURCES, {}, block=["open_decisions"])
+    assert "open_decisions" not in r and r["blocked_by"] == ["open_decisions"] and r["blocking"] is True
+    assert "open_decisions" not in run_gate(hidden, SOURCES, {})
+
+
+def test_summary_open_decisions_fail_closed_lines():
+    bad = render_summary(run_gate(_with_decisions("- [ ] D4 not in the grammar"), SOURCES, {}, block=["open_decisions"]))
+    assert "- Open decisions in ledger section 2: `?`" in bad.partition("**Blocking")[2].partition("**Advisory")[0]
+    hidden = render_summary(run_gate(_with_decisions("```", _D_OPEN), SOURCES, {}, block=["open_decisions"]))
+    blocking = hidden.partition("**Blocking")[2].partition("**Advisory")[0]
+    assert "Open decisions" in blocking and "could not be read" in blocking and "AC changed" not in blocking
+    assert "no drift" not in blocking and "drift not checked" not in blocking

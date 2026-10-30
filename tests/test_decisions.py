@@ -533,3 +533,12 @@ def test_temp_file_is_unique_and_the_mode_is_kept(tmp_path, monkeypatch):
     assert other.read_text(encoding="utf-8") == "not mine" and (led.stat().st_mode & 0o777) == 0o640
     other.unlink()
     assert list(led.parent.glob("*.tmp")) == []
+
+
+def test_has_decision_lines():
+    assert decisions.has_decision_lines(_ledger(OPEN)) and decisions.has_decision_lines(_ledger(VAL))
+    assert decisions.has_decision_lines(_ledger("- [ ] D4 not in the grammar"))  # malformed still counts
+    assert not decisions.has_decision_lines(_ledger("- [ ] Q1: which? → _(open)_ · owner: lead"))
+    assert not decisions.has_decision_lines(_ledger("```\n" + OPEN + "\n```"))  # a fenced example is not a line
+    assert not decisions.has_decision_lines(_ledger("<!-- " + OPEN + " -->"))
+    assert not decisions.has_decision_lines("# DoD\nno section 2\n")

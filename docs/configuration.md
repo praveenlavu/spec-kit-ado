@@ -51,7 +51,7 @@ Every string in the file, values and object keys at any depth, must be free of c
 `removed_state` must be non-empty strings when set, `gate`, `stack` and `strict` must be
 objects, `mode` must be `advisory` or `strict`, `attachments_allow` must be a list of strings, `branch_prefix` must be
 git-ref-safe as above, `gate.block` entries must be known check names (`ac_traceability`,
-`assertion`, `ac_drift`, `open_questions`, `commits_without_story`) and `review_block_on` entries
+`assertion`, `ac_drift`, `open_questions`, `commits_without_story`, `open_decisions`) and `review_block_on` entries
 must be `blocker`, `major` or `minor`; otherwise the CLI exits 2
 with a message naming the problem.
 
@@ -78,7 +78,7 @@ file or token stays exit 2 and advisory.
   looks for the test IDs named in ledger section 3.
   The gate reads only regular files of at most 1 MiB that really live under `--src`: it never follows a symlink (not even one pointing inside the repo), and it skips FIFOs, devices and larger files. Because the PR supplies both the files and these regexes, reading through a symlink would let a PR probe files outside the repo one bit at a time. The ledger `ado gate` reads must meet the same rules (else it is reported unreadable). Skipped files are counted in the summary (`N file(s) skipped: ...`), never named.
   Each glob must be 1 to 200 characters with every `[...]` class closed and valid, and each regex 1 to 500 characters and compilable; otherwise it is a config error (exit 3 for `ado gate`) that names the entry by position (`entry #2`), never by its text, because the config comes from the PR and the message reaches the CI log.
-- `block` lists the checks that may fail the gate (exit 1, and a failed CI check). Valid names are exactly the five below; any other entry is a config error (exit 2; exit 3 and a red CI check for `ado gate`), so a typo such as `open_question` cannot silently switch a check off:
+- `block` lists the checks that may fail the gate (exit 1, and a failed CI check). Valid names are exactly the six below; any other entry is a config error (exit 2; exit 3 and a red CI check for `ado gate`), so a typo such as `open_question` cannot silently switch a check off:
   - `ac_traceability` — an AC row in section 3 has no test (an empty or placeholder
     tests cell) or names only tests that cannot be found under `--src`. The AC are counted
     from the `### Acceptance Criteria` lines in ledger section 1 (AC-1 is the first line): every AC line in
@@ -90,6 +90,8 @@ file or token stays exit 2 and advisory.
   - `open_questions` — ledger section 2 still has an open question (`- [ ] Q<n>: <question> → _(open)_ · owner: <role>`; open means an unticked box or an `_(open)_` answer). Always reported as `open_questions` in the gate output; it fails the gate only when listed here.
 
   - `commits_without_story` — a non-merge commit in `<base>..HEAD` (`ado gate --base REF`, which the CI templates set to `origin/<target branch>`; without it, the branch `origin/HEAD` points at) whose message lacks this story's `AB#<id>` (word-bounded: `xAB#2` does not count, nor does another story's `AB#3`). Always reported as `commits_without_story` (short SHAs); when the base cannot be resolved (`--base` ref not found or starting with `-`, no `origin/HEAD`) or git fails, `commits_note` says the commits were not checked and the gate does not block. Fails the gate only when listed here.
+
+  - `open_decisions` — ledger section 2 still has a `D<n>` decision line (`### Decisions & assumptions (development)`) that is open or `rejected`; a `validated` one is resolved. Reported as `open_decisions` (ids in numeric order) **only when the ledger has at least one `D<n>` line**, so a ledger without decision lines keeps the v0.2 output exactly. A `D<n>` line that breaks the grammar, or an unclosed fence or comment in section 2, adds `?` to the list (and blocks when listed, even if no `D<n>` line is visible, in which case the key is absent). Fails the gate only when listed here.
 
   Missing evidence (a `green` row without a commit or PR) is always a warning only.
 

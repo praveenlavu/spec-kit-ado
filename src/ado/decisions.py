@@ -60,6 +60,11 @@ def _line(raw):
             "used": kv.get("used", "")}
 
 
+def has_decision_lines(ledger_md):
+    """True when section 2 has a `D<n>` checkbox line outside fences and comments, well-formed or not."""
+    return any(_CAND.match(ln) for ln in _visible(section(ledger_md, 2) or "")[0].splitlines())
+
+
 def parse_decisions(ledger_md):
     """Ledger section 2 -> {'open': [...], 'validated': [...], 'rejected': [...], 'unparsed': bool}. Lines inside code
     fences or <!-- --> comments are ignored; the first line of a duplicate id wins. `unparsed` is true when a `D` line

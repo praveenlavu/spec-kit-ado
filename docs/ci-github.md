@@ -85,7 +85,8 @@ Secrets: `ADO_TOKEN` (required), `TOOLKIT_READ_TOKEN` (optional; falls back to
 ## Notes
 
 - To make the gate block a PR, list checks in `gate.block` in `ado.config.json` and mark
-  the `gate` job as a required status check. Without `gate.block` it only comments.
+  the `gate` job as a required status check. Without `gate.block` it only comments. Valid names are listed in
+  [configuration.md](configuration.md); the comment gains an `Open decisions` line when the ledger has `D<n>` decision lines.
 - PR titles, bodies and branch names reach the scripts only through environment
   variables, never interpolated into the script text.
 - The PR comment is the markdown that `ado gate --summary-out gate.md` writes: blocking
