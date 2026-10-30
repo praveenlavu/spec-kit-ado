@@ -11,6 +11,8 @@ MODES = ("advisory", "strict")
 STRICT_GATE_BLOCK = ("ac_traceability", "assertion", "open_questions", "commits_without_story")  # gate.block floor in strict mode
 STRICT_REVIEW_BLOCK = ("blocker",)  # review_block_on floor in strict mode
 STRICT_DEFAULTS = {"test_command": None, "test_timeout": 300}
+MAX_REF_CONFIG = 1024 * 1024  # bytes: a config read from a git ref is the PR's neighbour's text; the same cap as the ledger
+REF_LABEL = "ado.config.json at the target branch"  # names the file in messages, never the ref (it is a CLI value)
 
 
 BRANCH_PREFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
@@ -93,6 +95,7 @@ class Config:
         self.branch_prefix = branch_prefix
         self.mode = mode
         self.strict = {**STRICT_DEFAULTS, **(strict or {})}
+        self.from_target = False  # True when CI took this config from the PR's target branch (`ado gate --base`)
 
     def _effective(self, project_list, floor):
         out = list(project_list)
@@ -109,6 +112,142 @@ class Config:
         return self._effective(self.review_block_on, STRICT_REVIEW_BLOCK)
 
     @classmethod
+    def _from_data(cls, data, path):
+        """The one validator behind `load` and `load_from_ref`; `path` only labels the messages (the PR chooses the content: never the text)."""
+        try:
+            return cls._validate(data, path)
+        except RecursionError:  # a value nested too deeply for the validator
+            raise ConfigInvalid(f"{path}: nested too deeply") from None
+
+    @classmethod
+    def _validate(cls, data, path):
+        if not isinstance(data, dict):
+            raise ConfigInvalid(f"{path}: top level must be a JSON object")
+        reject_control_chars(data, "", path)
+        missing = [k for k in ("organization", "project") if not data.get(k)]
+        if missing:
+            raise ConfigInvalid(f"{path}: missing required key(s): {', '.join(missing)}")
+        if "dod_gate" in data:
+            raise ConfigInvalid(f"{path}: `dod_gate` was renamed to `gate` in 0.1.1; "
+                              "move `dod_gate.block` to `gate.block`")
+        for k in ("gate", "stack"):
+            if k in data and not isinstance(data[k], dict):
+                raise ConfigInvalid(f"{path}: '{k}' must be a JSON object")
+        org = data["organization"]
+        if not (valid_org(org)):
+            raise ConfigInvalid(f"{path}: 'organization' must match {ORG_RE.pattern}")
+        gate = data.get("gate", {})
+        if "tests" in gate and not isinstance(gate["tests"], dict):
+            raise ConfigInvalid(f"{path}: 'gate.tests' must be a JSON object")
+        from .gate import GATE_CHECKS, valid_glob  # local: gate -> questions -> auth -> secretstore -> config
+        for n, (glob, rx) in enumerate(gate.get("tests", {}).items(), 1):
+            # entries are named by position: the glob is PR-controlled text and must not reach the CI log
+            if not (isinstance(rx, str) and 0 < len(rx) <= 500):
+                raise ConfigInvalid(f"{path}: 'gate.tests' entry #{n}: the value must be a regex string of 1-500 characters")
+            if not valid_glob(glob):
+                raise ConfigInvalid(f"{path}: 'gate.tests' entry #{n}: the glob must be 1-200 characters "
+                                  "with balanced '[...]' classes")
+            try:
+                re.compile(rx)
+            except re.error:
+                raise ConfigInvalid(f"{path}: 'gate.tests' entry #{n}: the regex is invalid") from None
+        dod_path = data.get("dod_path", "dod")
+        if not (isinstance(dod_path, str) and dod_path):
+            raise ConfigInvalid(f"{path}: 'dod_path' must be a non-empty string")
+        block = gate.get("block", [])
+        if not (isinstance(block, list) and all(isinstance(b, str) for b in block)):
+            raise ConfigInvalid(f"{path}: 'gate.block' must be a list of strings")
+        for i, b in enumerate(block):
+            if b not in GATE_CHECKS:
+                raise ConfigInvalid(f"{path}: gate.block[{i}]: unknown check "
+                                  f"(valid: {', '.join(GATE_CHECKS)})")
+        for k in ("story_type", "removed_state"):
+            if k in data and not (isinstance(data[k], str) and data[k]):
+                raise ConfigInvalid(f"{path}: '{k}' must be a non-empty string")
+        if not valid_branch_prefix(data.get("branch_prefix", "feature/")):
+            raise ConfigInvalid(f"{path}: 'branch_prefix' must be empty or a git-ref-safe string "
+                              "(letters, digits, '.', '_', '-', '/'; no '..', '//', '/.', '.lock/')")
+        allow = data.get("attachments_allow")
+        if allow is not None and not (
+                isinstance(allow, list) and all(isinstance(a, str) for a in allow)):
+            raise ConfigInvalid(f"{path}: 'attachments_allow' must be a list of strings")
+        rbo = data.get("review_block_on", [])
+        if not (isinstance(rbo, list) and all(isinstance(r, str) for r in rbo)):
+            raise ConfigInvalid(f"{path}: 'review_block_on' must be a list of strings")
+        for i, r in enumerate(rbo):
+            if r not in REVIEW_SEVERITIES:
+                raise ConfigInvalid(f"{path}: review_block_on[{i}]: unknown severity "
+                                  f"(valid: {', '.join(REVIEW_SEVERITIES)})")
+        if "mode" in data and data["mode"] not in MODES:
+            raise ConfigInvalid(f"{path}: 'mode' must be \"advisory\" or \"strict\"")
+        strict = data.get("strict", {})
+        if not isinstance(strict, dict):
+            raise ConfigInvalid(f"{path}: 'strict' must be a JSON object")
+        for n, k in enumerate(strict, 1):
+            if k not in STRICT_DEFAULTS:  # named by position: the key is PR-controlled text
+                raise ConfigInvalid(f"{path}: strict entry #{n}: unknown key "
+                                  f"(valid: {', '.join(STRICT_DEFAULTS)})")
+        cmd = strict.get("test_command")
+        if "test_command" in strict and not (isinstance(cmd, str) and 0 < len(cmd) <= 500):
+            raise ConfigInvalid(f"{path}: 'strict.test_command' must be a string of 1-500 characters")
+        tt = strict.get("test_timeout")
+        if "test_timeout" in strict and not (isinstance(tt, int) and not isinstance(tt, bool) and 1 <= tt <= 3600):
+            raise ConfigInvalid(f"{path}: 'strict.test_timeout' must be an integer from 1 to 3600")
+        return cls(
+            organization=data["organization"],
+            project=data["project"],
+            api_version=data.get("api_version", DEFAULT_API_VERSION),
+            dod_path=dod_path,
+            gate=data.get("gate"),
+            attachments_allow=allow,
+            review_block_on=rbo,
+            done_state=data.get("done_state", "Done"),
+            task_type=data.get("task_type", "Task"),
+            repo_host=data.get("repo_host", "github"),
+            repository=data.get("repository", ""),
+            story_type=data.get("story_type", "User Story"),
+            removed_state=data.get("removed_state", "Removed"),
+            branch_prefix=data.get("branch_prefix", "feature/"),
+            mode=data.get("mode", "advisory"),
+            strict=strict,
+        )
+
+    @classmethod
+    def load_from_ref(cls, ref, repo="."):
+        """The config at `ref` (the PR's target branch), read with git and checked by the same validator as `load`: a Config, or None
+        when the repository has no `ado.config.json` at that ref. Anything else (a ref that is no commit, git missing or failing, a
+        non-regular or over 1 MiB file, bad content) raises ConfigInvalid with text that never echoes the ref: CI fails closed.
+        `ref` is resolved as strict._resolve_base does: refs/remotes/<ref>, refs/heads/<ref>, a full commit id; never a tag."""
+        from . import strict  # local: strict -> gate -> questions -> auth -> secretstore -> config
+
+        def fail(why):
+            return ConfigInvalid(f"{REF_LABEL}: {why}")
+        commit = strict._resolve_base(repo, ref) if isinstance(ref, str) else ""
+        if not commit:
+            raise fail("the base ref is not a commit in this repository (or git could not be run); fetch it (fetch-depth: 0)")
+        spec = f"{commit}:ado.config.json"
+        listed = strict._git(repo, "ls-tree", "-l", "--full-tree", "--end-of-options", commit, "--", "ado.config.json")
+        if listed is None or listed.returncode:
+            raise fail("git could not read the tree")
+        if not listed.stdout.strip():
+            return None  # the path does not exist at that commit
+        meta = listed.stdout.decode("utf-8", "replace").split("\t", 1)[0].split()
+        if len(meta) != 4 or meta[0] not in ("100644", "100755") or meta[1] != "blob" or not meta[3].isdigit():
+            raise fail("the file is not a regular file")
+        if int(meta[3]) > MAX_REF_CONFIG:
+            raise fail("the file is larger than 1 MiB")
+        shown = strict._git(repo, "show", "--no-textconv", "--end-of-options", spec)
+        if shown is None or shown.returncode or len(shown.stdout) > MAX_REF_CONFIG:
+            raise fail("git could not read the file")
+        try:
+            data = json.loads(shown.stdout.decode("utf-8"))
+        except ValueError as e:  # includes UnicodeDecodeError
+            raise fail(f"invalid JSON: {e}")
+        except RecursionError:
+            raise fail("nested too deeply") from None
+        return cls._from_data(data, REF_LABEL)
+
+    @classmethod
     def load(cls, start_dir=None):
         candidates = []
         env_path = os.environ.get("ADO_CONFIG")
@@ -123,96 +262,9 @@ class Config:
                     raise ConfigInvalid(f"{path}: cannot read ({e})")
                 except ValueError as e:  # includes UnicodeDecodeError
                     raise ConfigInvalid(f"{path}: invalid JSON: {e}")
-                if not isinstance(data, dict):
-                    raise ConfigInvalid(f"{path}: top level must be a JSON object")
-                reject_control_chars(data, "", path)
-                missing = [k for k in ("organization", "project") if not data.get(k)]
-                if missing:
-                    raise ConfigInvalid(f"{path}: missing required key(s): {', '.join(missing)}")
-                if "dod_gate" in data:
-                    raise ConfigInvalid(f"{path}: `dod_gate` was renamed to `gate` in 0.1.1; "
-                                      "move `dod_gate.block` to `gate.block`")
-                for k in ("gate", "stack"):
-                    if k in data and not isinstance(data[k], dict):
-                        raise ConfigInvalid(f"{path}: '{k}' must be a JSON object")
-                org = data["organization"]
-                if not (valid_org(org)):
-                    raise ConfigInvalid(f"{path}: 'organization' must match {ORG_RE.pattern}")
-                gate = data.get("gate", {})
-                if "tests" in gate and not isinstance(gate["tests"], dict):
-                    raise ConfigInvalid(f"{path}: 'gate.tests' must be a JSON object")
-                from .gate import GATE_CHECKS, valid_glob  # local: gate -> questions -> auth -> secretstore -> config
-                for n, (glob, rx) in enumerate(gate.get("tests", {}).items(), 1):
-                    # entries are named by position: the glob is PR-controlled text and must not reach the CI log
-                    if not (isinstance(rx, str) and 0 < len(rx) <= 500):
-                        raise ConfigInvalid(f"{path}: 'gate.tests' entry #{n}: the value must be a regex string of 1-500 characters")
-                    if not valid_glob(glob):
-                        raise ConfigInvalid(f"{path}: 'gate.tests' entry #{n}: the glob must be 1-200 characters "
-                                          "with balanced '[...]' classes")
-                    try:
-                        re.compile(rx)
-                    except re.error:
-                        raise ConfigInvalid(f"{path}: 'gate.tests' entry #{n}: the regex is invalid") from None
-                dod_path = data.get("dod_path", "dod")
-                if not (isinstance(dod_path, str) and dod_path):
-                    raise ConfigInvalid(f"{path}: 'dod_path' must be a non-empty string")
-                block = gate.get("block", [])
-                if not (isinstance(block, list) and all(isinstance(b, str) for b in block)):
-                    raise ConfigInvalid(f"{path}: 'gate.block' must be a list of strings")
-                for i, b in enumerate(block):
-                    if b not in GATE_CHECKS:
-                        raise ConfigInvalid(f"{path}: gate.block[{i}]: unknown check "
-                                          f"(valid: {', '.join(GATE_CHECKS)})")
-                for k in ("story_type", "removed_state"):
-                    if k in data and not (isinstance(data[k], str) and data[k]):
-                        raise ConfigInvalid(f"{path}: '{k}' must be a non-empty string")
-                if not valid_branch_prefix(data.get("branch_prefix", "feature/")):
-                    raise ConfigInvalid(f"{path}: 'branch_prefix' must be empty or a git-ref-safe string "
-                                      "(letters, digits, '.', '_', '-', '/'; no '..', '//', '/.', '.lock/')")
-                allow = data.get("attachments_allow")
-                if allow is not None and not (
-                        isinstance(allow, list) and all(isinstance(a, str) for a in allow)):
-                    raise ConfigInvalid(f"{path}: 'attachments_allow' must be a list of strings")
-                rbo = data.get("review_block_on", [])
-                if not (isinstance(rbo, list) and all(isinstance(r, str) for r in rbo)):
-                    raise ConfigInvalid(f"{path}: 'review_block_on' must be a list of strings")
-                for i, r in enumerate(rbo):
-                    if r not in REVIEW_SEVERITIES:
-                        raise ConfigInvalid(f"{path}: review_block_on[{i}]: unknown severity "
-                                          f"(valid: {', '.join(REVIEW_SEVERITIES)})")
-                if "mode" in data and data["mode"] not in MODES:
-                    raise ConfigInvalid(f"{path}: 'mode' must be \"advisory\" or \"strict\"")
-                strict = data.get("strict", {})
-                if not isinstance(strict, dict):
-                    raise ConfigInvalid(f"{path}: 'strict' must be a JSON object")
-                for n, k in enumerate(strict, 1):
-                    if k not in STRICT_DEFAULTS:  # named by position: the key is PR-controlled text
-                        raise ConfigInvalid(f"{path}: strict entry #{n}: unknown key "
-                                          f"(valid: {', '.join(STRICT_DEFAULTS)})")
-                cmd = strict.get("test_command")
-                if "test_command" in strict and not (isinstance(cmd, str) and 0 < len(cmd) <= 500):
-                    raise ConfigInvalid(f"{path}: 'strict.test_command' must be a string of 1-500 characters")
-                tt = strict.get("test_timeout")
-                if "test_timeout" in strict and not (isinstance(tt, int) and not isinstance(tt, bool) and 1 <= tt <= 3600):
-                    raise ConfigInvalid(f"{path}: 'strict.test_timeout' must be an integer from 1 to 3600")
-                return cls(
-                    organization=data["organization"],
-                    project=data["project"],
-                    api_version=data.get("api_version", DEFAULT_API_VERSION),
-                    dod_path=dod_path,
-                    gate=data.get("gate"),
-                    attachments_allow=allow,
-                    review_block_on=rbo,
-                    done_state=data.get("done_state", "Done"),
-                    task_type=data.get("task_type", "Task"),
-                    repo_host=data.get("repo_host", "github"),
-                    repository=data.get("repository", ""),
-                    story_type=data.get("story_type", "User Story"),
-                    removed_state=data.get("removed_state", "Removed"),
-                    branch_prefix=data.get("branch_prefix", "feature/"),
-                    mode=data.get("mode", "advisory"),
-                    strict=strict,
-                )
+                except RecursionError:
+                    raise ConfigInvalid(f"{path}: nested too deeply") from None
+                return cls._from_data(data, path)
         raise ConfigError(
             "No ADO config found. Run `ado setup` to create ado.config.json here, "
             "or point $ADO_CONFIG at a config file."

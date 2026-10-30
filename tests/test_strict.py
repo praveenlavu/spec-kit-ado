@@ -745,7 +745,7 @@ def test_record_write_is_atomic_and_keeps_the_mode(tmp_path, git_env, monkeypatc
 def test_verify_base_refuses_a_pair_that_is_not_after_the_base(tmp_path, git_env, monkeypatch):
     client, s = _scenario(tmp_path, git_env)
     monkeypatch.setattr(strict, "run_configured", lambda *a: pytest.fail("no test may run"))
-    res = _verify(tmp_path, client, base=s.red)  # the red commit is already in the base
+    res = _verify(tmp_path, client, base=git(tmp_path, "rev-parse", s.red))  # the red commit is already in the base (a full id: V3-13)
     assert _vrules(res) == ["not-in-range"] and "AC-1" in res["findings"][0]["detail"]
     assert _vrules(_verify(tmp_path, client, base="no-such-ref")) == ["not-in-range"]
 
@@ -768,7 +768,7 @@ def test_validate_record_base_that_is_empty_or_looks_like_an_option_is_not_in_ra
 
 def test_verify_base_before_the_pair_passes(tmp_path, git_env):
     client, s = _scenario(tmp_path, git_env)
-    assert _verify(tmp_path, client, base=s.base, record=False)["ok"] is True
+    assert _verify(tmp_path, client, base=git(tmp_path, "rev-parse", s.base), record=False)["ok"] is True  # a full id: never a short one (V3-13)
 
 
 def test_verify_runs_the_command_at_head_and_a_broken_head_is_refused(tmp_path, git_env):
@@ -966,6 +966,7 @@ def _cli_verify(tmp_path, monkeypatch, git_env, capsys, argv, command=CMD):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ADO_CONFIG", raising=False)
     monkeypatch.setattr(m, "AdoClient", lambda cfg: type(client)(cfg))
+    argv = [git(tmp_path, "rev-parse", a[1:]) if a.startswith("@") else a for a in argv]  # "@HEAD~2": that commit's full id
     code = m.main(["strict", "verify", "1001", *argv])
     return code, capsys.readouterr()
 
@@ -976,7 +977,7 @@ def test_cli_verify_records_by_default_and_exits_0(tmp_path, monkeypatch, git_en
 
 
 def test_cli_no_record_exits_0_and_writes_nothing(tmp_path, monkeypatch, git_env, capsys):
-    code, cap = _cli_verify(tmp_path, monkeypatch, git_env, capsys, ["--no-record", "--base", "HEAD~2"])
+    code, cap = _cli_verify(tmp_path, monkeypatch, git_env, capsys, ["--no-record", "--base", "@HEAD~2"])
     assert code == 0 and "### Verification" not in LEDGER(tmp_path).read_text() and json.loads(cap.out)["recorded"] is False
 
 

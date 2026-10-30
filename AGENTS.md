@@ -199,10 +199,10 @@ ado decisions <id> --add "<text>" --kind decision|assumption [--why "<reason>"] 
 ado decisions <id> --post --plan-out .ado/plan-decisions.md   # dry run: ONE new comment `[spec-kit-ado:decisions]` with the unposted/edited open D<n> lines; after a yes: --post --apply --expect-plan .ado/plan-decisions.md (then those lines of `Decisions_<id>.md` gain `posted: <comment id>:<hash8>`)
 ado branch <id> --apply               # local, no approval: create/rename/switch to <branch_prefix>ab<id>-<slug>; never pushes, never renames the default branch
 ado branch <id> --link --plan-out .ado/plan-branch-link.md   # Azure only, branch must be pushed; dry run (needs PAT scope Code: Read and Project and Team: Read); after a yes: --link --apply --expect-plan .ado/plan-branch-link.md
-ado branch --id-from <branch>         # read-only, local: the story id a branch is tied to (<branch_prefix>ab<n> at the start, else AB#<n>); exit 1 when none, exit 3 when ado.config.json is invalid
+ado branch --id-from <branch> [--base REF]   # read-only, local (--base: CI trust, a strict target branch's config): the story id a branch is tied to (<branch_prefix>ab<n> at the start, else AB#<n>); exit 1 when none, exit 3 when ado.config.json is invalid
 ado attachments <id> --download       # read-only: list files; save allowlisted ones to .ado/attachments/<id>/ (untrusted data)
 ado link <id> --to <other-id>         # or --parent <n> / --url <link>; confirm first
-ado gate <id> --src . --base origin/main --changed <files>   # read-only; exit 1 = a gate.block check failed, 3 = invalid ado.config.json, 2 = other error
+ado gate <id> --src . --base origin/main --changed <files>   # read-only; exit 1 = a gate.block check failed, 3 = invalid ado.config.json (with --base, also an unreadable target config), 2 = other error; --base uses a strict target branch's config (CI trust; an unreadable base keeps v0.2 for an advisory config)
 ado pr create <id> --from-prepared --push --plan-out .ado/plan-pr.md   # reads .ado/pr-args.json (title, base, head; written to a file, never a shell line); dry run (add --allow-incomplete only after a human yes to a draft); after a yes: --from-prepared --push --apply --expect-plan .ado/plan-pr.md (`--push` pushes the head, including the step-2a commit; the dry run pushes nothing)
 ado attach <id> notes.md              # allowlisted types only; confirm first
 ado push <id> --plan-out .ado/plan-push.md   # dry run; after a yes: --apply --expect-plan .ado/plan-push.md

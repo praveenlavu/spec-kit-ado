@@ -99,10 +99,17 @@ Secrets: `ADO_TOKEN` (required), `TOOLKIT_READ_TOKEN` (optional; falls back to
 
 ## Trust model
 
-- **The gate trusts the PR's own files.** It reads `ado.config.json` (including
-  `gate.block`) and the ledger from the PR's checkout, so a PR can edit them to turn
-  blocking off. If blocking matters, protect both with `CODEOWNERS` and branch protection
-  (required review from code owners).
+- **The config comes from the target branch when that is strict.** `ado gate --base origin/<PR base branch>` reads `ado.config.json` from the PR's
+  target branch first. If it says `mode: "strict"`, the whole run uses that config (`gate.block`, `gate.tests`, `dod_path`,
+  `branch_prefix`, `review_block_on`, `strict.*`) and the PR comment gains the line `config: target branch (strict)`: the PR's
+  own config is ignored for strictness. A target config that is unreadable or invalid, or a git failure, exits 3 and fails the check; a base ref the checkout does not have (use `fetch-depth: 0`) does the same when the PR's own config is strict, and is the v0.2 path (commits not checked, no block) when it is advisory. With no config
+  on the target, or an advisory one, the PR's `ado.config.json` applies as before; the first PR that introduces strict mode is judged by its own config.
+  Protect `ado.config.json` on the target branch with branch protection and `CODEOWNERS` (required review from code owners): that file now decides how strict every PR is.
+  A non-default `config-path` is not trusted: only the root `ado.config.json` of the target is read, and if it has none the PR's config applies silently.
+  The caller workflow and the `toolkit-ref` it passes are PR-controlled too: protect `.github/workflows/` the same way.
+  **Not full protection yet:** the shipped workflows' `AB#` step still skips the gate when the PR has no `AB#` reference, so a PR can opt out of it until V3-14
+  makes that step fail under a strict target.
+- **The ledger is the PR's own file.** It is read from the PR's checkout, so a PR can edit it. If that matters, protect `dod/` with `CODEOWNERS` too.
 - **Link-on-merge acts on every `AB#<n>`** in the PR title and body: each one gets the
   comment, `transition-state` and, with `close-story: true`, the close. Mention other work
   items without the `AB#` prefix.

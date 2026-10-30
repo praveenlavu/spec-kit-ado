@@ -896,7 +896,7 @@ def verify(client, story_id, record=True, base=None, repo="."):
     if c.ledger is not None and not rows and not any(f["rule"] == "evidence-missing" for f in findings):
         findings.append(_finding("evidence-missing", "ledger section 3 has no AC row", _EVIDENCE_FIX))
     if base is not None:
-        findings += _range_findings(rows, repo, base)
+        findings += _range_findings(rows, repo, _resolve_base(repo, base))  # the same resolver as `check`: never a tag
     if findings:
         return {"mode": mode, "ok": False, "findings": findings, "recorded": False}
     head = (_out(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}") or b"").decode().strip()

@@ -56,7 +56,7 @@ unresolved)` for `<base>` in the step 4 heading, and add
 ado gate <id> --src . --base <base from step 1> --changed <files from step 1>
 ```
 
-`--base` is the base resolved in step 1 (it bounds the `commits_without_story` check); omit it when the base is unresolved. Add `--offline` only if the user asked for it. The gate reads ADO and local files only;
+`--base` is the base resolved in step 1 (it bounds the `commits_without_story` check; in CI it also makes the gate take a strict `ado.config.json` from the target branch instead of the PR's); omit it when the base is unresolved. Add `--offline` only if the user asked for it. The gate reads ADO and local files only;
 it never writes. Exit 1 means `blocking` is true; exit 3 means `ado.config.json` is invalid (fix it; CI fails on it); exit 2 is any other usage or config error (for example no config) —
 show it and stop.
 

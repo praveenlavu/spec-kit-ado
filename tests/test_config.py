@@ -429,3 +429,142 @@ def test_effective_lists_unchanged_in_advisory(tmp_path):
 def test_strict_gate_block_names_are_valid_checks():
     assert set(STRICT_GATE_BLOCK) <= set(GATE_CHECKS)
     assert set(STRICT_REVIEW_BLOCK) <= set(REVIEW_SEVERITIES)
+
+
+# ---- V3-13: Config.load_from_ref (the target branch's config, read with git, same validator) ----
+def _ref_repo(tmp_path, cfg='{"organization": "contoso", "project": "Fabrikam", "mode": "strict"}', name="ado.config.json"):
+    from tests.conftest import commit, git
+    git(tmp_path, "init", "-q", "-b", "main")
+    commit(tmp_path, "base", {"README.md": "x\n", **({name: cfg} if cfg is not None else {})})
+    return tmp_path
+
+
+def test_load_from_ref_reads_the_file_at_the_ref_not_the_working_tree(tmp_path, git_env, monkeypatch):
+    from tests.conftest import git
+    repo = _ref_repo(tmp_path)
+    (repo / "ado.config.json").write_text('{"organization": "other", "project": "p"}')  # the working tree is the PR's: ignored
+    monkeypatch.setenv("ADO_CONFIG", str(repo / "ado.config.json"))
+    cfg = Config.load_from_ref("refs/heads/main", repo=str(repo))
+    assert (cfg.organization, cfg.mode) == ("contoso", "strict")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    sha = git(repo, "rev-parse", "HEAD")
+    for ref in ("origin/main", "main", sha):  # remote-tracking first, then a local branch, then a full commit id
+        assert Config.load_from_ref(ref, repo=str(repo)).mode == "strict", ref
+
+
+def test_load_from_ref_validates_like_load(tmp_path, git_env):
+    from ado.config import ConfigInvalid
+    bad = ['{"organization": "contoso"}', "[1]", "{not json", '{"organization": "contoso", "project": "p", "mode": "x"}',
+           '{"organization": "contoso", "project": "p", "gate": {"block": ["nope"]}}',
+           '{"organization": "contoso", "project": "p\\u0007"}']
+    for text in bad:
+        repo = tmp_path / str(abs(hash(text)))
+        repo.mkdir()
+        _ref_repo(repo, text)
+        with pytest.raises(ConfigInvalid) as e:
+            Config.load_from_ref("refs/heads/main", repo=str(repo))
+        (repo / "ado.config.json").write_text(text)  # the same text through Config.load gives the same complaint
+        with pytest.raises(ConfigInvalid) as e2:
+            Config.load(start_dir=repo)
+        assert str(e.value).split(": ", 1)[1] == str(e2.value).split(": ", 1)[1]
+        assert str(repo) not in str(e.value) and "\x07" not in str(e.value)
+
+
+def test_load_from_ref_is_none_when_the_file_does_not_exist_at_the_ref(tmp_path, git_env):
+    repo = _ref_repo(tmp_path, cfg=None)
+    assert Config.load_from_ref("refs/heads/main", repo=str(repo)) is None
+    repo2 = tmp_path / "r2"
+    repo2.mkdir()
+    _ref_repo(repo2, '{"organization": "contoso", "project": "p"}', name="sub/ado.config.json")  # only a nested file
+    assert Config.load_from_ref("refs/heads/main", repo=str(repo2)) is None
+
+
+def test_load_from_ref_fails_closed(tmp_path, git_env, monkeypatch):
+    from ado.config import ConfigInvalid
+    from tests.conftest import commit, git
+    repo = _ref_repo(tmp_path)
+    git(repo, "tag", "v1")
+    git(repo, "tag", "origin/main")  # a tag named like a remote-tracking branch is not the base
+    for ref in ("", "nope", "origin/main", "v1", "refs/tags/v1", "--output=x", "-h", "--help", "HEAD", "main:ado.config.json",
+                "refs/heads/nope", "abc123", "x" * 300):
+        with pytest.raises(ConfigInvalid) as e:
+            Config.load_from_ref(ref, repo=str(repo))
+        assert ref not in str(e.value) or ref == ""
+    assert not (repo / "x").exists()
+    # not a repository at all
+    with pytest.raises(ConfigInvalid):
+        Config.load_from_ref("refs/heads/main", repo=str(tmp_path / "missing"))
+    # git cannot run
+    monkeypatch.setenv("PATH", "")
+    with pytest.raises(ConfigInvalid):
+        Config.load_from_ref("refs/heads/main", repo=str(repo))
+
+
+def test_load_from_ref_a_missing_blob_is_a_git_failure_not_an_absent_file(tmp_path, git_env):
+    import os
+    from ado.config import ConfigInvalid
+    from tests.conftest import git
+    repo = _ref_repo(tmp_path)
+    blob = git(repo, "rev-parse", "main:ado.config.json")
+    os.remove(repo / ".git" / "objects" / blob[:2] / blob[2:])
+    with pytest.raises(ConfigInvalid):
+        Config.load_from_ref("refs/heads/main", repo=str(repo))
+
+
+def test_load_from_ref_refuses_a_big_file_a_symlink_and_a_directory(tmp_path, git_env):
+    import os
+    from ado.config import ConfigInvalid
+    from tests.conftest import commit, git
+    pad = ' ' * (1024 * 1024)
+    repo = _ref_repo(tmp_path, '{"organization": "contoso", "project": "p"}' + pad)  # 1 MiB + the object
+    with pytest.raises(ConfigInvalid):
+        Config.load_from_ref("refs/heads/main", repo=str(repo))
+    repo2 = tmp_path / "ok"
+    repo2.mkdir()
+    exact = '{"organization": "contoso", "project": "p"}'
+    _ref_repo(repo2, exact + " " * (1024 * 1024 - len(exact)))  # exactly 1 MiB is fine
+    assert Config.load_from_ref("refs/heads/main", repo=str(repo2)).organization == "contoso"
+    repo3 = tmp_path / "link"
+    repo3.mkdir()
+    git(repo3, "init", "-q", "-b", "main")
+    commit(repo3, "base", {"real.json": '{"organization": "contoso", "project": "p"}'})
+    os.symlink("real.json", repo3 / "ado.config.json")
+    commit(repo3, "link")
+    with pytest.raises(ConfigInvalid):
+        Config.load_from_ref("refs/heads/main", repo=str(repo3))
+    repo4 = tmp_path / "dir"
+    repo4.mkdir()
+    git(repo4, "init", "-q", "-b", "main")
+    commit(repo4, "base", {"ado.config.json/inner": "x"})
+    with pytest.raises(ConfigInvalid):
+        Config.load_from_ref("refs/heads/main", repo=str(repo4))
+
+
+def test_load_from_ref_ignores_an_inherited_git_dir(tmp_path, git_env, monkeypatch):
+    other = tmp_path / "other"
+    other.mkdir()
+    _ref_repo(other, '{"organization": "wrong", "project": "p"}')
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _ref_repo(repo)
+    monkeypatch.setenv("GIT_DIR", str(other / ".git"))
+    assert Config.load_from_ref("refs/heads/main", repo=str(repo)).organization == "contoso"
+
+
+def test_deeply_nested_config_is_invalid_not_a_crash(tmp_path, git_env):
+    """A nested value that the parser or the validator cannot walk is ConfigInvalid, never an uncaught RecursionError (exit 1)."""
+    from ado.config import ConfigInvalid
+    refused = 0
+    for depth in (200, 500, 900, 5000, 200000):  # the shallow ones are valid configs (an unknown key is allowed)
+        text = '{"organization": "contoso", "project": "p", "x": ' + "[" * depth + "]" * depth + "}"
+        repo = tmp_path / f"d{depth}"
+        repo.mkdir()
+        _ref_repo(repo, text)
+        (repo / "ado.config.json").write_text(text)
+        for load in (lambda: Config.load_from_ref("refs/heads/main", repo=str(repo)), lambda: Config.load(start_dir=repo)):
+            try:
+                load()
+            except ConfigInvalid as e:
+                refused += 1
+                assert "[[[" not in str(e)
+    assert refused >= 4  # at least the 5000 and 200000 levels, through both loaders

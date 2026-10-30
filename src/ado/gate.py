@@ -361,11 +361,16 @@ def _code(s, cap=200):
     return "`" + (" ".join(str(s).replace("`", "'").split())[:cap] or "?") + "`"
 
 
+TARGET_CONFIG_NOTE = "target branch (strict)"  # `result["config"]` when CI judged the PR with the target branch's config
+PR_CONFIG_NOTE = "pull request"  # ... or with the PR's own strict config, when `--base` was given
+
+
 def render_summary(result):
     """Markdown PR comment for a gate result (what `--summary-out` writes)."""
     head = "### ADO gate\n\n"
+    source = f"config: {result['config']}\n" if result.get("config") in (TARGET_CONFIG_NOTE, PR_CONFIG_NOTE) else ""
     if "traceability" not in result:  # no / unreadable ledger: advisory note only
-        return head + f"Advisory: {_code(result.get('note', ''))}\n"
+        return head + f"Advisory: {_code(result.get('note', ''))}\n" + source
     trace, drift = result["traceability"], result["drift"]
     drift_line = ("AC changed in ADO since the ledger was seeded" if drift["drift"]
                   else "no drift" if drift["evaluated"] else drift.get("note", "drift not checked"))
@@ -403,7 +408,7 @@ def render_summary(result):
         tail.append("Files skipped: " + _code(note))
     if notes := result.get("assertion_notes"):
         tail.append("Assertion check: " + "; ".join(map(_code, notes)))  # informational, not a finding
-    return head + "\n".join(out + tail) + "\n"
+    return head + "\n".join(out + tail) + "\n" + source
 
 
 def render_error(reason):

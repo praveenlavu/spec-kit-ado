@@ -910,3 +910,30 @@ def test_strict_stamp_is_an_uncommitted_change_documented():
     assert "commit the stamped decisions file" in _flat("README.md") and "commit the stamped decisions file" in _flat("commands/pr.md")
     assert "defaults to the branch `origin/HEAD` points at" in _flat("README.md") and "never a tag" in _flat("README.md")
     assert "origin/HEAD" in _flat("CHANGELOG.md") and "never a tag" in _flat("CHANGELOG.md") and "`--head` that is not the checked-out commit" in _flat("README.md")
+
+
+def test_ci_trust_documented():
+    """V3-13: with --base, a strict target branch's config judges the PR."""
+    cfg = _flat("docs/configuration.md")
+    assert "### CI trust: the config comes from the target branch" in cfg
+    assert "The first PR that introduces strict mode is therefore judged by its own config" in cfg
+    assert "`ado gate` and `ado branch --id-from` exit **3**, so CI fails closed" in cfg and "Without `--base` nothing changes" in cfg
+    assert "**Protect what judges the PR**" in cfg and "**Only the repo-root `ado.config.json` is trusted.**" in cfg
+    assert "the CI definition itself, which is PR-controlled too" in cfg and "**Not yet full protection.**" in cfg
+    assert "the v0.2 path applies unchanged" in cfg and "`config: pull request`" in cfg
+    for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        text = _flat(doc)
+        assert "The config comes from the target branch when that is strict" in text and "`config: target branch (strict)`" in text, doc
+        assert "the first PR that introduces strict mode is judged by its own config" in text, doc
+        assert "**Not full protection yet:**" in text and "PR-controlled too" in text and "V3-14" in text, doc
+        assert "The gate trusts the PR's own files" not in text, doc
+    readme = _flat("README.md")
+    assert "**CI trust: the config comes from the target branch.**" in readme
+    assert "The first PR that introduces strict mode is judged by its own config" in readme
+    assert "protect `ado.config.json`, the workflow or pipeline files and `dod/` on the target branch with branch rules or `CODEOWNERS`" in readme
+    assert "a PR can still make that step skip the gate" in readme and "The CI definition is itself PR-controlled" in readme
+    assert "a non-default `config-path` (GitHub) or `ADO_CONFIG` no target file is found and the PR's config applies silently" in readme
+    assert "`error:` line and exit 2 (no JSON)" in readme and "`config: pull request`" in readme
+    assert "CI trust: `ado gate --base REF`, `ado strict check --base REF` and `ado strict verify --base REF`" in _flat("CHANGELOG.md")
+    assert "uses a strict target branch's config (CI trust;" in _flat("AGENTS.md")
+    assert "the gate take a strict `ado.config.json` from the target branch instead of the PR's" in _flat("commands/gate.md")

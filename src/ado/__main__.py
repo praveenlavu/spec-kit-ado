@@ -313,9 +313,16 @@ def dispatch(client, args):
         changed = {f: t for f in (args.changed or []) if (t := gate._read(f, args.src, skipped)) is not None}
         return gate.run_gate(ledger_md, sources, changed, work_item, skipped=len(skipped),
                              block=client.config.effective_gate_block(), tests=tests, reason=reason,
-                             commits=gate.check_commits(args.src, args.id, getattr(args, "base", None)),
+                             commits=gate.check_commits(args.src, args.id, _gate_base(client.config, args)),
                              decisions_md=decisions_md, decisions_unreadable=unreadable)
     raise SystemExit(2)
+
+
+def _gate_base(cfg, args):
+    """The ref `check_commits` walks from: the `--base` as given, but in strict mode the full commit id it resolves to (a tag named like
+    the base must not move the range the strict floor's `commits_without_story` judges)."""
+    base = getattr(args, "base", None)
+    return (strict._resolve_base(args.src, base) or base) if base is not None and cfg.mode == "strict" else base
 
 
 def _decisions_path(dod_path, story_id):
@@ -364,6 +371,31 @@ def _override(args):
                                            "status": "open", "by": "", "note": "", "posted": None, "used": ""})}
 
 
+def _config(args):
+    """The config this run uses. With `--base REF` on `gate`, `strict check`, `strict verify` or `branch --id-from`, the target branch's
+    `ado.config.json` is read first: when it says `mode: strict`, the whole run uses it and the PR's own file is never read (a PR cannot
+    weaken its own strictness); an unreadable one raises ConfigInvalid (fail closed). A target with no config, or an advisory one, leaves
+    the PR's config in charge. A REF that is no commit here (a shallow clone, `origin/main` in a repo with no origin) cannot say what the
+    target holds: with an advisory PR config that is the v0.2 path (the gate notes it and goes on); with a strict one, or an invalid one,
+    it fails closed."""
+    base = getattr(args, "base", None)
+    if base is not None and (args.command in ("gate", "branch") or (args.command == "strict" and args.strict_command in ("check", "verify"))):
+        repo = getattr(args, "src", None) or "."  # gate: the checkout --base belongs to
+        try:
+            target = Config.load_from_ref(base, repo=repo)
+        except ConfigInvalid:
+            if strict._resolve_base(repo, base):
+                raise  # the base is a commit and its config is the problem
+            head = Config.load()
+            if head.mode == "strict":
+                raise
+            return head
+        if target is not None and target.mode == "strict":
+            target.from_target = True
+            return target
+    return Config.load()
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ado", description="Azure DevOps work-item CLI")
     parser.add_argument("--version", action="version", version=__version__)
@@ -409,6 +441,8 @@ def main(argv=None):
     p.add_argument("--apply", action="store_true", help="create, rename (a Spec Kit branch made for this spec, with no upstream) or "
                    "switch to the branch; the default branch is never renamed")
     p.add_argument("--id-from", metavar="NAME", help="print the story id the branch NAME is tied to (exit 1 if none)")
+    p.add_argument("--base", metavar="REF", help="with --id-from: the ref the PR targets (CI: origin/<target>); when its ado.config.json is strict, "
+                   "its branch_prefix is used, not the PR's")
     p.add_argument("--link", action="store_true", help="Azure Repos: add the pushed current branch to the story's "
                    "Development section (dry run unless --apply; needs a PAT with Code: Read and Project and Team: Read)")
     p.add_argument("--plan-out", metavar="PATH", help="with --link: write the markdown plan here")
@@ -547,6 +581,8 @@ def main(argv=None):
     if args.command == "branch":
         if (args.id is None) == (args.id_from is None):
             parser.error("give a story id or --id-from NAME (not both)")
+        if args.base is not None and args.id_from is None:
+            parser.error("--base needs --id-from")
         if args.id_from is not None and (args.apply or args.link):
             parser.error("--id-from takes no --apply or --link")
         if (args.plan_out or args.expect_plan) and not args.link:
@@ -564,10 +600,14 @@ def main(argv=None):
         elif args.command == "strict" and args.strict_command == "override":  # local only: no token, no request
             out = _override(args)
         elif args.command == "branch" and args.id_from is not None:  # local only: no token, no request
-            out = prs.story_from_branch(args.id_from, Config.load().branch_prefix)
+            out = prs.story_from_branch(args.id_from, _config(args).branch_prefix)
         else:
-            client = AdoClient(Config.load())
+            client = AdoClient(_config(args))
             out = dispatch(client, args)
+            if args.command == "gate" and client.config.from_target:  # additive: only when the target's config judged this run
+                out["config"] = gate.TARGET_CONFIG_NOTE
+            elif args.command == "gate" and args.base is not None and client.config.mode == "strict":  # a strict PR config under --base
+                out["config"] = gate.PR_CONFIG_NOTE
     except (ConfigError, AuthError, dod.DodExists, ValueError) as e:
         # 3 (invalid config) lets CI fail closed: `gate`, and `branch --id-from` (the Azure gate reads its story id with it)
         fail_closed = args.command == "gate" or (args.command == "branch" and args.id_from is not None)

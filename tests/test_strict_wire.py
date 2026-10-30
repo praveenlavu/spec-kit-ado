@@ -200,7 +200,8 @@ def test_cli_strict_check_takes_base_and_head(tmp_path, monkeypatch, capsys, git
     assert mod.main(["strict", "check", "1001", "--phase", "pr", "--head", head, "--base", _full(tmp_path, s.base)]) == 0
     assert json.loads(capsys.readouterr().out)["ok"] is True
     assert mod.main(["strict", "check", "1001", "--phase", "pr", "--head", head, "--base", "nope"]) == 2
-    assert [f["rule"] for f in json.loads(capsys.readouterr().out)["findings"]] == ["base-unknown"]
+    cap = capsys.readouterr()  # V3-13: an unknown --base is refused before any check (the target's config cannot be read): fail closed
+    assert cap.out == "" and "ado.config.json at the target branch" in cap.err
 
 
 def test_pr_create_derives_the_base_ref_origin_first(tmp_path, monkeypatch, capsys, git_env):

@@ -102,10 +102,16 @@ step also logs the warning `spec-kit-ado gate could not run (see the PR comment 
 
 ## Trust model
 
-- **The gate trusts the PR's own files.** It reads `ado.config.json` (including
-  `gate.block`) and the ledger from the PR's source branch, so a PR can edit them to turn
-  blocking off. If blocking matters, protect both with required reviewers for those paths
-  in the branch policy.
+- **The config comes from the target branch when that is strict.** `ado gate --base origin/<target branch>` reads `ado.config.json` from the PR's
+  target branch first. If it says `mode: "strict"`, the whole run uses that config (`gate.block`, `gate.tests`, `dod_path`,
+  `branch_prefix`, `review_block_on`, `strict.*`) and the PR thread gains the line `config: target branch (strict)`: the PR's
+  own config is ignored for strictness. A target config that is unreadable or invalid, or a git failure, exits 3 and fails the check; a base ref the checkout does not have (use `fetchDepth: 0`) does the same when the PR's own config is strict, and is the v0.2 path (commits not checked, no block) when it is advisory. With no config
+  on the target, or an advisory one, the PR's `ado.config.json` applies as before; the first PR that introduces strict mode is judged by its own config.
+  Protect `ado.config.json` on the target branch with required reviewers for that path in the branch policy: that file now decides how strict every PR is.
+  The PR pipeline YAML is PR-controlled too (unless it is a branch policy build of the target's YAML): protect it the same way.
+  **Not full protection yet:** the story-id step reads the head config with `ado branch --id-from` and skips the gate (advisory) when it finds no id (or the PR
+  edits `branch_prefix` or deletes the config), so a PR can opt out of it until V3-14 passes `--base` there and makes it fail under a strict target.
+- **The ledger is the PR's own file.** It is read from the PR's source branch, so a PR can edit it. If that matters, add required reviewers for `dod/` too.
 - **Link-on-merge acts on every `AB#<n>`** in the merge commit message: each one gets the
   comment, `transitionState` and, with `closeStory: true`, the close. Mention other work
   items without the `AB#` prefix.
