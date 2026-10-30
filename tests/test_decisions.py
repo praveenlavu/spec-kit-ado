@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 import pytest
 
@@ -331,3 +332,204 @@ def test_targeted_line_edited_during_the_post_is_not_marked(tmp_path, monkeypatc
     with pytest.raises(ValueError, match=rf"comment 777 was posted.*D1: · posted: 777:{H1}"):
         decisions.apply_post(client, 1001, plan, led)
     assert led.read_text(encoding="utf-8") == edited
+
+
+# ---- V3-4: `ado decisions <id> --resolve D<n> --validated|--rejected` (a human, in a terminal) ----
+KEPT = "- [ ] D4: Wrap it → _(open)_ · kind: override · why: skip the rule · posted: 5:abcdef12 · used: 2026-01-01"
+
+
+def _tty(monkeypatch, on=True):
+    import sys
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: on)
+
+
+def _resolve(m, *extra):
+    return m.main(["decisions", "1001", "--resolve", *extra])
+
+
+def test_resolve_validates_only_that_line(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, "\n".join([OPEN, VAL, REJ]))
+    _tty(monkeypatch)
+    before = led.read_text(encoding="utf-8").splitlines()
+    assert _resolve(m, "D1", "--validated") == 0
+    assert json.loads(capsys.readouterr().out)["resolved"] == "D1"
+    after = led.read_text(encoding="utf-8").splitlines()
+    changed = [i for i, (a, b) in enumerate(zip(before, after)) if a != b]
+    assert len(before) == len(after) and len(changed) == 1 and after[changed[0]].startswith("- [x] D1:")
+    d = decisions.parse_decisions(led.read_text(encoding="utf-8"))
+    assert d["unparsed"] is False and [x["id"] for x in d["validated"]] == ["D1", "D2"] and d["open"] == []
+    assert d["validated"][0]["by"] == "PO" and d["validated"][0]["note"] == ""
+    assert fake == {} and list(led.parent.glob("*.tmp")) == []  # no client was built: no request
+
+
+def test_resolve_rejected_then_validated_allowed(tmp_path, monkeypatch):
+    m, fake, led = _env(tmp_path, monkeypatch, "\n".join([OPEN, REJ]))
+    _tty(monkeypatch)
+    assert _resolve(m, "D1", "--rejected") == 0
+    assert _resolve(m, "D3", "--validated", "--note", "changed my mind") == 2  # already resolved: needs --force
+    assert _resolve(m, "D3", "--validated", "--note", "changed my mind", "--force") == 0
+    d = decisions.parse_decisions(led.read_text(encoding="utf-8"))
+    assert [x["id"] for x in d["rejected"]] == ["D1"] and [x["id"] for x in d["validated"]] == ["D3"]
+    assert d["validated"][0]["note"] == "changed my mind"
+
+
+def test_refuses_without_tty(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN)
+    _tty(monkeypatch, False)
+    before = led.read_bytes()
+    assert _resolve(m, "D1", "--validated") == 2
+    assert "own terminal" in capsys.readouterr().err and led.read_bytes() == before
+    led.unlink()  # checked before the ledger is even looked for
+    assert _resolve(m, "D1", "--validated") == 2
+    err = capsys.readouterr().err
+    assert "own terminal" in err and "ado dod" not in err
+
+
+def test_unknown_id_exit_2(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN)
+    _tty(monkeypatch)
+    before = led.read_bytes()
+    for bad in ("D9", "1", "d1", "D1x"):
+        assert _resolve(m, bad, "--validated") == 2
+        assert "no decision" in capsys.readouterr().err and led.read_bytes() == before
+
+
+def test_by_and_note_validated(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN)
+    _tty(monkeypatch)
+    before = led.read_bytes()
+    bad = [("--by", "Dana; PO"), ("--by", "x" * 41), ("--by", ""), ("--by", "P\nO"), ("--by", "P O"), ("--by", "PO\x1b"),
+           ("--note", "n" * 301), ("--note", "a\nb"), ("--note", "a\rb"), ("--note", "a b"), ("--note", "a b"),
+           ("--note", "a\x1b[8mb"), ("--note", "a\x00b"), ("--note", "a\x85b"), ("--note", "a\x7fb"),
+           ("--note", "x · kind: assumption"), ("--note", "x → rejected")]
+    for flag, val in bad:
+        assert _resolve(m, "D1", "--validated", flag, val) == 2, (flag, val)
+        assert capsys.readouterr().err.startswith("error:") and led.read_bytes() == before, (flag, val)
+    assert _resolve(m, "D1", "--validated", "--by", "Product Owner 2", "--note", "n" * 300) == 0
+    d = decisions.parse_decisions(led.read_text(encoding="utf-8"))["validated"][0]
+    assert d["by"] == "Product Owner 2" and d["note"] == "n" * 300
+
+
+def test_resolve_keeps_posted_marker_and_other_markers(tmp_path, monkeypatch):
+    m, fake, led = _env(tmp_path, monkeypatch, KEPT + "\n" + VAL)
+    _tty(monkeypatch)
+    old = decisions.parse_decisions(led.read_text(encoding="utf-8"))["open"][0]
+    assert _resolve(m, "D4", "--rejected", "--note", "no") == 0
+    md = led.read_text(encoding="utf-8")
+    line = next(x for x in md.splitlines() if "D4:" in x)
+    assert line == "- [x] D4: Wrap it → rejected · by: PO · note: no · kind: override · why: skip the rule · posted: 5:abcdef12 · used: 2026-01-01"
+    new = decisions.parse_decisions(md)["rejected"][0]
+    assert decisions.render_line(new) == line
+    assert {k: new[k] for k in ("id", "kind", "text", "why", "posted", "used")} == {k: old[k] for k in ("id", "kind", "text", "why", "posted", "used")}
+
+
+def test_resolve_keeps_line_terminators(tmp_path, monkeypatch):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN + " " + VAL)
+    _tty(monkeypatch)
+    assert _resolve(m, "D1", "--validated") == 0
+    md = led.read_text(encoding="utf-8")
+    assert " - [x] D2:" in md and decisions.parse_decisions(md)["unparsed"] is False
+    led.write_bytes(_ledger(OPEN + "\n" + VAL).replace("\n", "\r\n").encode("utf-8"))
+    before = led.read_bytes()
+    assert _resolve(m, "D2", "--rejected", "--by", "PO", "--force") == 0
+    after = led.read_bytes()
+    assert after.count(b"\r\n") == before.count(b"\r\n") == after.count(b"\n")
+    assert [x["id"] for x in decisions.parse_decisions(after.decode("utf-8"))["rejected"]] == ["D2"]
+
+
+def test_resolved_line_over_max_line_is_refused(tmp_path, monkeypatch, capsys):
+    long_open = f"- [ ] D1: {'t' * 1800} → _(open)_ · kind: decision · why: w"
+    m, fake, led = _env(tmp_path, monkeypatch, long_open)
+    _tty(monkeypatch)
+    before = led.read_bytes()
+    assert _resolve(m, "D1", "--validated", "--note", "n" * 250) == 2
+    assert str(decisions.MAX_LINE) in capsys.readouterr().err and led.read_bytes() == before
+
+
+def test_resolve_flag_combinations_exit_2(tmp_path, monkeypatch):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN)
+    _tty(monkeypatch)
+    before = led.read_bytes()
+    for argv in (["--resolve", "D1", "--validated", "--post"], ["--resolve", "D1", "--validated", "--apply"],
+                 ["--resolve", "D1", "--validated", "--plan-out", "p.md"],
+                 ["--resolve", "D1", "--validated", "--expect-plan", "p.md"],
+                 ["--resolve", "D1"], ["--resolve", "D1", "--validated", "--rejected"],
+                 ["--validated"], ["--by", "PO"], ["--note", "x"], ["--force"]):
+        with pytest.raises(SystemExit) as e:
+            m.main(["decisions", "1001", *argv])
+        assert e.value.code == 2, argv
+    assert led.read_bytes() == before and not (tmp_path / "p.md").exists()
+
+
+def test_resolve_write_is_atomic_and_refuses_a_ledger_changed_meanwhile(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN)
+    _tty(monkeypatch)
+    before = led.read_bytes()
+    real = os.replace
+    monkeypatch.setattr(os, "replace", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    assert _resolve(m, "D1", "--validated") == 2
+    assert "disk full" in capsys.readouterr().err and led.read_bytes() == before and list(led.parent.glob("*.tmp")) == []
+    monkeypatch.setattr(os, "replace", real)
+    pure = decisions.resolve
+    monkeypatch.setattr(decisions, "resolve", lambda *a: (led.write_text(led.read_text() + "edited\n"), pure(*a))[1])
+    assert _resolve(m, "D1", "--validated") == 2
+    assert "changed" in capsys.readouterr().err and "edited" in led.read_text() and "[ ] D1" in led.read_text()
+
+
+# ---- V3-4 fix round 1 ----
+def test_note_with_comment_or_fence_markers_is_refused(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN + "\n" + OPEN2)
+    _tty(monkeypatch)
+    before = led.read_bytes()
+    for note in ("x <!-- y", "x --> y", "<!--", "a ``` b", "~~~", "x ````"):
+        assert _resolve(m, "D1", "--validated", "--note", note) == 2, note
+        assert capsys.readouterr().err.startswith("error:") and led.read_bytes() == before, note
+
+
+def test_whole_ledger_is_verified_before_writing(monkeypatch):
+    md = _ledger(OPEN + "\n" + OPEN2)
+    monkeypatch.setattr(decisions, "_MARKUP", re.compile("(?!)"))  # as if the note check missed `<!--`
+    with pytest.raises(ValueError, match="D1"):  # the line alone reads back, the ledger does not
+        decisions.resolve(md, "D1", "validated", "PO", "x <!-- y")
+    assert "- [x] D1:" in decisions.resolve(md, "D1", "validated", "PO", "fine")  # the happy path still works
+
+
+def test_inline_comment_in_the_target_line_is_refused(tmp_path, monkeypatch, capsys):
+    line = "- [ ] D1: Use <!-- hidden --> paging → _(open)_ · kind: decision · why: w"
+    m, fake, led = _env(tmp_path, monkeypatch, line + "\n" + OPEN2)
+    _tty(monkeypatch)
+    before = led.read_bytes()
+    assert _resolve(m, "D1", "--validated") == 2
+    assert "D1" in capsys.readouterr().err and led.read_bytes() == before
+    assert _resolve(m, "D4", "--validated") == 0  # a comment in another line does not matter
+
+
+def test_re_resolving_needs_force(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, VAL)
+    _tty(monkeypatch)
+    before = led.read_bytes()
+    assert _resolve(m, "D2", "--rejected") == 2
+    assert "--force" in capsys.readouterr().err and led.read_bytes() == before
+    assert _resolve(m, "D2", "--rejected", "--force") == 0
+    assert decisions.parse_decisions(led.read_text(encoding="utf-8"))["rejected"][0]["id"] == "D2"
+
+
+def test_empty_note_leaves_no_double_space(tmp_path, monkeypatch):
+    m, fake, led = _env(tmp_path, monkeypatch, KEPT)
+    _tty(monkeypatch)
+    assert _resolve(m, "D4", "--validated") == 0
+    line = next(x for x in led.read_text(encoding="utf-8").splitlines() if "D4:" in x)
+    assert "  " not in line
+    assert decisions.render_line(decisions.parse_decisions(led.read_text(encoding="utf-8"))["validated"][0]) == line
+
+
+def test_temp_file_is_unique_and_the_mode_is_kept(tmp_path, monkeypatch):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN)
+    _tty(monkeypatch)
+    led.chmod(0o640)
+    other = led.with_name(led.name + ".tmp")
+    other.write_text("not mine", encoding="utf-8")
+    assert _resolve(m, "D1", "--validated") == 0
+    assert other.read_text(encoding="utf-8") == "not mine" and (led.stat().st_mode & 0o777) == 0o640
+    other.unlink()
+    assert list(led.parent.glob("*.tmp")) == []

@@ -15,6 +15,11 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   `[spec-kit-ado:decisions]` comment with every open `D<n>` line not yet posted or edited since; apply writes
   `posted: <comment id>:<hash8>` into exactly those ledger lines (atomic). Typed `@mention`s and e-mail addresses are
   replaced by `@user` / `[email]`; lines are cut at 500 characters.
+- `ado decisions <id> --resolve D<n> --validated|--rejected [--by ROLE] [--note TEXT]`: a human records the PO's verdict on
+  one decision line (local ledger edit, atomic, keeps `kind`, `why`, `posted`, `used`; a resolved line needs `--force`).
+  Refuses (exit 2) without a terminal so an agent shell cannot do it by accident; not a security boundary (the strict gate,
+  the decisions comment the PO sees and the ledger history are the enforcement). `--by` is a role (default `PO`), `--note`
+  at most 300 characters without `<!--`, `-->` or code fences.
 
 ## 0.2.0 — 2026-10-29
 

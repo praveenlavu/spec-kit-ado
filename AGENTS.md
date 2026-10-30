@@ -123,6 +123,12 @@ edit) with every open line that is unposted or edited since it was posted; after
 .ado/plan-decisions.md` posts it and appends ` · posted: <comment id>:<hash8>` to exactly those ledger lines (atomic write).
 Resolved lines are not posted. Lines are cut at 500 characters. An `@mention` or e-mail address typed in a decision is
 replaced by `@user` or `[email]`, never refused; names typed as plain words are not detected, so read the preview.
+A human records the PO's verdict; never the agent:
+`ado decisions <id> --resolve D<n> --validated|--rejected [--by ROLE] [--note TEXT] [--force]` rewrites that one ledger line and
+refuses (exit 2) without a terminal, so an agent shell cannot do it by accident. That check is not a security boundary (the
+ledger is plain text and a pseudo-terminal gives a tty); real enforcement is the strict gate, the decisions comment the PO sees
+and the ledger history. A resolved line needs `--force`. Never run it, fake it, or hand-write a `validated` line: propose the line from `ado comments`
+and ask the human to run it in their own terminal.
 
 ### Open questions
 

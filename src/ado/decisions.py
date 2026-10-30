@@ -2,6 +2,8 @@ import hashlib
 import html
 import os
 import re
+import stat
+import tempfile
 from pathlib import Path
 
 from . import comments, workitems
@@ -82,7 +84,7 @@ def render_line(d):
     if d["status"] == "open":
         parts = [f"- [ ] {d['id']}: {d['text']} → {_OPEN}", f"kind: {d['kind']}", f"why: {d['why']}"]
     else:
-        parts = [f"- [x] {d['id']}: {d['text']} → {d['status']}", f"by: {d['by']}", f"note: {d['note']}"]
+        parts = [f"- [x] {d['id']}: {d['text']} → {d['status']}", f"by: {d['by']}", f"note: {d['note']}".rstrip()]
         if d["kind"] != "decision":  # resolving must not lose that a line was an override or assumption
             parts.append(f"kind: {d['kind']}")
         if d["why"]:
@@ -170,6 +172,18 @@ def _marked(md, hashes, comment_id):
     return md[:start] + "".join(out) + md[start + len(body):]
 
 
+def _atomic_write(path, text):
+    """Write `text` over `path` through a uniquely named temp file in the same directory (mode kept), then os.replace."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+        os.replace(tmp, path)
+    finally:
+        Path(tmp).unlink(missing_ok=True)
+
+
 def apply_post(client, work_item_id, plan, ledger_path):
     """Post exactly the planned comment once, then mark its lines in the ledger (tmp file + os.replace), re-reading
     the ledger after the post. A no-op for none. The ledger is checked before the post, so a changed line posts nothing."""
@@ -185,15 +199,79 @@ def apply_post(client, work_item_id, plan, ledger_path):
     cid = (client.post(f"{base}?api-version={comments.API}", {"text": plan["html"]}) or {}).get("id")
     if cid is None:
         raise ValueError("the comment was posted but ADO returned no comment id; mark the lines by hand")
-    tmp = path.with_name(path.name + ".tmp")
     try:
-        fresh = _marked(read(), plan["hashes"], cid)
-        with tmp.open("w", encoding="utf-8", newline="") as f:
-            f.write(fresh)
-        os.replace(tmp, path)
+        _atomic_write(path, _marked(read(), plan["hashes"], cid))
     except (OSError, ValueError) as e:
-        tmp.unlink(missing_ok=True)
         pairs = "; ".join(f"{i}: · posted: {cid}:{h}" for i, h in plan["hashes"].items())
         raise ValueError(f"comment {cid} was posted but the ledger could not be updated ({e}); "
                          f"append to the lines by hand: {pairs}")
     return {"comment_id": cid}
+
+
+_BY = re.compile(r"[A-Za-z0-9 ]{1,40}")
+MAX_NOTE = 300
+_MARKUP = re.compile(r"<!--|-->|`{3}|~{3}")  # would open or close a comment or fence in the ledger
+
+
+def _ids(parsed):
+    return {d["id"]: d["status"] for k in ("open", "validated", "rejected") for d in parsed[k]}
+
+
+def resolve(ledger_md, d_id, status, by, note, force=False):
+    """The ledger text with the first `d_id` line rewritten as validated|rejected; its kind, why, posted and used
+    markers and its line ending are kept, every other byte is unchanged. A line that is already resolved needs `force`.
+    ValueError for a bad status, role or note, an unknown id, a line holding an inline comment, or a result that
+    `parse_decisions` would not read back the same over the whole ledger."""
+    by, note = by.strip(), note.strip()
+    if status not in ("validated", "rejected"):
+        raise ValueError("the status must be validated or rejected")
+    if not _BY.fullmatch(by):
+        raise ValueError("--by must be 1-40 letters, digits or spaces (a role, never a name)")
+    if len(note) > MAX_NOTE or _CTRL.search(note) or _MARKUP.search(note):
+        raise ValueError(f"--note must be at most {MAX_NOTE} characters with no control characters, line breaks, "
+                         "`<!--`, `-->` or code fences")
+    body = section(ledger_md, 2) or ""
+    start = ledger_md.find(body, _section2_at(ledger_md)) if body else -1
+    out, found = [], False
+    for raw, v in zip(body.splitlines(keepends=True), _visible(body)[0].split("\n")):
+        d = _line(v) if not found and _CAND.match(v) and len(v) <= MAX_LINE else None
+        if d and d["id"] == d_id:
+            found = True
+            if v != raw.splitlines()[0]:
+                raise ValueError(f"{d_id} holds an inline <!-- --> comment or fence that a rewrite would drop; edit it by hand")
+            if d["status"] != "open" and not force:
+                raise ValueError(f"{d_id} is already {d['status']} (by {d['by']}); pass --force to overwrite that verdict")
+            new = {**d, "status": status, "by": by, "note": note}
+            line = render_line(new)
+            if len(line) > MAX_LINE or _line(line) != new:  # over-long, or the note collides with the grammar
+                raise ValueError(f"the resolved line would be longer than {MAX_LINE} characters or would not read back "
+                                 "(a note must not contain ` · kind:`-style markers or `→ validated`)")
+            raw = line + raw[len(raw.splitlines()[0]):]  # splitlines also ends a line at U+2028, \x0c, \x85, \x1c
+        out.append(raw)
+    if not found:
+        raise ValueError(f"no decision {d_id} in the ledger (see `ado decisions <id>`)")
+    new_md = ledger_md[:start] + "".join(out) + ledger_md[start + len(body):]
+    a, b = ledger_md.splitlines(keepends=True), new_md.splitlines(keepends=True)
+    before, after = parse_decisions(ledger_md), parse_decisions(new_md)
+    if (len(a) != len(b) or sum(x != y for x, y in zip(a, b)) != 1 or after["unparsed"] != before["unparsed"]
+            or _ids(after) != {**_ids(before), d_id: status}):
+        raise ValueError(f"the rewrite of {d_id} would change more than that line or break the ledger; nothing written")
+    return new_md
+
+
+def apply_resolve(ledger_path, d_id, status, by, note, force=False):
+    """Rewrite one line of the ledger in place (unique temp file + os.replace). Refuses when the ledger changed
+    between the read and the write."""
+    path = Path(ledger_path)
+
+    def read():
+        with path.open(encoding="utf-8", newline="") as f:
+            return f.read()
+    try:
+        md = read()
+        new = resolve(md, d_id, status, by, note, force)
+        if read() != md:
+            raise ValueError("the ledger changed while resolving; nothing written, run it again")
+        _atomic_write(path, new)
+    except (OSError, UnicodeError) as e:
+        raise ValueError(f"cannot update the ledger {path} ({e.__class__.__name__}: {e}); nothing written")

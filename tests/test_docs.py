@@ -661,3 +661,17 @@ def test_decisions_post_documented_as_preview_yes_apply():
     assert "`ado decisions <id> --post --plan-out .ado/plan-decisions.md`" in _flat("AGENTS.md")
     assert "`ado decisions <id> --post`" in _flat("CHANGELOG.md")
     assert "`decisions --post`" in _flat("AGENTS.md")
+
+
+def test_decisions_resolve_documented_as_human_only():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `decisions <id> --resolve"))
+    assert "without a terminal so an agent shell cannot do it by accident" in row and "not a security boundary" in row
+    assert "never a name" in row and "`posted`" in row and "A human" in row and "`--force`" in row
+    assert "real enforcement is the strict gate, the decisions comment the PO sees and the ledger history" in row
+    assert "A human records the PO's verdict; never the agent" in _flat("AGENTS.md")
+    assert "so an agent shell cannot do it by accident" in _flat("AGENTS.md") and "is not a security boundary" in _flat("AGENTS.md")
+    assert "shell cannot run it" not in _flat("AGENTS.md") + _flat("rules/hitl.md") + _flat("README.md")
+    assert "`ado decisions <id> --resolve D<n> --validated|--rejected" in _flat("AGENTS.md")
+    assert "Record the PO's verdict on a decision" in _flat("rules/hitl.md") and "Human only" in _flat("rules/hitl.md")
+    assert "not a security boundary" in _flat("rules/hitl.md") and "not a security boundary" in _flat("CHANGELOG.md")
+    assert "`ado decisions <id> --resolve D<n>" in _flat("CHANGELOG.md")

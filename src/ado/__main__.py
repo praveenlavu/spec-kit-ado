@@ -282,6 +282,19 @@ def dispatch(client, args):
     raise SystemExit(2)
 
 
+def _resolve_decision(args):
+    """`decisions --resolve`: the PO's verdict is recorded by a human. Tested before anything is read or written."""
+    if not (sys.stdin and sys.stdin.isatty()):
+        raise ValueError("--resolve records the PO's verdict, which only a human may do: run it in your own terminal "
+                         "(this shell has no terminal on stdin; a guard against accidents, not a security boundary)")
+    path = dod.dod_file(Config.load().dod_path, args.id)
+    if not path.exists():
+        raise ValueError(f"cannot read ledger {path}; run `ado dod {args.id}` first")
+    by, note = args.by if args.by is not None else "PO", args.note or ""
+    decisions.apply_resolve(path, args.resolve, args.verdict, by, note, args.force)
+    return {"id": args.id, "resolved": args.resolve, "status": args.verdict, "by": by.strip(), "note": note.strip()}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ado", description="Azure DevOps work-item CLI")
     parser.add_argument("--version", action="version", version=__version__)
@@ -354,6 +367,16 @@ def main(argv=None):
     p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
     p.add_argument("--expect-plan", metavar="PATH",
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+    p.add_argument("--resolve", metavar="D<n>", help="a human records the PO's verdict on this line (local ledger edit; "
+                   "with --validated|--rejected, optional --by and --note). Refuses without a terminal so an agent "
+                   "shell cannot do it by accident; this is not a security boundary, the strict gate and the ledger "
+                   "history are the enforcement")
+    p.add_argument("--force", action="store_true", help="with --resolve: overwrite the verdict of a resolved line")
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--validated", dest="verdict", action="store_const", const="validated")
+    g.add_argument("--rejected", dest="verdict", action="store_const", const="rejected")
+    p.add_argument("--by", help="with --resolve: the role that decided (default PO; never a name)")
+    p.add_argument("--note", help="with --resolve: a short note (at most 300 characters)")
     p = sub.add_parser("gate",
                        help="Advisory DoD gate: AC<->test traceability, assertions, AC drift, evidence")
     p.add_argument("id", type=int)
@@ -406,6 +429,13 @@ def main(argv=None):
         parser.error("--expect-plan needs --apply")
     if args.command in ("questions", "decisions") and args.apply and not args.post:
         parser.error("--apply needs --post")
+    if args.command == "decisions":
+        if args.resolve and (args.post or args.apply or args.plan_out or args.expect_plan):
+            parser.error("--resolve cannot be combined with --post, --apply, --plan-out or --expect-plan")
+        if args.resolve and not args.verdict:
+            parser.error("--resolve needs --validated or --rejected")
+        if not args.resolve and (args.verdict or args.by is not None or args.note is not None or args.force):
+            parser.error("--validated, --rejected, --by, --note and --force need --resolve")
     if getattr(args, "dir", None) and args.command == "attachments" and not args.download:
         parser.error("--dir needs --download")
     if args.command == "branch":
@@ -421,7 +451,9 @@ def main(argv=None):
     try:
         if args.command == "setup":
             return run_setup()
-        if args.command == "branch" and args.id_from is not None:  # local only: no token, no request
+        if args.command == "decisions" and args.resolve:  # local only: no token, no request
+            out = _resolve_decision(args)
+        elif args.command == "branch" and args.id_from is not None:  # local only: no token, no request
             out = prs.story_from_branch(args.id_from, Config.load().branch_prefix)
         else:
             client = AdoClient(Config.load())
