@@ -197,6 +197,7 @@ The `ado` CLI does the deterministic work behind these commands. `ado <verb> --h
 | `branch <id>` | Local git only, never pushes. Prints `{"branch": "<branch_prefix>ab<id>-<slug>", "action": "create\|rename\|switch\|exists"}`, e.g. `feature/ab1001-count-active-members` (slug from the story title: ASCII, lowercase, at most 40 characters, cut at a word boundary). `--apply` creates it from HEAD, renames the current Spec Kit `NNN-…` branch when `.specify/feature.json` points at its spec dir and it has no upstream, or switches to the story's existing branch. It never renames the default branch, and creates a new branch when the default branch cannot be determined. | local branch |
 | `branch <id> --link` | Azure Repos only: the current branch must be tied to the story and pushed. Adds it to the story's Development section as an `ArtifactLink` named "Branch". Batch verb; needs a PAT with **Code: Read** and **Project and Team: Read** (on GitHub the Azure Boards GitHub app links `AB#` references instead). | ADO link |
 | `branch --id-from <name>` | Prints the story id a branch is tied to: `<branch_prefix>ab<n>` at the start, else `AB#<n>` anywhere (no leading zero, at most 2147483647). A plain `<branch_prefix><n>-…` or Spec Kit `001-…` never counts. Exit 1 when none, exit 3 when `ado.config.json` is invalid. | none |
+| `strict check <id> --phase implement\|pr\|done` | Read-only, local plus board reads: with `mode: "strict"` prints `{"phase","mode","ok","findings":[{"rule","detail","fix"}]}` and exits 2 when a rule fails (nothing else on stderr but `error: strict check failed: N finding(s)`); exit 0 when `ok`. Advisory mode returns `ok: true` with `note: "mode is advisory"`. `implement` rules: `spec-missing`, `plan-missing`, `tasks-missing`, `placeholder`, `open-question`, `board-task-missing`, `board-unchecked`, `test-command` (and `ledger-missing`); `pr` and `done` have no rules yet. A `detail` carries only ids, file names and counts, never ledger or ADO text. | none |
 | `gate <id>` | The DoD gate. `--base REF` bounds `commits_without_story`; `--changed` lists changed files; `--offline` skips the ADO fetch; `--summary-out` writes the markdown summary. Exit 1: a `gate.block` check failed. Exit 3: `ado.config.json` is invalid, which CI treats as a failure. Exit 2: other errors such as a missing config, which CI treats as advisory. | none |
 | `push <id>`, `done <id>` | Child Tasks from `tasks.md`; closing the story with the ledger attached. Batch verbs. | ADO |
 | `pr create <id>` | Opens the PR (`AB#<id>` ensured in the title). On Azure Repos it then confirms the story is linked to the PR and adds the link if Azure left it out (`work_items_linked`). Refuses while the spec dir's `tasks.md` has unticked tasks (or lists none while the board still tracks `[sk:…]` Tasks for the story: an emptied file); `--allow-incomplete` opens it as a draft instead. With `review_block_on` set, it also refuses while no review is logged, the latest review blocks, or the review is stale. Batch verb. | PR (on Azure also the story's PR link, if Azure left it out) |
@@ -206,6 +207,15 @@ The batch verbs `push`, `done`, `pr create`, `questions --post`, `decisions --po
 `--apply`; `--plan-out <file>` writes the human-readable preview. `--apply --expect-plan <file>` applies only if
 the plan re-renders identical to that approved preview; otherwise it exits 2, writes nothing, and puts the
 current plan in `<file>.new` ("plan changed since approval": preview and approve again).
+
+## Strict mode
+
+With `"mode": "strict"` in `ado.config.json`, `ado strict check <id> --phase implement` refuses (exit 2, findings as JSON, each with
+the command that fixes it) until the spec dir has `spec.md`, `plan.md` and `tasks.md`, ledger section 2 has no `_(fill in` left in
+Approach, Assumptions or Use cases & edge cases, no question is open (an `assumed:` answer counts as closed), every task in
+`tasks.md` has a Task on the board (a board that cannot be read is a `board-unchecked` finding, never a pass) and
+`strict.test_command` is set. The `pr` and `done` phases are registered and get their rules in later releases. Advisory mode (the
+default) is unchanged. See [docs/configuration.md](docs/configuration.md) for `mode` and `strict`.
 
 ## Stack kits and the phase map
 

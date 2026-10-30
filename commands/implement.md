@@ -11,6 +11,7 @@ approved batch.
 ## Prerequisites
 
 - Follow `rules/hitl.md`.
+- In strict mode (`"mode": "strict"` in `ado.config.json`), run `ado strict check <id> --phase implement` first and stop on exit 2, showing its findings and fixes.
 - Phase routing follows `rules/routing.md`.
 - `<spec dir>/tasks.md` exists (`speckit.ado.tasks`); child Tasks pushed is recommended
   (`speckit.ado.push`) so there is something to tick.

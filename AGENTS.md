@@ -130,6 +130,12 @@ ledger is plain text and a pseudo-terminal gives a tty); real enforcement is the
 and the ledger history. A resolved line needs `--force`. Never run it, fake it, or hand-write a `validated` line: propose the line from `ado comments`
 and ask the human to run it in their own terminal.
 
+### Strict mode
+
+When `ado.config.json` says `"mode": "strict"`, run `ado strict check <id> --phase implement` before implementing and stop on exit 2: it
+prints the findings as JSON (`rule`, `detail`, `fix`); do each `fix`, never edit the ledger or `tasks.md` just to silence a rule.
+It is read-only; advisory mode returns `ok: true`. The `pr` and `done` phases have no rules yet.
+
 ### Open questions
 
 `ado questions <id>` (read-only, local) returns the open and answered `Q<n>` lines of ledger section 2, and

@@ -5,7 +5,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, attachments, branch, comments, decisions, dod, done, gate, prs, push, questions, tasks, workitems
+from . import __version__, attachments, branch, comments, decisions, dod, done, gate, prs, push, questions, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid
@@ -177,6 +177,8 @@ def _pr(client, args):
 
 
 def dispatch(client, args):
+    if args.command == "strict":
+        return strict.check(client, args.id, args.phase)
     if args.command == "pr":
         return _pr(client, args)
     if args.command == "done":
@@ -424,6 +426,12 @@ def main(argv=None):
     q.add_argument("pr_id", type=int)
     q.add_argument("--body-file", required=True, metavar="F")
 
+    p = sub.add_parser("strict", help="Strict SDD+TDD mode: read-only phase checks")
+    ssub = p.add_subparsers(dest="strict_command", required=True)
+    q = ssub.add_parser("check", help="Check the strict-mode rules of a phase (read-only; exit 2 lists the findings as JSON)")
+    q.add_argument("id", type=int, help="story id")
+    q.add_argument("--phase", required=True, choices=sorted(strict.PHASES), help="implement, pr or done")
+
     args = parser.parse_args(argv)
     if getattr(args, "expect_plan", None) and not args.apply:
         parser.error("--expect-plan needs --apply")
@@ -477,6 +485,9 @@ def main(argv=None):
             print("warning: could not write the --summary-out file", file=sys.stderr)
     if err is not None:
         return code
+    if args.command == "strict" and not out["ok"]:
+        print(f"error: strict check failed: {len(out['findings'])} finding(s)", file=sys.stderr)
+        return 2
     if args.command == "branch" and out is None:
         return 1
     if args.command == "pr" and out.get("error"):

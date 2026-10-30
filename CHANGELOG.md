@@ -22,6 +22,10 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   at most 300 characters without `<!--`, `-->` or code fences.
 - Gate: `open_decisions` (ids of open or rejected `D<n>` lines) is reported only when the ledger has `D<n>` lines, joins the
   checks `gate.block` can name, and adds one line to the CI summary; ledgers without decision lines keep the v0.2 output.
+- `ado strict check <id> --phase implement|pr|done` (read-only): in strict mode exits 2 with JSON findings (`rule`, `detail`, `fix`)
+  until the spec dir has `spec.md`, `plan.md`, `tasks.md`, section 2 has no `_(fill in` placeholder, no question is open, every
+  `tasks.md` task has a board Task (an unreadable board is a finding) and `strict.test_command` is set; `pr` and `done` have no
+  rules yet; advisory mode returns `ok: true`.
 
 ## 0.2.0 — 2026-10-29
 

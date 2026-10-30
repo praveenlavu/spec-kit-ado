@@ -377,8 +377,8 @@ def test_documented_ado_verbs_and_flags_exist_in_the_cli():
                         continue
                     if words[0].startswith("-"):
                         cmd, given = "", words
-                    elif words[0] == "pr" and len(words) > 1 and re.fullmatch(r"[a-z]+", words[1]):
-                        cmd, given = "pr " + words[1], words[2:]
+                    elif words[0] in ("pr", "strict") and len(words) > 1 and re.fullmatch(r"[a-z]+", words[1]):
+                        cmd, given = f"{words[0]} {words[1]}", words[2:]
                     elif re.fullmatch(r"[a-z]+", words[0]):
                         cmd, given = words[0], words[1:]
                     else:
@@ -697,3 +697,17 @@ def test_gate_open_decisions_in_command_table_and_agents():
     assert "`open_decisions` (only when the ledger has `D<n>` lines)" in _flat("AGENTS.md")
     assert "`\"?\"` means a `D<n>` line could not be parsed" in _flat("commands/gate.md")
     assert "adds `?` to the list" in _flat("docs/configuration.md")
+
+
+def test_strict_check_documented():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `strict check <id>"))
+    for rule in ("spec-missing", "plan-missing", "tasks-missing", "placeholder", "open-question", "board-task-missing",
+                 "board-unchecked", "test-command"):
+        assert f"`{rule}`" in row, rule
+    assert "exits 2" in row and "mode is advisory" in row and "never ledger or ADO text" in row
+    assert "## Strict mode" in _flat("README.md") and "`board-unchecked` finding, never a pass" in _flat("README.md")
+    assert "`ado strict check <id> --phase implement`" in _flat("AGENTS.md")
+    assert "`ado strict check` (read-only; exit 2 lists findings)" in _flat("rules/hitl.md")
+    assert "`ado strict check <id> --phase implement|pr|done`" in _flat("docs/configuration.md")
+    assert "run `ado strict check <id> --phase implement` first and stop on exit 2" in _flat("commands/implement.md")
+    assert "`ado strict check <id> --phase implement|pr|done` (read-only)" in _flat("CHANGELOG.md")

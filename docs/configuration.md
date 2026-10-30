@@ -47,6 +47,8 @@ Every string in the file, values and object keys at any depth, must be free of c
 | `strict` | object | `{"test_command": null, "test_timeout": 300}` | Strict-mode settings; a partial object keeps the defaults. `strict.test_command`: a string of 1-500 characters, the command the strict test run executes. `strict.test_timeout`: an integer from 1 to 3600, the seconds that run may take. An unknown key (reported by position, never echoed), a value of the wrong type or range, or a `strict` that is not an object is a config error. |
 | `stack` | object | `{"kit": "", "phases": {}}` | Phase map for routing; see [stack-kits.md](stack-kits.md). |
 
+With `mode: "strict"`, `ado strict check <id> --phase implement|pr|done` applies the strict rules (see the README's Strict mode section); the `implement` phase refuses while `strict.test_command` is unset.
+
 `organization` and `project` must be present and non-empty, `story_type` and
 `removed_state` must be non-empty strings when set, `gate`, `stack` and `strict` must be
 objects, `mode` must be `advisory` or `strict`, `attachments_allow` must be a list of strings, `branch_prefix` must be
