@@ -244,3 +244,89 @@ def test_nfc_and_nfd_names_kept_as_two_files(cfg, ado_dir):
     out = attachments.fetch(client, 2, ado_dir)
     assert out[1]["path"].endswith(" (2).md") and len(os.listdir(ado_dir)) == 2
     assert sorted(p.read_bytes() for p in ado_dir.iterdir()) == [b"one", b"two"]
+
+
+# ---- V3-5b fix round 1: a symlink or special file is never uploaded; the bytes are read once ----
+import os  # noqa: E402
+
+from ado import attachments  # noqa: E402,F811
+
+
+def _outside(tmp_path):
+    out = tmp_path / "outside" / "secret.md"
+    out.parent.mkdir()
+    out.write_text("TOPSECRET")
+    return out
+
+
+def test_symlink_is_refused_by_assert_safe_and_attach(cfg, tmp_path):
+    secret = _outside(tmp_path)
+    inside = tmp_path / "real.md"
+    inside.write_text("fine")
+    for target in (secret, inside):  # to a file outside, and to a regular file inside the tree
+        link = tmp_path / f"link_{target.parent.name}.md"
+        link.symlink_to(target)
+        with pytest.raises(BlockedFile, match="symlink"):
+            assert_safe(link, ALLOW)
+        client = FakeClient(cfg, responses=[{"url": "u"}, {}])
+        res = attach(client, 7, [link])
+        assert client.calls == [] and res["attached"] == [] and "symlink" in res["failed"][0]["error"]
+    dangling = tmp_path / "dangling.md"
+    dangling.symlink_to(tmp_path / "nowhere")
+    with pytest.raises(BlockedFile):
+        assert_safe(dangling, ALLOW)
+
+
+def test_special_file_and_oversize_are_refused(cfg, tmp_path, monkeypatch):
+    fifo = tmp_path / "pipe.md"
+    os.mkfifo(fifo)
+    with pytest.raises(BlockedFile, match="not a file"):
+        assert_safe(fifo, ALLOW)
+    big = tmp_path / "big.md"
+    big.write_text("x" * 17)
+    monkeypatch.setattr(attachments, "MAX_BYTES", 16)
+    client = FakeClient(cfg)
+    res = attach(client, 7, [big])
+    assert client.calls == [] and "larger than" in res["failed"][0]["error"]
+
+
+def test_regular_file_still_uploads_its_exact_bytes(cfg, tmp_path):
+    f = tmp_path / "ok.md"
+    f.write_bytes(b"# ok \xe2\x9c\x93")
+    client = FakeClient(cfg, responses=[{"url": "u"}, {}])
+    assert attach(client, 7, [f])["failed"] == []
+    assert client.calls[0]["body"] == b"# ok \xe2\x9c\x93"
+
+
+def test_bytes_are_read_once_and_exactly_those_are_uploaded(cfg, tmp_path, monkeypatch):
+    f = tmp_path / "once.md"
+    f.write_bytes(b"first")
+    seen = []
+    real = attachments.read_safe
+
+    def spy(path):
+        data = real(path)
+        seen.append(data)
+        f.write_bytes(b"swapped after the read")  # a later read would now return different bytes
+        return data
+    monkeypatch.setattr(attachments, "read_safe", spy)
+    client = FakeClient(cfg, responses=[{"url": "u"}, {}])
+    assert attach(client, 7, [f])["failed"] == []
+    assert seen == [b"first"] and client.calls[0]["body"] == b"first"
+
+
+def test_file_swapped_for_a_symlink_after_the_check_is_not_followed(cfg, tmp_path, monkeypatch):
+    secret = _outside(tmp_path)
+    f = tmp_path / "late.md"
+    f.write_text("fine")
+    real = attachments.assert_safe
+
+    def swap(path, allow):
+        out = real(path, allow)
+        f.unlink()
+        f.symlink_to(secret)
+        return out
+    monkeypatch.setattr(attachments, "assert_safe", swap)
+    client = FakeClient(cfg)
+    res = attach(client, 7, [f])
+    assert client.calls == [] and res["attached"] == [] and res["failed"]

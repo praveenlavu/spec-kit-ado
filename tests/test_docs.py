@@ -646,9 +646,43 @@ def test_configuration_documents_mode_and_strict_keys():
 
 def test_decisions_verb_documented_read_only():
     row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `decisions <id>` |"))
-    assert "Read-only, local" in row and "`### Decisions & assumptions (development)`" in row and "`unparsed`" in row
+    assert "Read-only, local" in row and "`<dod_path>/Decisions_<id>.md` (not the ledger)" in row and "`unparsed`" in row
+    assert "`### Decisions & assumptions (development)`" not in _flat("README.md") + _flat("AGENTS.md") + _flat("docs/configuration.md")
     assert "`ado decisions`, `ado dod`" in _flat("AGENTS.md") and "`ado decisions <id>` (read-only, local)" in _flat("AGENTS.md")
-    assert "`ado decisions` without `--post` (local ledger read)" in _flat("rules/hitl.md")
+    assert "`ado decisions` without `--post` or `--add` (local read of `Decisions_<id>.md`)" in _flat("rules/hitl.md")
+
+
+def test_decisions_add_documented_as_local_write():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `decisions <id> --add"))
+    for needle in ("--kind decision\\|assumption [--why", "next `D<n>` line", "Decisions_<id>.md", "{\"id\": \"D3\"", "local write",
+                   "`override` is not accepted", "1 to 1500", "`@user` or `[email]`", "never repeats the text", "never only in prose"):
+        assert needle in row, needle
+    agents, hitl, log = _flat("AGENTS.md"), _flat("rules/hitl.md"), _flat("CHANGELOG.md")
+    assert 'ado decisions <id> --add "<text>" --kind decision|assumption' in agents
+    assert "never only in prose or chat" in agents and "never by hand-writing the format" in agents
+    assert "`ado decisions <id> --add`" in hitl and "`--add` is a local write (no token, no request)" in hitl
+    assert "`ado done` also attaches `Decisions_<id>.md` next to the ledger" in hitl and "existing done yes covers it" in hitl
+    assert "`ado decisions <id> --add" in log and "is dropped" in log and "is not read for decisions" in log
+
+
+def test_decisions_attach_at_done_documented():
+    readme = _flat("README.md")
+    assert "plus `<dod_path>/Decisions_<id>.md` when that file exists" in readme and "`decisions_file`" in readme
+    assert "`Decisions_<id>.md` when it exists" in readme
+    assert "attaches `Decisions_<id>.md` next to the ledger when it exists" in _flat("CHANGELOG.md")
+    assert "Decisions_<id>.md" in _flat("commands/done.md") and "decisions file" in _flat("commands/done.md")
+    assert "`ado decisions <id> --add`" in _flat("workflows/ado-lifecycle/README.md")
+
+
+def test_prompts_record_assumptions_and_decisions_with_add():
+    plan, impl = _flat("commands/plan.md"), _flat("commands/implement.md")
+    assert "ado decisions <id> --add" in plan and "ado decisions <id> --add" in impl
+    assert "leave one only in prose" in plan and "never hand-write a `D<n>` line" in plan
+    assert "Never only in prose" in impl and "by hand-writing a `D<n>` line" in impl
+    assert "--kind assumption|decision" in plan and "`assumed:` answer" in plan and "--kind assumption --why" in plan
+    assert "Record every decision" in impl and "committed with the work" in impl
+    assert "Decisions_<id>.md" in _flat("commands/gate.md") and "Decisions_<id>.md" in _flat("commands/pr.md")
+    assert "Decisions_<id>.md" in (ROOT / "templates" / "pr-body.md").read_text(encoding="utf-8")
 
 
 def test_decisions_post_documented_as_preview_yes_apply():
@@ -667,7 +701,7 @@ def test_decisions_resolve_documented_as_human_only():
     row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `decisions <id> --resolve"))
     assert "without a terminal so an agent shell cannot do it by accident" in row and "not a security boundary" in row
     assert "never a name" in row and "`posted`" in row and "A human" in row and "`--force`" in row
-    assert "real enforcement is the strict gate, the decisions comment the PO sees and the ledger history" in row
+    assert "real enforcement is the strict gate, the decisions comment the PO sees and the git history" in row
     assert "A human records the PO's verdict; never the agent" in _flat("AGENTS.md")
     assert "so an agent shell cannot do it by accident" in _flat("AGENTS.md") and "is not a security boundary" in _flat("AGENTS.md")
     assert "shell cannot run it" not in _flat("AGENTS.md") + _flat("rules/hitl.md") + _flat("README.md")
@@ -679,11 +713,11 @@ def test_decisions_resolve_documented_as_human_only():
 
 def test_gate_open_decisions_documented():
     gate, cfg = _flat("commands/gate.md"), _flat("docs/configuration.md")
-    assert "`open_decisions` | present only when the ledger has at least one `D<n>` decision line" in gate
-    assert "The `- open decisions:` line is written only when the ledger has decisions" in gate
+    assert "`open_decisions` | present only when `Decisions_<id>.md` exists and has at least one `D<n>` line" in gate
+    assert "The `- open decisions:` line is written only when the story has decisions in `Decisions_<id>.md`" in gate
     assert gate.split("### Gate — <YYYY-MM-DD>", 1)[1].count("- open decisions: <none | D ids>") == 1
-    assert "Valid names are exactly the six below" in cfg and "`open_decisions` — ledger section 2" in cfg
-    assert "**only when the ledger has at least one `D<n>` line**" in cfg
+    assert "Valid names are exactly the six below" in cfg and "`open_decisions` — the story's decisions file `<dod_path>/Decisions_<id>.md`" in cfg
+    assert "**only when that file has at least one `D<n>` line**" in cfg
     for f in ("README.md", "docs/configuration.md"):
         assert "`commits_without_story`, `open_decisions`" in _flat(f), f
     for f in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
@@ -694,7 +728,7 @@ def test_gate_open_decisions_documented():
 def test_gate_open_decisions_in_command_table_and_agents():
     row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `speckit.ado.gate` |"))
     assert "`open_decisions`" in row
-    assert "`open_decisions` (only when the ledger has `D<n>` lines)" in _flat("AGENTS.md")
+    assert "`open_decisions` (only when `Decisions_<id>.md` has `D<n>` lines)" in _flat("AGENTS.md")
     assert "`\"?\"` means a `D<n>` line could not be parsed" in _flat("commands/gate.md")
     assert "adds `?` to the list" in _flat("docs/configuration.md")
 
@@ -711,3 +745,10 @@ def test_strict_check_documented():
     assert "`ado strict check <id> --phase implement|pr|done`" in _flat("docs/configuration.md")
     assert "run `ado strict check <id> --phase implement` first and stop on exit 2" in _flat("commands/implement.md")
     assert "`ado strict check <id> --phase implement|pr|done` (read-only)" in _flat("CHANGELOG.md")
+
+
+def test_attachment_symlink_hardening_documented():
+    log = _flat("CHANGELOG.md")
+    assert "Attachments no longer follow symlinks: `ado attach` and `ado done` refuse" in log and "`O_NOFOLLOW`" in log
+    assert "a committed link cannot make CI upload another file" in log
+    assert "a symlink or special file is refused" in _flat("README.md")

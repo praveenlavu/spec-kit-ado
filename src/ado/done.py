@@ -25,43 +25,53 @@ def check(ledger_md):
     return {"ready": not unticked, "unticked": unticked}
 
 
+def _has(wi, name):
+    """Is a file called `name` already attached to the fetched work item?"""
+    return any(
+        r.get("rel") == "AttachedFile"
+        and (r.get("attributes", {}).get("name") == name or f"fileName={name}" in r.get("url", ""))
+        for r in (wi or {}).get("relations") or [])
+
+
 def _status(work_item, ledger_name, done_state):
     """(already in done_state, ledger already attached) from a fetched work item."""
     wi = work_item or {}
-    in_done = (wi.get("fields") or {}).get("System.State") == done_state
-    attached = any(
-        r.get("rel") == "AttachedFile"
-        and (r.get("attributes", {}).get("name") == ledger_name or f"fileName={ledger_name}" in r.get("url", ""))
-        for r in wi.get("relations") or [])
-    return in_done, attached
+    return (wi.get("fields") or {}).get("System.State") == done_state, _has(wi, ledger_name)
 
 
-def render_plan(work_item_id, chk, config, work_item=None):
+def render_plan(work_item_id, chk, config, work_item=None, decisions=None):
+    """`decisions`: path of Decisions_<id>.md when it exists (attached next to the ledger), else None."""
     head = f"Plan for closing work item {work_item_id}"
     if chk["ready"]:
         path = dod_file(config.dod_path, work_item_id)
         in_done, attached = _status(work_item, path.name, config.done_state)
         done_state = _cell(config.done_state)
-        if in_done and attached:
-            return f"{head}\n\nDoD checklist complete. Already in {done_state}; nothing to do.\n"
-        if in_done:  # closed by hand: the ledger still goes on, the state stays
-            return (f"{head}\n\nDoD checklist complete. Already in {done_state}; ledger not attached yet. "
-                    f"On --apply:\n1. attach {_cell(str(path))}\n")
-        if attached:
-            return (f"{head}\n\nDoD checklist complete. Ledger already attached; "
+        pending = [] if attached else [("ledger", path)]
+        if decisions and not _has(work_item, Path(decisions).name):
+            pending.append(("decisions file", decisions))
+        if not pending:
+            if in_done:
+                return f"{head}\n\nDoD checklist complete. Already in {done_state}; nothing to do.\n"
+            who = "Ledger and decisions file" if decisions else "Ledger"
+            return (f"{head}\n\nDoD checklist complete. {who} already attached; "
                     f"will only set state to {done_state} on --apply.\n")
-        return (f"{head}\n\nDoD checklist complete. On --apply:\n"
-                f"1. attach {_cell(str(path))}\n2. set state to {done_state}\n")
+        steps = [f"attach {_cell(str(p))}" for _, p in pending] + ([] if in_done else [f"set state to {done_state}"])
+        steps = "".join(f"{i}. {t}\n" for i, t in enumerate(steps, 1))
+        if in_done:  # closed by hand: the files still go on, the state stays
+            names = " and ".join(n for n, _ in pending)
+            return (f"{head}\n\nDoD checklist complete. Already in {done_state}; {names} not attached yet. "
+                    f"On --apply:\n{steps}")
+        return f"{head}\n\nDoD checklist complete. On --apply:\n{steps}"
     return (f"{head}\n\nNot ready — no writes will happen, even with --apply. Unticked:\n"
             + "".join(f"- {_cell(u)}\n" for u in chk["unticked"]))
 
 
-def apply(client, work_item_id, ledger_path, work_item=None):
+def apply(client, work_item_id, ledger_path, work_item=None, decisions=None):
     done_state = client.config.done_state
-    in_done, attached = _status(work_item, Path(ledger_path).name, done_state)
-    res = {"attached": [], "failed": []} if attached else attachments.attach(
-        client, work_item_id, [ledger_path], comment="DoD complete")
-    if in_done:  # closed by hand or by an earlier run: attach the ledger if it is missing, never touch the state
+    in_done = _status(work_item, "", done_state)[0]
+    files = [p for p in (ledger_path, decisions) if p and not _has(work_item, Path(p).name)]  # attached by name -> skipped
+    res = attachments.attach(client, work_item_id, files, comment="DoD complete") if files else {"attached": [], "failed": []}
+    if in_done:  # closed by hand or by an earlier run: attach what is missing, never touch the state
         skipped = {} if res["attached"] or res["failed"] else {"skipped": "already done"}
         return {**res, "state": done_state, "already_done": True, **skipped}
     if res["failed"]:  # never Done without its ledger attached

@@ -281,11 +281,11 @@ def test_gate_checks_match_run_gate_output_keys(tmp_path):
     block = _Everything()
     ledger = (f"# DoD — US1001\n- **AC hash:** {ac_hash(_wi('old'))}\n{SECTION2}\n"
               "- [ ] Q1: which database? → _(open)_ · owner: lead\n"
-              "- [ ] D1: use paging → _(open)_ · kind: decision · why: unspecified\n"
               "## 3. AC → tests (traceability)\n| AC | acceptance criterion | tests | commit/PR | status |\n"
               "|---|---|---|---|---|\n| AC-1 | does X | Gone.testX |  | red |\n## 4. Gate log\n")
     r = run_gate(ledger, {}, {"BTest.cls": "class BTest {}"}, _wi("new"), block=block,
-                 commits=(["abc1234"], None))
+                 commits=(["abc1234"], None),
+                 decisions_md="- [ ] D1: use paging → _(open)_ · kind: decision · why: unspecified\n")
     assert block.asked == set(GATE_CHECKS)
     assert sorted(r["blocked_by"]) == sorted(GATE_CHECKS)
 

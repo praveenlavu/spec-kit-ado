@@ -50,7 +50,9 @@ At the very start of the run, before anything else, snapshot the ids of the `Q<n
 `owner: PO`: those are the questions the operator was shown and asked at `wait-po-answers`. After step 1 has folded
 in the replies, close only the ids in that snapshot that are still open, by ticking it `[x]` and
 replacing `_(open)_` with `assumed: <the assumption the plan made for it, in your own words, never empty>`:
-`- [x] Q2: Should archived items count? → assumed: archived items are excluded · owner: PO`. The line stays in
+`- [x] Q2: Should archived items count? → assumed: archived items are excluded · owner: PO`, and record the same
+assumption with `ado decisions <id> --add "archived items are excluded" --kind assumption --why "Q2 closed as assumed"`
+(one `D<n>` per `assumed:` answer, so the product owner sees it in the decisions comment). The line stays in
 section 2 (never delete it), so the assumption is visible in the ledger and in the PR review, and `ado questions` and
 the `open_questions` gate check no longer count it. A question the product owner did answer keeps that answer;
 questions with another owner, and `### Needs human decision` lines, stay as they are. A question this run raises
@@ -102,7 +104,14 @@ Section 2 (`## 2. Brainstorm & plan`) has four bullets seeded with
   `N/A — <why>`.
 
 Draft these from the plan and section 1, write them into the ledger, and show the user
-the section. Questions only the human can answer: ask them, and record the answers.
+the section.
+
+**Record every assumption and decision in its own file.** Each assumption the plan relies on, and each choice the story
+and the answered questions did not settle, is also recorded with
+`ado decisions <id> --add "<text>" --kind assumption|decision --why "<reason>"` (a local write that creates
+`<dod_path>/Decisions_<id>.md` and appends the next `D<n>` line; no names, @mentions or emails from the story). Never
+leave one only in prose, in section 2 or in chat, and never hand-write a `D<n>` line. Run `ado decisions <id>` first so a
+line that is already recorded is not added twice. In the Assumptions bullet, keep a one-line summary and the pointer to the file. Questions only the human can answer: ask them, and record the answers.
 With `--workflow`: write each the product owner can answer as an `owner: PO` `Q<n>` line in that bullet (see
 User Input) instead of asking, and each decision for the developer under `### Needs human decision`; replace the
 bullet's placeholder with the `Q<n>` lines, or with `none` when there are none.
@@ -127,7 +136,7 @@ With `--workflow`: do not repeat; any placeholder still left is itself a
 ### 5. Summary
 
 Report the plan files written, section 2 status (complete, or with `--workflow` the
-number of `Needs human decision` lines and of open `Q<n>` lines), and any assumptions the human should
+number of `Needs human decision` lines and of open `Q<n>` lines), the `D<n>` ids recorded in `Decisions_<id>.md`, and any assumptions the human should
 double-check; with `--close-assumed`, list each `Q<n>` closed as `assumed:`. Suggest `speckit.ado.tasks` next.
 
 ## HITL checkpoints

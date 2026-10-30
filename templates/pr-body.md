@@ -15,6 +15,8 @@ Work item: AB#<id>
 
 Full traceability, decisions and Definition of Done: [`<dod_path>/DoD_<id>.md`](<ledger_url>)
 
+Decisions and assumptions: `<dod_path>/Decisions_<id>.md` — <none recorded | N open or rejected: D<n> (kind), …>
+
 ## Gate (`ado gate`, <YYYY-MM-DD>)
 
 - **Traceability:** <note from the gate output>

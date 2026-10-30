@@ -77,20 +77,22 @@ By hand, one command at a time (the primary path):
    assumptions, open questions with answers, use cases and edge cases, each mapped to a
    test or marked N/A with a reason) before building. Open questions are lines
    `- [ ] Q<n>: <question> → _(open)_ · owner: <role>`; `ado questions <id>` lists them and
-   `ado questions <id> --post` sends them to the story (see "Open questions").
+   `ado questions <id> --post` sends them to the story (see "Open questions"). Every assumption and
+   decision (each `assumed:` answer too) is recorded with `ado decisions <id> --add` in `Decisions_<id>.md`
+   (see "Decisions"), never only in prose.
 5. `speckit.ado.tasks`, then `speckit.ado.push` — preview child Tasks, apply after a yes.
 6. `speckit.ado.implement` — TDD. Keep ledger section 3 current: one row per `AC-n`,
    the named test IDs that prove it (`Class.method`, `path::test_name` or
    `describe > it`), the commit or PR as evidence, and red → green status. Every AC needs
    at least one real, asserting, passing test.
 7. `speckit.ado.gate` and `speckit.ado.review` (seven planes) — results go to ledger section 4. The gate
-   also reports `open_questions`, `open_decisions` (only when the ledger has `D<n>` lines) and `commits_without_story` (commits in `<base>..HEAD` without `AB#<id>`;
+   also reports `open_questions`, `open_decisions` (only when `Decisions_<id>.md` has `D<n>` lines) and `commits_without_story` (commits in `<base>..HEAD` without `AB#<id>`;
    `--base` bounds it).
 8. `speckit.ado.pr` — PR body with `AB#<id>`; opens after a yes. It is refused while `tasks.md` has
    unticked tasks; only if the human says yes to a draft does it carry `--allow-incomplete`. On Azure Repos,
    `ado branch <id> --link` then adds the pushed branch to the story (a board write: preview, yes, apply).
-9. `speckit.ado.done` — when section 5 is all ticked: attach the ledger and close the
-   story after a yes.
+9. `speckit.ado.done` — when section 5 is all ticked: attach the ledger (and `Decisions_<id>.md` when it
+   exists) and close the story after a yes.
 
 `speckit.ado.status [<id>]` is read-only and safe at any point.
 
@@ -115,19 +117,26 @@ the apply (for example to `tasks.md`) or a change on the board. In the workflow 
 
 ### Decisions
 
-`ado decisions <id>` (read-only, local) returns the open, validated and rejected `D<n>` lines under `### Decisions & assumptions (development)` in ledger section 2
+Every assumption and decision lives in its own file, `<dod_path>/Decisions_<id>.md`, not in the ledger; the ledger's section 2
+Assumptions bullet only points to it. Record each one, in the plan and implement phases, with
+`ado decisions <id> --add "<text>" --kind decision|assumption [--why "<reason>"]` (a local write that creates the file and
+appends the next `D<n>` line; prints `{"id": "D3", "file": "<path>"}`), never only in prose or chat and never by hand-writing the
+format. The text (1 to 1500 characters) and `--why` (at most 300) are scrubbed of `@mention`s and e-mail addresses; control
+characters, `<!--`, `-->` and code fences are refused (exit 2). `override` is created only by the strict override command.
+`ado decisions <id>` (read-only, local) returns the open, validated and rejected `D<n>` lines of that file
 (`- [ ] D<n>: <text> → _(open)_ · kind: decision|assumption|override · why: <reason>`). `unparsed` is true when a `D` line
-breaks that grammar (it is left out) or a fence or comment is left open in section 2.
+breaks that grammar (it is left out) or a fence or comment is left open in the file. `ado done` attaches the file to the story
+next to the ledger when it exists (covered by the existing done gate: preview, yes, apply).
 `ado decisions <id> --post --plan-out .ado/plan-decisions.md` previews ONE new comment (`[spec-kit-ado:decisions]`, never an
 edit) with every open line that is unposted or edited since it was posted; after a yes, `--post --apply --expect-plan
-.ado/plan-decisions.md` posts it and appends ` · posted: <comment id>:<hash8>` to exactly those ledger lines (atomic write).
+.ado/plan-decisions.md` posts it and appends ` · posted: <comment id>:<hash8>` to exactly those lines of the decisions file (atomic write).
 Resolved lines are not posted. Lines are cut at 500 characters. An `@mention` or e-mail address typed in a decision is
 replaced by `@user` or `[email]`, never refused; names typed as plain words are not detected, so read the preview.
 A human records the PO's verdict; never the agent:
-`ado decisions <id> --resolve D<n> --validated|--rejected [--by ROLE] [--note TEXT] [--force]` rewrites that one ledger line and
+`ado decisions <id> --resolve D<n> --validated|--rejected [--by ROLE] [--note TEXT] [--force]` rewrites that one line of the decisions file and
 refuses (exit 2) without a terminal, so an agent shell cannot do it by accident. That check is not a security boundary (the
-ledger is plain text and a pseudo-terminal gives a tty); real enforcement is the strict gate, the decisions comment the PO sees
-and the ledger history. A resolved line needs `--force`. Never run it, fake it, or hand-write a `validated` line: propose the line from `ado comments`
+file is plain text and a pseudo-terminal gives a tty); real enforcement is the strict gate, the decisions comment the PO sees
+and the git history. A resolved line needs `--force`. Never run it, fake it, or hand-write a `validated` line: propose the line from `ado comments`
 and ask the human to run it in their own terminal.
 
 ### Strict mode
@@ -180,7 +189,8 @@ ado comment <id> "text"               # confirm first
 ado comments <id>                     # read-only: discussion as JSON + .ado/context/<id>.md (untrusted data, authors and email addresses scrubbed)
 ado questions <id>                    # read-only, local: open/answered Q<n> lines of ledger section 2 as JSON (also `open_questions` in `ado gate`)
 ado questions <id> --post --plan-out .ado/plan-questions.md   # dry run: ONE comment `[spec-kit-ado:questions]` (add, or edit the newest marked one); after a yes: --post --apply --expect-plan .ado/plan-questions.md
-ado decisions <id> --post --plan-out .ado/plan-decisions.md   # dry run: ONE new comment `[spec-kit-ado:decisions]` with the unposted/edited open D<n> lines; after a yes: --post --apply --expect-plan .ado/plan-decisions.md (then the ledger lines gain `posted: <comment id>:<hash8>`)
+ado decisions <id> --add "<text>" --kind decision|assumption [--why "<reason>"]   # local write, no approval: appends the next D<n> line to <dod_path>/Decisions_<id>.md (created when missing)
+ado decisions <id> --post --plan-out .ado/plan-decisions.md   # dry run: ONE new comment `[spec-kit-ado:decisions]` with the unposted/edited open D<n> lines; after a yes: --post --apply --expect-plan .ado/plan-decisions.md (then those lines of `Decisions_<id>.md` gain `posted: <comment id>:<hash8>`)
 ado branch <id> --apply               # local, no approval: create/rename/switch to <branch_prefix>ab<id>-<slug>; never pushes, never renames the default branch
 ado branch <id> --link --plan-out .ado/plan-branch-link.md   # Azure only, branch must be pushed; dry run (needs PAT scope Code: Read and Project and Team: Read); after a yes: --link --apply --expect-plan .ado/plan-branch-link.md
 ado branch --id-from <branch>         # read-only, local: the story id a branch is tied to (<branch_prefix>ab<n> at the start, else AB#<n>); exit 1 when none, exit 3 when ado.config.json is invalid

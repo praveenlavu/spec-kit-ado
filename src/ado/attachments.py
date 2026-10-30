@@ -1,4 +1,6 @@
+import errno
 import os
+import stat
 import tempfile
 import unicodedata
 import urllib.parse
@@ -14,7 +16,13 @@ class BlockedFile(Exception):
 
 def assert_safe(path, allow):
     p = Path(path)
-    if not p.is_file():
+    try:
+        mode = p.lstat().st_mode  # lstat: a symlink is judged as a link, never followed
+    except OSError:
+        raise BlockedFile(f"{p}: not a file") from None
+    if stat.S_ISLNK(mode):
+        raise BlockedFile(f"{p}: is a symlink; refusing to attach (attach the real file)")
+    if not stat.S_ISREG(mode):
         raise BlockedFile(f"{p}: not a file")
     ext = p.suffix.lower()
     allow = [a.lower() for a in allow]
@@ -26,14 +34,33 @@ def assert_safe(path, allow):
     return p
 
 
+def read_safe(path):
+    """The bytes of a regular, non-symlink file of at most MAX_BYTES, read once through one descriptor
+    (O_NOFOLLOW, O_NONBLOCK so a FIFO cannot hang open); BlockedFile otherwise. Exactly these bytes are uploaded."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as e:
+        why = "is a symlink; refusing to attach" if e.errno == errno.ELOOP else "not a file"
+        raise BlockedFile(f"{path}: {why}") from None
+    with os.fdopen(fd, "rb") as f:
+        if not stat.S_ISREG(os.fstat(f.fileno()).st_mode):
+            raise BlockedFile(f"{path}: not a file")
+        data = f.read(MAX_BYTES + 1)
+    if len(data) > MAX_BYTES:
+        raise BlockedFile(f"{path}: larger than {MAX_BYTES} bytes; refusing to attach")
+    return data
+
+
 def upload(client, path):
     p = assert_safe(path, client.config.attachments_allow)
+    data = read_safe(p)
     api = client.config.api_version
     proj = urllib.parse.quote(client.config.project)
     name = urllib.parse.quote(p.name)
     result = client.post(
         f"/{proj}/_apis/wit/attachments?fileName={name}&api-version={api}",
-        p.read_bytes(),
+        data,
         content_type="application/octet-stream",
         raw=True,
     )

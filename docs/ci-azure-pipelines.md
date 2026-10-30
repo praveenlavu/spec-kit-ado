@@ -87,7 +87,7 @@ attach fails or the ledger is not ready (a warning says the state was left uncha
 ## The PR comment
 
 The thread body is the markdown that `ado gate --summary-out` writes: blocking findings,
-advisory findings (including `Open decisions` when the ledger has `D<n>` decision lines) and AC drift, or "The gate could not run: <reason>" (the token value
+advisory findings (including `Open decisions` when `Decisions_<id>.md` has `D<n>` decision lines) and AC drift, or "The gate could not run: <reason>" (the token value
 redacted). `ado pr comment` adds a new thread on every run; earlier threads are not edited,
 so a PR that is rebuilt several times collects one thread per run.
 

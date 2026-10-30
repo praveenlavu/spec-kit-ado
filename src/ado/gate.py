@@ -327,7 +327,9 @@ GATE_CHECKS = ("ac_traceability", "assertion", "ac_drift", "open_questions", "co
 
 
 def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, reason=UNREACHABLE, commits=None,
-             skipped=0):
+             skipped=0, decisions_md=None, decisions_unreadable=False):
+    """`decisions_md`: text of Decisions_<id>.md, or None when there is no such file; `decisions_unreadable`: the file
+    exists but could not be read (symlink, outside --src, oversize, not UTF-8): counted as unresolved, never skipped."""
     rows = parse_section3(ledger_md)
     trace = check_traceability(rows, sources, len(ac_lines(ledger_md)))
     gaps = scan_assertions(changed, DEFAULT_TESTS if tests is None else tests)
@@ -337,17 +339,17 @@ def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, 
     # An AC row with no test, or none that exists, fails; no rows at all stays "not evaluated".
     qs = parse_questions(ledger_md)
     open_q = [q["id"] for q in qs["open"]]
-    ds = parse_decisions(ledger_md)  # open and rejected are both unresolved; the key is reported only when D lines exist
+    ds = parse_decisions(decisions_md or "")  # open and rejected are both unresolved; reported only when the file has D lines
     open_d = [d["id"] for d in sorted(ds["open"] + ds["rejected"], key=lambda d: int(d["id"][1:]))]
-    open_d += ["?"] * ds["unparsed"]  # fail closed: a malformed D line or an unclosed fence in section 2 is unresolved
+    open_d += ["?"] * (ds["unparsed"] or decisions_unreadable)  # fail closed: a malformed D line, an unclosed fence or comment, an unreadable file
     no_story, commits_note = commits or ([], None)
     open_ledger = unclosed(ledger_md)  # fail closed: counts as an open-questions finding, so `gate.block` can stop on it
     found = {"ac_traceability": trace["unmapped"], "assertion": gaps, "ac_drift": drift["drift"],
-             "open_questions": open_q or open_ledger, "commits_without_story": no_story, "open_decisions": open_d or open_ledger}
+             "open_questions": open_q or open_ledger, "commits_without_story": no_story, "open_decisions": open_d}
     blocked_by = [k for k in found if k in block and found[k]]
     return {"traceability": trace, "assertion_gaps": gaps, "assertion_notes": notes, "drift": drift,
             "missing_evidence": missing_evidence(rows), "open_questions": open_q,
-            "commits_without_story": no_story, **({"open_decisions": open_d} if has_decision_lines(ledger_md) else {}),
+            "commits_without_story": no_story, **({"open_decisions": open_d} if open_d or has_decision_lines(decisions_md or "") else {}),
             **({"commits_note": commits_note} if commits_note else {}),
             **({"skipped_note": SKIPPED_NOTE.format(skipped)} if skipped else {}),
             **({"open_questions_note": UNPARSED_NOTE} if qs["unparsed"] else {}),
@@ -372,7 +374,7 @@ def render_summary(result):
               [g.get("file") or g["test"] for g in result["assertion_gaps"]]),
              ("evidence", "Green AC without evidence", result["missing_evidence"]),
              ("open_questions", "Open questions in ledger section 2", result.get("open_questions", [])),
-             ("open_decisions", "Open decisions in ledger section 2", result.get("open_decisions", []))]
+             ("open_decisions", "Open decisions in the decisions file", result.get("open_decisions", []))]
     found = {k: f"- {label}: {', '.join(map(_code, v))}" for k, label, v in lists if v}
     if cs := result.get("commits_without_story"):
         more = [f"…and {len(cs) - 20} more"] if len(cs) > 20 else []
@@ -382,8 +384,6 @@ def render_summary(result):
         found["open_questions" if "open_questions" not in found else "ledger_unclosed"] = f"- {_code(note)}"
     if not trace["evaluated"]:
         found["trace_note"] = "- AC traceability not evaluated (no AC-tagged rows in section 3)"
-    if "open_decisions" in result.get("blocked_by", []) and "open_decisions" not in found:  # hidden by an unclosed fence
-        found["open_decisions"] = "- Open decisions could not be read: the ledger has an unclosed code fence or comment"
     blocked = [found.pop(k, f"- {drift_line}") for k in result.get("blocked_by", [])]
     out = []
     if blocked:

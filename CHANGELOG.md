@@ -9,23 +9,44 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
 - Config: `mode` (`"advisory"` default, or `"strict"`) and the `strict` object (`test_command`,
   `test_timeout`); in strict mode the effective `gate.block` and `review_block_on` are the
   project's lists plus the strict floor. Invalid values are a config error.
-- `ado decisions <id>` (read-only, local): the ledger's open, validated and rejected `D<n>` decision lines as
-  JSON; the ledger template seeds the `### Decisions & assumptions (development)` heading in section 2.
+- Decisions live in their own file, `<dod_path>/Decisions_<id>.md` (a title, a format note, one `D<n>` line per entry), not in
+  the ledger. The earlier unreleased form, `D<n>` lines under `### Decisions & assumptions (development)` in ledger
+  section 2, is dropped: a ledger from those builds is not read for decisions, and the ledger template no longer seeds the
+  heading (section 2's Assumptions bullet points to the file instead).
+- `ado decisions <id> --add "<text>" --kind decision|assumption [--why "<reason>"]`: records one assumption or decision (a
+  local write, atomic; creates the file; prints `{"id": "D3", "file": "<path>"}`). The next id is the highest in the file + 1.
+  `@mention`s and e-mail addresses are replaced by `@user` / `[email]`; control characters, `<!--`, `-->` and code fences are
+  refused (exit 2) without echoing the text; `override` is not accepted. The plan and implement prompts require it for every
+  assumption and decision (each `assumed:` answer too).
+- `ado decisions <id>` (read-only, local): the file's open, validated and rejected `D<n>` lines as JSON (exit 2 when there
+  is no file yet).
 - `ado decisions <id> --post` (dry run; `--plan-out`, `--apply`, `--expect-plan` as for `questions --post`): one new
   `[spec-kit-ado:decisions]` comment with every open `D<n>` line not yet posted or edited since; apply writes
-  `posted: <comment id>:<hash8>` into exactly those ledger lines (atomic). Typed `@mention`s and e-mail addresses are
-  replaced by `@user` / `[email]`; lines are cut at 500 characters.
+  `posted: <comment id>:<hash8>` into exactly those lines of the decisions file (atomic). Typed `@mention`s and e-mail
+  addresses are replaced by `@user` / `[email]`; lines are cut at 500 characters.
 - `ado decisions <id> --resolve D<n> --validated|--rejected [--by ROLE] [--note TEXT]`: a human records the PO's verdict on
-  one decision line (local ledger edit, atomic, keeps `kind`, `why`, `posted`, `used`; a resolved line needs `--force`).
-  Refuses (exit 2) without a terminal so an agent shell cannot do it by accident; not a security boundary (the strict gate,
-  the decisions comment the PO sees and the ledger history are the enforcement). `--by` is a role (default `PO`), `--note`
-  at most 300 characters without `<!--`, `-->` or code fences.
-- Gate: `open_decisions` (ids of open or rejected `D<n>` lines) is reported only when the ledger has `D<n>` lines, joins the
-  checks `gate.block` can name, and adds one line to the CI summary; ledgers without decision lines keep the v0.2 output.
+  one decision line (local edit of the decisions file, atomic, keeps `kind`, `why`, `posted`, `used`; a resolved line needs
+  `--force`). Refuses (exit 2) without a terminal so an agent shell cannot do it by accident; not a security boundary (the
+  strict gate, the decisions comment the PO sees and the git history are the enforcement). `--by` is a role (default `PO`),
+  `--note` at most 300 characters without `<!--`, `-->` or code fences.
+- `ado done` attaches `Decisions_<id>.md` next to the ledger when it exists (same allowlist; a file already attached by
+  name is skipped, so a re-run never attaches it twice; the plan lists it and the dry-run JSON gains `decisions_file`).
+  Without the file nothing changes.
+- Gate: `open_decisions` (ids of open or rejected `D<n>` lines of `Decisions_<id>.md`) is reported only when that file has
+  `D<n>` lines, joins the checks `gate.block` can name, and adds one line to the CI summary; `?` stands for an unparsable
+  line, an unclosed fence or comment, or an unreadable file; a repo without the file keeps the v0.2 output.
 - `ado strict check <id> --phase implement|pr|done` (read-only): in strict mode exits 2 with JSON findings (`rule`, `detail`, `fix`)
   until the spec dir has `spec.md`, `plan.md`, `tasks.md`, section 2 has no `_(fill in` placeholder, no question is open, every
   `tasks.md` task has a board Task (an unreadable board is a finding) and `strict.test_command` is set; `pr` and `done` have no
   rules yet; advisory mode returns `ok: true`.
+
+### Security
+
+- Attachments no longer follow symlinks: `ado attach` and `ado done` refuse a path whose last component is a symlink or that
+  is not a regular file, refuse a file over 5 MiB, and upload the bytes read once through one `O_NOFOLLOW` descriptor (a
+  file swapped for a link after the check is not followed). `ado done` also reads the ledger and `Decisions_<id>.md` as
+  confined as the gate does (real path under the working tree, 1 MiB, UTF-8) and exits 2 before any request when one is
+  not, so a committed link cannot make CI upload another file.
 
 ## 0.2.0 — 2026-10-29
 

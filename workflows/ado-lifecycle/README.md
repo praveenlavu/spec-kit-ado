@@ -46,6 +46,8 @@ The run does not wait for the product owner by itself: the `wait-po-answers` gat
 that is where you wait for replies. Approving without them accepts the plan's stated assumptions: `plan-with-answers`
 (which gets `--close-assumed`) ticks each question still unanswered as `- [x] Q<n>: … → assumed: <assumption> · owner: PO`,
 keeps the line in ledger section 2 for review, and so the `open_questions` gate check does not halt the run later.
+Each such assumption (and every other assumption or decision the plan and implement steps make) is also recorded with
+`ado decisions <id> --add` in the story's own file `<dod_path>/Decisions_<id>.md`, which `ado done` attaches to the story next to the ledger.
 
 Each `*-loop` is a preview (`ado … --plan-out`), a gate that shows that plan file, and an apply
 with `--expect-plan`: the apply refuses if the plan changed since you approved it, and the loop

@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import sys
 from datetime import date
 
@@ -77,10 +78,15 @@ def _push(client, args):
 
 def _done(client, args):
     path = dod.dod_file(client.config.dod_path, args.id)
-    try:
-        ledger_md = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as e:
-        raise ValueError(f"cannot read ledger {path} ({e.__class__.__name__}); run `ado dod {args.id}` first")
+    # both files are uploaded: read them as confined as the gate does (no symlink, real path under the working tree, 1 MiB)
+    ledger_md = gate._read(path, ".", set()) if os.path.lexists(path) else None
+    if ledger_md is None:
+        raise ValueError(f"cannot read ledger {path} (missing, a symlink, outside the working tree, too large or not UTF-8); "
+                         f"run `ado dod {args.id}` first")
+    dec = decisions.decisions_file(client.config.dod_path, args.id)
+    if os.path.lexists(dec) and gate._read(dec, ".", set()) is None:
+        raise ValueError("the decisions file is not a regular file inside the working tree "
+                         "(a symlink, outside it, a directory, over 1 MiB or not UTF-8); refusing to attach it")
     chk = done.check(ledger_md)
     work_item = None
     if chk["ready"] or not args.apply:  # one read-only GET drives the preview, the idempotent apply and `already_done` (CI must not move a done story)
@@ -90,9 +96,11 @@ def _done(client, args):
             if args.apply:
                 raise  # never write blind
     known = {"already_done": done._status(work_item, "", client.config.done_state)[0]} if work_item else {}
-    _plan(args, done.render_plan(args.id, chk, client.config, work_item))
-    result = done.apply(client, args.id, path, work_item) if args.apply and chk["ready"] else {}
-    return {"id": args.id, "applied": bool(args.apply and chk["ready"]), **chk, **known, **result}
+    dec = dec if os.path.lexists(dec) else None  # attached next to the ledger only when it exists (checked above)
+    _plan(args, done.render_plan(args.id, chk, client.config, work_item, dec))
+    result = done.apply(client, args.id, path, work_item, dec) if args.apply and chk["ready"] else {}
+    return {"id": args.id, "applied": bool(args.apply and chk["ready"]), **chk, **known,
+            **({"decisions_file": str(dec)} if dec else {}), **result}
 
 
 def _read_body(path):
@@ -243,12 +251,12 @@ def dispatch(client, args):
         if args.apply:
             questions.apply_post(client, args.id, plan)
         return {"id": args.id, "applied": args.apply, "action": plan["action"], "comment_id": plan["comment_id"]}
-    if args.command == "decisions":  # read-only unless --post/--plan-out; only --apply writes (comment, then the ledger)
-        path = dod.dod_file(client.config.dod_path, args.id)
+    if args.command == "decisions":  # read-only unless --post/--plan-out; only --apply writes (comment, then the file)
+        path = _decisions_path(client.config.dod_path, args.id)
         try:
             parsed = decisions.parse_decisions(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError) as e:
-            raise ValueError(f"cannot read ledger {path} ({e.__class__.__name__}); run `ado dod {args.id}` first")
+            raise ValueError(f"cannot read the decisions file {path} ({e.__class__.__name__})")
         if not (args.post or args.plan_out):
             return parsed
         plan = decisions.plan_post(client, args.id, parsed)
@@ -266,6 +274,9 @@ def dispatch(client, args):
         if ledger_md is None:
             return {"ledger": "unreadable", "blocking": False,
                     "note": f"ledger at {path} exists but is unreadable — advisory only"}
+        dpath = decisions.decisions_file(client.config.dod_path, args.id)
+        decisions_md = gate._read(dpath, args.src, set()) if os.path.lexists(dpath) else None  # confined like the ledger
+        unreadable = os.path.lexists(dpath) and decisions_md is None
         tests = {**gate.DEFAULT_TESTS, **client.config.gate["tests"]}
         work_item, reason = None, gate.UNREACHABLE
         if getattr(args, "offline", False):
@@ -280,8 +291,24 @@ def dispatch(client, args):
         changed = {f: t for f in (args.changed or []) if (t := gate._read(f, args.src, skipped)) is not None}
         return gate.run_gate(ledger_md, sources, changed, work_item, skipped=len(skipped),
                              block=client.config.gate["block"], tests=tests, reason=reason,
-                             commits=gate.check_commits(args.src, args.id, getattr(args, "base", None)))
+                             commits=gate.check_commits(args.src, args.id, getattr(args, "base", None)),
+                             decisions_md=decisions_md, decisions_unreadable=unreadable)
     raise SystemExit(2)
+
+
+def _decisions_path(dod_path, story_id):
+    """The story's decisions file, which must exist (only `--add` creates it)."""
+    path = decisions.decisions_file(dod_path, story_id)
+    if not path.exists():
+        raise ValueError(f"no decisions file at {path}; record one with `ado decisions {story_id} --add \"<text>\" --kind decision`")
+    return path
+
+
+def _add_decision(args):
+    """`decisions --add`: a local write of one line (creates the file). No token, no request."""
+    path = decisions.decisions_file(Config.load().dod_path, args.id)
+    d_id = decisions.apply_add(path, args.id, args.kind, args.add, args.why or "")
+    return {"id": d_id, "file": str(path)}
 
 
 def _resolve_decision(args):
@@ -289,9 +316,7 @@ def _resolve_decision(args):
     if not (sys.stdin and sys.stdin.isatty()):
         raise ValueError("--resolve records the PO's verdict, which only a human may do: run it in your own terminal "
                          "(this shell has no terminal on stdin; a guard against accidents, not a security boundary)")
-    path = dod.dod_file(Config.load().dod_path, args.id)
-    if not path.exists():
-        raise ValueError(f"cannot read ledger {path}; run `ado dod {args.id}` first")
+    path = _decisions_path(Config.load().dod_path, args.id)
     by, note = args.by if args.by is not None else "PO", args.note or ""
     decisions.apply_resolve(path, args.resolve, args.verdict, by, note, args.force)
     return {"id": args.id, "resolved": args.resolve, "status": args.verdict, "by": by.strip(), "note": note.strip()}
@@ -361,17 +386,21 @@ def main(argv=None):
     p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
     p.add_argument("--expect-plan", metavar="PATH",
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
-    p = sub.add_parser("decisions", help="List the ledger's open, validated and rejected D<n> decision lines; --post "
-                       "sends the unposted open ones as one new comment (dry run unless --apply)")
+    p = sub.add_parser("decisions", help="List the open, validated and rejected D<n> lines of Decisions_<id>.md; --add "
+                       "records one; --post sends the unposted open ones as one new comment (dry run unless --apply)")
     p.add_argument("id", type=int)
     p.add_argument("--post", action="store_true", help="plan posting the unposted decisions as one new comment")
     p.add_argument("--apply", action="store_true", help="with --post: post, then mark the ledger lines (default: plan only)")
     p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
     p.add_argument("--expect-plan", metavar="PATH",
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
-    p.add_argument("--resolve", metavar="D<n>", help="a human records the PO's verdict on this line (local ledger edit; "
+    p.add_argument("--add", metavar="TEXT", help="record one assumption or decision: appends the next D<n> line to "
+                   "<dod_path>/Decisions_<id>.md (created when missing). A local write; needs --kind")
+    p.add_argument("--kind", help="with --add: decision or assumption")
+    p.add_argument("--why", help="with --add: the reason (at most 300 characters)")
+    p.add_argument("--resolve", metavar="D<n>", help="a human records the PO's verdict on this line (local edit of the decisions file; "
                    "with --validated|--rejected, optional --by and --note). Refuses without a terminal so an agent "
-                   "shell cannot do it by accident; this is not a security boundary, the strict gate and the ledger "
+                   "shell cannot do it by accident; this is not a security boundary, the strict gate and the git "
                    "history are the enforcement")
     p.add_argument("--force", action="store_true", help="with --resolve: overwrite the verdict of a resolved line")
     g = p.add_mutually_exclusive_group()
@@ -438,6 +467,13 @@ def main(argv=None):
     if args.command in ("questions", "decisions") and args.apply and not args.post:
         parser.error("--apply needs --post")
     if args.command == "decisions":
+        if args.add is not None and (args.post or args.apply or args.plan_out or args.expect_plan or args.resolve
+                                     or args.verdict or args.by is not None or args.note is not None or args.force):
+            parser.error("--add cannot be combined with --post, --apply, --plan-out, --expect-plan or --resolve options")
+        if args.add is not None and args.kind is None:
+            parser.error("--add needs --kind decision|assumption")
+        if args.add is None and (args.kind is not None or args.why is not None):
+            parser.error("--kind and --why need --add")
         if args.resolve and (args.post or args.apply or args.plan_out or args.expect_plan):
             parser.error("--resolve cannot be combined with --post, --apply, --plan-out or --expect-plan")
         if args.resolve and not args.verdict:
@@ -459,7 +495,9 @@ def main(argv=None):
     try:
         if args.command == "setup":
             return run_setup()
-        if args.command == "decisions" and args.resolve:  # local only: no token, no request
+        if args.command == "decisions" and args.add is not None:  # local only: no token, no request
+            out = _add_decision(args)
+        elif args.command == "decisions" and args.resolve:  # local only: no token, no request
             out = _resolve_decision(args)
         elif args.command == "branch" and args.id_from is not None:  # local only: no token, no request
             out = prs.story_from_branch(args.id_from, Config.load().branch_prefix)

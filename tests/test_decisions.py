@@ -1,27 +1,28 @@
 import json
 import os
 import re
+from pathlib import Path
 
 import pytest
 
 from ado import decisions
 from ado.__main__ import main
-from ado.dod import SECTION2, render_dod, write_dod
+from ado.dod import render_dod, write_dod
 from ado.config import Config
 from tests.conftest import FakeClient
 
-H = decisions.HEADING
 OPEN = "- [ ] D1: Use cursor paging → _(open)_ · kind: decision · why: the story names no page size"
 VAL = "- [x] D2: Cap at 50 rows → validated · by: PO · note: agreed in the thread"
 REJ = "- [x] D3: Skip audit log → rejected · by: PO · note: not acceptable"
 
 
-def _ledger(body, tail="## 3. AC\n"):
-    return f"# DoD\n{SECTION2}\n- **Approach:** x\n{H}\n{body}\n{tail}"
+def _file(body):
+    """A decisions file: the template (title and format note) followed by the entries."""
+    return decisions.render_file(1001) + body + "\n"
 
 
 def test_parse_open_validated_rejected():
-    r = decisions.parse_decisions(_ledger("\n".join([OPEN, VAL, REJ])))
+    r = decisions.parse_decisions(_file("\n".join([OPEN, VAL, REJ])))
     assert r["unparsed"] is False
     assert r["open"] == [{"id": "D1", "kind": "decision", "text": "Use cursor paging",
                           "why": "the story names no page size", "status": "open", "by": "", "note": "",
@@ -37,21 +38,24 @@ def test_round_trip_render_line():
              "- [ ] D4: Skip the freeze → _(open)_ · kind: override · why: outage · used: 2026-11-02",
              "- [x] D5: a → b → c → validated · by: PO · note: ok · posted: 7:deadbeef"]
     for line in lines:
-        r = decisions.parse_decisions(_ledger(line))
+        r = decisions.parse_decisions(_file(line))
         d = (r["open"] + r["validated"] + r["rejected"])[0]
         assert decisions.render_line(d) == line, line
 
 
-def test_fenced_or_commented_lines_ignored():
+def test_parse_reads_whole_file_ignoring_fences():
     body = f"```\n{OPEN}\n```\n<!-- {VAL} -->\n<!--\n{REJ}\n-->\n- [ ] D9: real → _(open)_ · kind: assumption · why: w"
-    r = decisions.parse_decisions(_ledger(body, "## 3. AC\n" + OPEN + "\n"))
+    r = decisions.parse_decisions(_file(body))
     assert [d["id"] for d in r["open"]] == ["D9"] and not r["validated"] and not r["rejected"]
     assert r["unparsed"] is False
-    assert decisions.parse_decisions(_ledger("<!-- never closed\n" + OPEN))["unparsed"] is True
+    assert decisions.parse_decisions(_file("<!-- never closed\n" + OPEN))["unparsed"] is True
+    # no `## ` heading is needed or looked for: lines after any heading are read too
+    r = decisions.parse_decisions("# Decisions\n## Later\n" + OPEN + "\n## 3. x\n" + VAL + "\n")
+    assert [d["id"] for d in r["open"]] == ["D1"] and [d["id"] for d in r["validated"]] == ["D2"]
 
 
 def test_duplicate_id_first_wins():
-    r = decisions.parse_decisions(_ledger(OPEN + "\n" + OPEN.replace("cursor paging", "offset paging") + "\n"
+    r = decisions.parse_decisions(_file(OPEN + "\n" + OPEN.replace("cursor paging", "offset paging") + "\n"
                                           + VAL.replace("D2", "D1")))
     assert [d["text"] for d in r["open"]] == ["Use cursor paging"] and r["validated"] == []
 
@@ -61,7 +65,7 @@ def test_malformed_line_sets_unparsed():
                 "- [ ] D1: t → _(open)_ · kind: guess · why: w", "- [ ] D1: t → validated · by: PO · note: n",
                 "- [x] D1: t → _(open)_ · kind: decision · why: w", "- [x] D1: t → validated · note: no role",
                 "- [ ] D1: t → _(open)_ · kind: decision · why: w · posted: nope"]:
-        r = decisions.parse_decisions(_ledger(bad + "\n" + VAL))
+        r = decisions.parse_decisions(_file(bad + "\n" + VAL))
         assert r["unparsed"] is True and r["open"] == [] and [d["id"] for d in r["validated"]] == ["D2"], bad
     assert decisions.parse_decisions("nothing") == {"open": [], "validated": [], "rejected": [], "unparsed": False}
 
@@ -69,44 +73,52 @@ def test_malformed_line_sets_unparsed():
 def test_posted_marker_parsed_and_hash_changes_with_text():
     h = decisions.line_hash("Use cursor paging")
     assert len(h) == 8 and h == decisions.line_hash("Use  cursor\tpaging ") and h != decisions.line_hash("Use offset")
-    r = decisions.parse_decisions(_ledger(f"{OPEN} · posted: 42:{h}"))
+    r = decisions.parse_decisions(_file(f"{OPEN} · posted: 42:{h}"))
     assert r["open"][0]["posted"] == {"comment_id": 42, "hash": h}
 
 
-def test_ledger_template_has_decisions_heading_in_section_2_only():
+def test_dod_template_no_longer_seeds_decisions_heading_and_points_to_file():
     md = render_dod({"id": 1001, "fields": {}}, "contoso", "Fabrikam", synced="2026-07-14")
-    assert md.count(H) == 1
-    s2, s3 = md.index(SECTION2), md.index("## 3.")
-    assert s2 < md.index(H) < s3
-    assert md.index("Open questions →") < md.index(H)
-    assert "`- [ ] D1:" in md
+    assert "Decisions & assumptions" not in md and "D1:" not in md
+    bullet = next(x for x in md.splitlines() if x.startswith("- **Assumptions:**"))
+    assert "Decisions_1001.md" in bullet and "`ado decisions 1001 --add`" in bullet
+    assert md.count("Decisions_1001.md") == 1
     assert decisions.parse_decisions(md) == {"open": [], "validated": [], "rejected": [], "unparsed": False}
+
+
+def test_file_template_has_title_and_format_note_that_does_not_parse():
+    md = decisions.render_file(1001)
+    assert md.startswith("# Decisions — US1001\n") and "<!--" not in md and "-->" not in md
+    assert "`- [ ] D1: <text> → _(open)_ · kind: decision · why: <reason>`" in md
+    assert decisions.parse_decisions(md) == {"open": [], "validated": [], "rejected": [], "unparsed": False}
+    assert not decisions.has_decision_lines(md)
+    assert decisions.decisions_file("dod", 1001) == Path("dod") / "Decisions_1001.md"
 
 
 def _wi(ac):
     return {"id": 1001, "fields": {"Microsoft.VSTS.Common.AcceptanceCriteria": ac}}
 
 
-def test_refresh_keeps_decision_lines(tmp_path):
+def test_refresh_neither_touches_nor_requires_the_decisions_file(tmp_path):
     p = write_dod(_wi("old AC"), str(tmp_path), "contoso", "Fabrikam", synced="2026-07-14")
-    p.write_text(p.read_text().replace("\n\n## 3.", "\n" + OPEN + "\n" + VAL + "\n\n## 3.", 1))
-    before = p.read_text()
     write_dod(_wi("new AC"), str(tmp_path), "contoso", "Fabrikam", synced="2026-07-15", refresh=True)
-    after = p.read_text()
-    assert "new AC" in after and "old AC" not in after
-    assert after[after.index(SECTION2):] == before[before.index(SECTION2):]
-    assert [d["id"] for d in decisions.parse_decisions(after)["open"]] == ["D1"]
+    assert "new AC" in p.read_text() and not (tmp_path / "Decisions_1001.md").exists()
+    d = tmp_path / "Decisions_1001.md"
+    d.write_text(_file(OPEN), encoding="utf-8")
+    before = (d.read_bytes(), d.stat().st_mtime_ns)
+    write_dod(_wi("newer AC"), str(tmp_path), "contoso", "Fabrikam", synced="2026-07-16", refresh=True)
+    assert (d.read_bytes(), d.stat().st_mtime_ns) == before and "newer AC" in p.read_text()
 
 
-def test_cli_decisions_read_only_and_missing_ledger_exit_2(tmp_path, monkeypatch, capsys):
+def test_cli_decisions_read_only_and_missing_file_exit_2(tmp_path, monkeypatch, capsys):
     (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam"}))
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ADO_CONFIG", raising=False)
     assert main(["decisions", "1001"]) == 2
-    assert "run `ado dod 1001` first" in capsys.readouterr().err
+    assert "`ado decisions 1001 --add " in capsys.readouterr().err
     (tmp_path / "dod").mkdir()
-    led = tmp_path / "dod" / "DoD_1001.md"
-    led.write_text(_ledger(OPEN + "\n" + VAL), encoding="utf-8")
+    led = tmp_path / "dod" / "Decisions_1001.md"
+    led.write_text(_file(OPEN + "\n" + VAL), encoding="utf-8")
     before = led.read_bytes()
     assert main(["decisions", "1001"]) == 0
     out = json.loads(capsys.readouterr().out)
@@ -119,7 +131,7 @@ def test_pathological_whitespace_line_parses_fast():
     status = "- [ ] D1: t → _(open)_"
     for bad in (status + " " * 200_000 + "· kind: decision · why: w", "- [ ] D1: " + "x" * 200_000 + " → _(open)_ · kind: decision · why: w"):
         t = time.perf_counter()
-        r = decisions.parse_decisions(_ledger(bad + "\n" + VAL))
+        r = decisions.parse_decisions(_file(bad + "\n" + VAL))
         assert time.perf_counter() - t < 1
         assert r["unparsed"] is True and r["open"] == [] and [d["id"] for d in r["validated"]] == ["D2"]
 
@@ -136,8 +148,8 @@ def _env(tmp_path, monkeypatch, body, posted_id=777):
     from ado import __main__ as m
     (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam"}))
     (tmp_path / "dod").mkdir()
-    led = tmp_path / "dod" / "DoD_1001.md"
-    led.write_text(_ledger(body), encoding="utf-8")
+    led = tmp_path / "dod" / "Decisions_1001.md"
+    led.write_text(_file(body), encoding="utf-8")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ADO_TOKEN", "t")
     monkeypatch.delenv("ADO_CONFIG", raising=False)
@@ -155,7 +167,7 @@ def _writes(fake):
 
 
 def _plan(ledger_body):
-    return decisions.plan_post(None, 1001, decisions.parse_decisions(_ledger(ledger_body)))
+    return decisions.plan_post(None, 1001, decisions.parse_decisions(_file(ledger_body)))
 
 
 def test_plan_none_when_everything_posted():
@@ -215,7 +227,7 @@ def test_apply_posts_exact_previewed_html_then_writes_marker(tmp_path, monkeypat
     capsys.readouterr()
     assert m.main(["decisions", "1001", "--post", "--apply", "--expect-plan", "p.md"]) == 0
     out = json.loads(capsys.readouterr().out)
-    html_ = decisions.plan_post(None, 1001, decisions.parse_decisions(_ledger(f"{OPEN}\n{VAL}\n{OPEN2}")))["html"]
+    html_ = decisions.plan_post(None, 1001, decisions.parse_decisions(_file(f"{OPEN}\n{VAL}\n{OPEN2}")))["html"]
     assert _writes(fake) == [{"method": "POST", "body": {"text": html_}, "content_type": "application/json",
                               "path": "/Fabrikam/_apis/wit/workItems/1001/comments?api-version=7.1-preview.4"}]
     assert out["comment_id"] == 777 and out["lines"] == ["D1", "D4"]
@@ -232,7 +244,7 @@ def test_expect_plan_mismatch_exit_2_no_write(tmp_path, monkeypatch, capsys):
     m, fake, led = _env(tmp_path, monkeypatch, OPEN)
     assert m.main(["decisions", "1001", "--post", "--plan-out", "p.md"]) == 0
     approved = (tmp_path / "p.md").read_text()
-    led.write_text(_ledger(OPEN + "\n" + OPEN2), encoding="utf-8")
+    led.write_text(_file(OPEN + "\n" + OPEN2), encoding="utf-8")
     before = led.read_bytes()
     assert m.main(["decisions", "1001", "--post", "--apply", "--expect-plan", "p.md"]) == 2
     assert "plan changed since approval" in capsys.readouterr().err
@@ -263,7 +275,7 @@ def test_ledger_write_is_atomic_on_failure(tmp_path, monkeypatch, capsys):
 def test_ledger_changed_since_plan_posts_nothing(tmp_path, monkeypatch):
     m, fake, led = _env(tmp_path, monkeypatch, OPEN)
     plan = decisions.plan_post(None, 1001, decisions.parse_decisions(led.read_text()))
-    led.write_text(_ledger(OPEN.replace("cursor", "offset")), encoding="utf-8")
+    led.write_text(_file(OPEN.replace("cursor", "offset")), encoding="utf-8")
     client = m.AdoClient(None)
     with pytest.raises(ValueError, match="changed since the plan"):
         decisions.apply_post(client, 1001, plan, led)
@@ -327,7 +339,7 @@ def test_targeted_line_edited_during_the_post_is_not_marked(tmp_path, monkeypatc
     plan = decisions.plan_post(None, 1001, decisions.parse_decisions(led.read_text()))
     client = _client()
     post = client.post
-    edited = _ledger(OPEN.replace("cursor", "offset"))
+    edited = _file(OPEN.replace("cursor", "offset"))
     client.post = lambda *a, **k: (led.write_text(edited, encoding="utf-8"), post(*a, **k))[1]
     with pytest.raises(ValueError, match=rf"comment 777 was posted.*D1: · posted: 777:{H1}"):
         decisions.apply_post(client, 1001, plan, led)
@@ -429,7 +441,7 @@ def test_resolve_keeps_line_terminators(tmp_path, monkeypatch):
     assert _resolve(m, "D1", "--validated") == 0
     md = led.read_text(encoding="utf-8")
     assert " - [x] D2:" in md and decisions.parse_decisions(md)["unparsed"] is False
-    led.write_bytes(_ledger(OPEN + "\n" + VAL).replace("\n", "\r\n").encode("utf-8"))
+    led.write_bytes(_file(OPEN + "\n" + VAL).replace("\n", "\r\n").encode("utf-8"))
     before = led.read_bytes()
     assert _resolve(m, "D2", "--rejected", "--by", "PO", "--force") == 0
     after = led.read_bytes()
@@ -487,7 +499,7 @@ def test_note_with_comment_or_fence_markers_is_refused(tmp_path, monkeypatch, ca
 
 
 def test_whole_ledger_is_verified_before_writing(monkeypatch):
-    md = _ledger(OPEN + "\n" + OPEN2)
+    md = _file(OPEN + "\n" + OPEN2)
     monkeypatch.setattr(decisions, "_MARKUP", re.compile("(?!)"))  # as if the note check missed `<!--`
     with pytest.raises(ValueError, match="D1"):  # the line alone reads back, the ledger does not
         decisions.resolve(md, "D1", "validated", "PO", "x <!-- y")
@@ -536,9 +548,153 @@ def test_temp_file_is_unique_and_the_mode_is_kept(tmp_path, monkeypatch):
 
 
 def test_has_decision_lines():
-    assert decisions.has_decision_lines(_ledger(OPEN)) and decisions.has_decision_lines(_ledger(VAL))
-    assert decisions.has_decision_lines(_ledger("- [ ] D4 not in the grammar"))  # malformed still counts
-    assert not decisions.has_decision_lines(_ledger("- [ ] Q1: which? → _(open)_ · owner: lead"))
-    assert not decisions.has_decision_lines(_ledger("```\n" + OPEN + "\n```"))  # a fenced example is not a line
-    assert not decisions.has_decision_lines(_ledger("<!-- " + OPEN + " -->"))
+    assert decisions.has_decision_lines(_file(OPEN)) and decisions.has_decision_lines(_file(VAL))
+    assert decisions.has_decision_lines(_file("- [ ] D4 not in the grammar"))  # malformed still counts
+    assert not decisions.has_decision_lines(_file("- [ ] Q1: which? → _(open)_ · owner: lead"))
+    assert not decisions.has_decision_lines(_file("```\n" + OPEN + "\n```"))  # a fenced example is not a line
+    assert not decisions.has_decision_lines(_file("<!-- " + OPEN + " -->"))
     assert not decisions.has_decision_lines("# DoD\nno section 2\n")
+
+
+# ---- V3-5b: the decisions live in <dod_path>/Decisions_<id>.md; `--add` writes them ----
+def _add_env(tmp_path, monkeypatch):
+    (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam"}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    monkeypatch.delenv("ADO_TOKEN", raising=False)  # a local write: no token, no request
+    return tmp_path / "dod" / "Decisions_1001.md"
+
+
+def _add(*extra, text="Use cursor paging", kind="decision"):
+    return main(["decisions", "1001", "--add", text, "--kind", kind, *extra])
+
+
+def test_add_creates_file_and_appends_next_id(tmp_path, monkeypatch, capsys):
+    f = _add_env(tmp_path, monkeypatch)
+    assert _add("--why", "the story names no page size") == 0
+    assert json.loads(capsys.readouterr().out) == {"id": "D1", "file": str(Path("dod") / "Decisions_1001.md")}
+    assert f.read_text(encoding="utf-8") == decisions.render_file(1001) + OPEN + "\n"
+    # next id = max existing + 1, even with gaps, a resolved line and a duplicate id
+    f.write_text(decisions.render_file(1001) + "\n".join([OPEN, VAL.replace("D2", "D7"), OPEN.replace("paging", "x")]) + "\n")
+    before = f.read_text()
+    assert _add("--why", "w", text="Retry twice", kind="assumption") == 0
+    assert json.loads(capsys.readouterr().out)["id"] == "D8"
+    after = f.read_text()
+    assert after == before + "- [ ] D8: Retry twice → _(open)_ · kind: assumption · why: w\n"
+    d = decisions.parse_decisions(after)
+    assert d["unparsed"] is False and [x["id"] for x in d["open"]][-1] == "D8"
+    assert list(f.parent.glob("*.tmp")) == []
+
+
+def test_add_defaults_why_adds_a_missing_final_newline_and_keeps_crlf(tmp_path, monkeypatch):
+    f = _add_env(tmp_path, monkeypatch)
+    assert _add() == 0
+    assert "· kind: decision · why: unspecified\n" in f.read_text()
+    f.write_bytes((decisions.render_file(1001) + OPEN).replace("\n", "\r\n").encode("utf-8"))  # no final newline
+    assert _add(text="b", kind="assumption") == 0
+    raw = f.read_bytes()
+    assert raw.count(b"\r\n") == raw.count(b"\n") and b"D2: b" in raw
+    assert decisions.parse_decisions(raw.decode("utf-8"))["unparsed"] is False
+
+
+def test_add_numbers_after_a_malformed_line_too(tmp_path, monkeypatch):
+    f = _add_env(tmp_path, monkeypatch)
+    f.parent.mkdir()
+    f.write_text(decisions.render_file(1001) + "- [ ] D5 not in the grammar\n", encoding="utf-8")
+    assert _add() == 0
+    assert "D6: Use cursor paging" in f.read_text()
+
+
+def test_add_scrubs_mentions_and_emails_and_trims(tmp_path, monkeypatch):
+    f = _add_env(tmp_path, monkeypatch)
+    assert _add("--why", "ask @dana", text="  mail d@contoso.example <b>x</b> ") == 0
+    line = f.read_text().splitlines()[-1]
+    assert line == "- [ ] D1: mail [email] <b>x</b> → _(open)_ · kind: decision · why: ask @user"
+
+
+def test_add_refuses_control_chars_comment_openers_and_long_text(tmp_path, monkeypatch, capsys):
+    f = _add_env(tmp_path, monkeypatch)
+    secret = "TOPSECRETTEXT"
+    bad_text = ["a\nb", "a\rb", "a\tb", "a\x1bb", "a\x00b", "a\x7fb", "a\x85b", "a\u2028b", "a\u2029b",
+                "x <!-- y", "x --> y", "a ``` b", "~~~", "x ````", "", "   ", "x" * 1501]
+    for t in bad_text:
+        assert _add(text=secret + t) == 2 if t.strip() else _add(text=t) == 2, repr(t)
+        err = capsys.readouterr().err
+        assert err.startswith("error:") and secret not in err and not f.exists(), repr(t)
+    for why in ("a\nb", "a\x1bb", "w <!-- x", "w ```", "w" * 301, "w · kind: assumption"):
+        assert _add("--why", why, text=secret) == 2, repr(why)
+        err = capsys.readouterr().err
+        assert err.startswith("error:") and secret not in err and "wwww" not in err and not f.exists(), repr(why)
+    for kind in ("override", "Decision", "", "x"):
+        assert _add(text=secret, kind=kind) == 2
+        err = capsys.readouterr().err
+        assert "decision or assumption" in err and secret not in err and not f.exists()
+    assert _add(text="x" * 1500, kind="decision") == 0  # the limits themselves are fine
+    assert _add("--why", "w" * 300) == 0
+
+
+def test_add_refuses_when_the_new_line_would_be_hidden_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    f = _add_env(tmp_path, monkeypatch)
+    f.parent.mkdir()
+    f.write_text(decisions.render_file(1001) + "```\n" + OPEN + "\n", encoding="utf-8")  # unclosed fence
+    before = f.read_bytes()
+    assert _add() == 2
+    assert "decisions file" in capsys.readouterr().err and f.read_bytes() == before and list(f.parent.glob("*.tmp")) == []
+    f.write_bytes(b"\xff\xfe")
+    assert _add() == 2 and f.read_bytes() == b"\xff\xfe"
+
+
+def test_add_write_is_atomic(tmp_path, monkeypatch, capsys):
+    f = _add_env(tmp_path, monkeypatch)
+    assert _add() == 0
+    before = f.read_bytes()
+    f.chmod(0o640)
+    real = os.replace
+    monkeypatch.setattr(os, "replace", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    assert _add(text="more") == 2
+    assert "disk full" in capsys.readouterr().err and f.read_bytes() == before and list(f.parent.glob("*.tmp")) == []
+    monkeypatch.setattr(os, "replace", real)
+    assert _add(text="more") == 0 and (f.stat().st_mode & 0o777) == 0o640
+    f2 = f.with_name("Decisions_1002.md")
+    assert main(["decisions", "1002", "--add", "t", "--kind", "decision"]) == 0 and f2.exists()
+
+
+def test_add_flag_combinations_exit_2(tmp_path, monkeypatch):
+    f = _add_env(tmp_path, monkeypatch)
+    for argv in (["--add", "t"], ["--add", "t", "--kind", "decision", "--post"], ["--add", "t", "--kind", "decision", "--apply"],
+                 ["--add", "t", "--kind", "decision", "--resolve", "D1", "--validated"],
+                 ["--add", "t", "--kind", "decision", "--plan-out", "p.md"],
+                 ["--add", "t", "--kind", "decision", "--validated"], ["--add", "t", "--kind", "decision", "--by", "PO"],
+                 ["--kind", "decision"], ["--why", "w"]):
+        with pytest.raises(SystemExit) as e:
+            main(["decisions", "1001", *argv])
+        assert e.value.code == 2, argv
+    assert not f.exists()
+
+
+def test_post_and_resolve_use_the_file(tmp_path, monkeypatch, capsys):
+    m, fake, f = _env(tmp_path, monkeypatch, OPEN + "\n" + OPEN2)
+    other = tmp_path / "dod" / "DoD_1001.md"
+    other.write_text("# DoD\n" + OPEN.replace("D1", "D9") + "\n", encoding="utf-8")  # a D line in a ledger is never read
+    ledger_before = other.read_bytes()
+    assert m.main(["decisions", "1001", "--post", "--apply"]) == 0
+    assert json.loads(capsys.readouterr().out)["lines"] == ["D1", "D4"]
+    md = f.read_text(encoding="utf-8")
+    assert f"posted: 777:{H1}" in md and f"posted: 777:{H2}" in md
+    _tty(monkeypatch)
+    assert _resolve(m, "D1", "--validated") == 0
+    assert "- [x] D1:" in f.read_text(encoding="utf-8")
+    assert _resolve(m, "D9", "--validated") == 2  # only in the ledger
+    assert other.read_bytes() == ledger_before
+    f.unlink()
+    assert m.main(["decisions", "1001", "--post"]) == 2 and _resolve(m, "D1", "--validated") == 2
+    assert "`ado decisions 1001 --add " in capsys.readouterr().err
+
+
+def test_add_counts_ids_hidden_in_comments_and_fences(tmp_path, monkeypatch):
+    f = _add_env(tmp_path, monkeypatch)
+    f.parent.mkdir()
+    f.write_text(decisions.render_file(1001) + f"<!-- {VAL.replace('D2', 'D12')} -->\n```\n{REJ.replace('D3', 'D20')}\n```\n" + OPEN + "\n",
+                 encoding="utf-8")
+    assert _add() == 0
+    assert "- [ ] D21: Use cursor paging" in f.read_text(encoding="utf-8")

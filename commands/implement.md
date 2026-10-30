@@ -52,6 +52,11 @@ dir, scope, and this instruction set:
 - **Test first.** For each AC in scope, write or name the test, run it, and see it fail
   for the right reason before writing the code. Then make it pass.
 - Tests need real assertions; a test without one does not prove an AC.
+- **Record every decision.** Whenever you make a choice the story and the answered questions did not settle (a
+  default, an interpretation, a deviation from the plan), or rely on an assumption, record it with
+  `ado decisions <id> --add "<text>" --kind decision|assumption --why "<reason>"` (a local write into
+  `<dod_path>/Decisions_<id>.md`; no names, @mentions or emails). Never only in prose, a commit message or chat, and never
+  by hand-writing a `D<n>` line. The file is committed with the work.
 - One task → one commit whose message names the task ID and the AC it satisfies, and ends
   with the story reference `AB#<id>` (the story id; exactly that form, so Azure Boards and
   the Azure Boards GitHub app link the commit to the story). Example:
@@ -96,7 +101,7 @@ approval`) and writes nothing: preview again (step 1) and ask again.
 
 ### 5. Summary
 
-Report: tasks done, AC rows green vs. total, commits made, ADO sync result. Suggest
+Report: tasks done, AC rows green vs. total, commits made, the `D<n>` ids recorded in `Decisions_<id>.md` this session, ADO sync result. Suggest
 `speckit.ado.gate` and then `speckit.ado.review`.
 
 With `--workflow`, whenever tasks remain unticked (for example you stopped on unanswered

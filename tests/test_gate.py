@@ -807,9 +807,7 @@ def test_gate_unclosed_opener_in_the_ledger_is_a_blocking_ledger_note(opener):
     assert "ledger_unclosed" not in run_gate(LEDGER, SOURCES, {})
 
 
-# ---- V3-5: open_decisions ----
-from ado.decisions import HEADING as _DH  # noqa: E402
-
+# ---- V3-5 / V3-5b: open_decisions, read from <dod_path>/Decisions_<id>.md ----
 _D_OPEN = "- [ ] D1: Use cursor paging → _(open)_ · kind: decision · why: the story names no page size"
 _D_VAL = "- [x] D2: Cap at 50 rows → validated · by: PO · note: agreed"
 _D_REJ = "- [x] D3: Skip audit log → rejected · by: PO · note: not acceptable"
@@ -818,56 +816,95 @@ V02_KEYS = {"traceability", "assertion_gaps", "assertion_notes", "drift", "missi
             "commits_without_story", "blocked_by", "blocking"}  # the literal v0.2 advisory key set
 
 
-def _with_decisions(*lines):
-    return LEDGER.replace("## 3. AC", f"{_DH}\n" + "\n".join(lines) + "\n## 3. AC", 1)
+def _dfile(*lines):
+    from ado.decisions import render_file
+    return render_file(1001) + "\n".join(lines) + "\n"
 
 
-def test_open_decisions_absent_when_no_decision_lines():
+def _gd(*lines, **kw):
+    return run_gate(LEDGER, SOURCES, {}, decisions_md=_dfile(*lines), **kw)
+
+
+def test_open_decisions_absent_without_a_file_or_decision_lines():
     assert set(run_gate(LEDGER, SOURCES, {})) == V02_KEYS
-    assert set(run_gate(_ledger_for("x"), {}, {})) == V02_KEYS  # the seeded template has the heading, no D line
-    assert "open_decisions" not in render_summary(run_gate(LEDGER, SOURCES, {}))
+    assert set(run_gate(_ledger_for("x"), {}, {})) == V02_KEYS
+    assert set(_gd()) == V02_KEYS  # a fresh file: title and format note only
+    assert "open_decisions" not in render_summary(_gd())
+    # a D line inside the LEDGER is not read any more (V3-2..V3-5 unreleased form)
+    old = LEDGER.replace("## 3. AC", _D_OPEN + "\n## 3. AC", 1)
+    assert set(run_gate(old, SOURCES, {}, block=["open_decisions"])) == V02_KEYS
 
 
 def test_open_decisions_lists_ids_and_rejected_counts_as_open():
-    r = run_gate(_with_decisions(_D_OPEN10, _D_VAL, _D_REJ, _D_OPEN), SOURCES, {})
+    r = _gd(_D_OPEN10, _D_VAL, _D_REJ, _D_OPEN)
     assert r["open_decisions"] == ["D1", "D3", "D10"]  # numeric order; validated is resolved
     assert set(r) == V02_KEYS | {"open_decisions"}
-    assert run_gate(_with_decisions(_D_VAL), SOURCES, {})["open_decisions"] == []  # present, nothing open
-    assert run_gate(_with_decisions("- [ ] D4 not in the grammar"), SOURCES, {})["open_decisions"] == ["?"]  # unparsed D line: fail closed
+    assert _gd(_D_VAL)["open_decisions"] == []  # present, nothing open
+    assert _gd("- [ ] D4 not in the grammar")["open_decisions"] == ["?"]  # unparsed D line: fail closed
 
 
 def test_open_decisions_blocks_only_when_listed():
-    ledger = _with_decisions(_D_OPEN)
-    assert run_gate(ledger, SOURCES, {})["blocking"] is False
-    r = run_gate(ledger, SOURCES, {}, block=["open_decisions"])
+    assert _gd(_D_OPEN)["blocking"] is False
+    r = _gd(_D_OPEN, block=["open_decisions"])
     assert r["blocked_by"] == ["open_decisions"] and r["blocking"] is True
-    assert run_gate(_with_decisions(_D_VAL), SOURCES, {}, block=["open_decisions"])["blocking"] is False
-    assert run_gate(LEDGER, SOURCES, {}, block=["open_decisions"])["blocking"] is False
+    assert _gd(_D_VAL, block=["open_decisions"])["blocking"] is False
+    assert run_gate(LEDGER, SOURCES, {}, block=["open_decisions"])["blocking"] is False  # no file
 
 
 def test_summary_line():
-    open_md = render_summary(run_gate(_with_decisions(_D_OPEN, _D_REJ), SOURCES, {}))
-    assert "- Open decisions in ledger section 2: `D1`, `D3`" in open_md.partition("**Advisory:**")[2]
-    blocked = render_summary(run_gate(_with_decisions(_D_OPEN), SOURCES, {}, block=["open_decisions"]))
+    open_md = render_summary(_gd(_D_OPEN, _D_REJ))
+    assert "- Open decisions in the decisions file: `D1`, `D3`" in open_md.partition("**Advisory:**")[2]
+    blocked = render_summary(_gd(_D_OPEN, block=["open_decisions"]))
     assert "`D1`" in blocked.partition("**Blocking")[2].partition("**Advisory")[0]
-    assert "Open decisions: none" in render_summary(run_gate(_with_decisions(_D_VAL), SOURCES, {}))
+    assert "Open decisions: none" in render_summary(_gd(_D_VAL))
 
 
-def test_open_decisions_fail_closed_on_malformed_or_hidden_d_lines():
-    bad = _with_decisions("- [ ] D4 not in the grammar")  # malformed-only D line
-    r = run_gate(bad, SOURCES, {}, block=["open_decisions"])
+def test_open_decisions_fail_closed_on_malformed_hidden_or_unreadable():
+    r = _gd("- [ ] D4 not in the grammar", block=["open_decisions"])
     assert r["open_decisions"] == ["?"] and r["blocked_by"] == ["open_decisions"] and r["blocking"] is True
-    assert run_gate(bad, SOURCES, {})["blocking"] is False  # advisory unless listed
-    hidden = _with_decisions("```", _D_OPEN)  # an unclosed fence hides the D line: the key stays absent
-    r = run_gate(hidden, SOURCES, {}, block=["open_decisions"])
-    assert "open_decisions" not in r and r["blocked_by"] == ["open_decisions"] and r["blocking"] is True
-    assert "open_decisions" not in run_gate(hidden, SOURCES, {})
+    assert _gd("- [ ] D4 not in the grammar")["blocking"] is False  # advisory unless listed
+    for hidden in (("```", _D_OPEN), ("<!--", _D_OPEN)):  # an unclosed fence or comment hides the D line
+        r = _gd(*hidden, block=["open_decisions"])
+        assert r["open_decisions"] == ["?"] and r["blocked_by"] == ["open_decisions"] and r["blocking"] is True
+    r = run_gate(LEDGER, SOURCES, {}, decisions_unreadable=True, block=["open_decisions"])
+    assert r["open_decisions"] == ["?"] and r["blocking"] is True
+    assert run_gate(LEDGER, SOURCES, {}, decisions_unreadable=True)["blocking"] is False
 
 
 def test_summary_open_decisions_fail_closed_lines():
-    bad = render_summary(run_gate(_with_decisions("- [ ] D4 not in the grammar"), SOURCES, {}, block=["open_decisions"]))
-    assert "- Open decisions in ledger section 2: `?`" in bad.partition("**Blocking")[2].partition("**Advisory")[0]
-    hidden = render_summary(run_gate(_with_decisions("```", _D_OPEN), SOURCES, {}, block=["open_decisions"]))
-    blocking = hidden.partition("**Blocking")[2].partition("**Advisory")[0]
-    assert "Open decisions" in blocking and "could not be read" in blocking and "AC changed" not in blocking
-    assert "no drift" not in blocking and "drift not checked" not in blocking
+    for lines in (("- [ ] D4 not in the grammar",), ("```", _D_OPEN)):
+        md = render_summary(_gd(*lines, block=["open_decisions"]))
+        blocking = md.partition("**Blocking")[2].partition("**Advisory")[0]
+        assert "- Open decisions in the decisions file: `?`" in blocking
+        assert "AC changed" not in blocking and "no drift" not in blocking and "drift not checked" not in blocking
+
+
+def test_gate_reads_decisions_file_confined_and_key_absent_without_file(cfg, tmp_path):
+    from ado.__main__ import dispatch
+    dod = tmp_path / "dod"
+    dod.mkdir()
+    (dod / "DoD_7.md").write_text(_ledger_for("x"))
+    cfg.dod_path = str(dod)
+    cfg.gate["block"] = ["open_decisions"]
+    run = lambda: dispatch(FakeClient(cfg), _args(src=str(tmp_path), offline=True))  # noqa: E731
+    assert "open_decisions" not in run() and run()["blocking"] is False  # no file
+    f = dod / "Decisions_7.md"
+    f.write_text(_dfile(_D_OPEN, _D_VAL))
+    out = run()
+    assert out["open_decisions"] == ["D1"] and out["blocking"] is True and out["blocked_by"] == ["open_decisions"]
+    f.write_text(_dfile(_D_VAL))
+    out = run()
+    assert out["open_decisions"] == [] and out["blocking"] is False
+    f.write_bytes(b"\xff\xfe")  # unreadable text: fail closed
+    assert run()["open_decisions"] == ["?"]
+    f.unlink()
+    outside = tmp_path.parent / (tmp_path.name + "-secret.md")
+    outside.write_text(_dfile(_D_VAL))
+    f.symlink_to(outside)  # a symlink is never followed, even to a harmless file: counted as unreadable
+    out = run()
+    assert out["open_decisions"] == ["?"] and out["blocking"] is True
+    f.unlink()
+    f.write_text(_dfile(_D_VAL) + "x" * (1 << 20))  # over MAX_READ
+    assert run()["open_decisions"] == ["?"]
+    f.write_text(_dfile(_D_VAL))
+    assert run()["open_decisions"] == []

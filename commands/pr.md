@@ -82,6 +82,8 @@ Fill `templates/pr-body.md` and write it to `.ado/pr-body.md`:
 - **Summary:** what changed and why, from the spec and commits — two to five sentences.
 - `AB#<id>` and a link to the ledger: the absolute, SHA-pinned URL `<ledger_url>` (see **Ledger link** below), never a relative path.
 - AC table from ledger section 3 (copy status and tests; do not upgrade a status).
+- Decisions: when `<dod_path>/Decisions_<id>.md` exists (`ado decisions <id>` lists it), name it next to the ledger and list
+  each open or rejected `D<n>` (id, kind, text) so the reviewer sees what is still unvalidated; copy only lines from that file.
 - Gate and review results from the latest section 4 entries. If the gate logged drift as
   not checked, write "not checked", never "no drift".
 
@@ -158,6 +160,8 @@ example the dir is gitignored): commit the ledger alone and flag it the same way
 git add -- <spec dir from the ledger's Spec dir:> <dod_path>/DoD_<id>.md
 git diff --cached --quiet -- <those two paths> || git commit -m "docs: spec + ledger AB#<id>" -- <those two paths>
 ```
+
+When `<dod_path>/Decisions_<id>.md` exists, add it to both commands (as a third path), so the decisions travel with the spec and the ledger.
 
 Nothing to commit → skip (no empty commit). This is a local commit, so it needs no human
 gate; the push still happens only in the gated apply. If the ledger has no `Spec dir:`,

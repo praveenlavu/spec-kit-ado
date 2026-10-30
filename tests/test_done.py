@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -368,3 +369,141 @@ def test_cli_unreachable_story_on_a_dry_run_just_omits_already_done(tmp_path, mo
     monkeypatch.setattr(m.workitems, "get", lambda *a, **k: (_ for _ in ()).throw(m.AdoError("nope")))
     assert m.main(["done", "1001"]) == 1
     assert "already_done" not in json.loads(capsys.readouterr().out)
+
+
+# ---- V3-5b: Decisions_<id>.md is attached next to the ledger when it exists ----
+def _rel(name):
+    return {"rel": "AttachedFile", "url": f"https://x/_apis/wit/attachments/g?fileName={name}", "attributes": {"name": name}}
+
+
+def _wi_with(state, *names):
+    return {"fields": {"System.State": state}, "relations": [_rel(n) for n in names]}
+
+
+def _decisions_file(tmp_path):
+    p = tmp_path / "dod" / "Decisions_1001.md"
+    p.parent.mkdir(exist_ok=True)
+    p.write_text("# Decisions — US1001\n", encoding="utf-8")
+    return p
+
+
+def test_done_attaches_decisions_file_once_and_plan_lists_it(tmp_path, monkeypatch, capsys, cfg):
+    ready = {"ready": True, "unticked": []}
+    led, dec = _ledger_file(tmp_path, "- [x] a"), _decisions_file(tmp_path)
+    # plan: both files, ledger first, then the state
+    p = done.render_plan(1001, ready, cfg, _wi_with("Active"), decisions=dec)
+    led_cell = str(Path("dod") / "DoD_1001.md")  # the plan names the ledger from config.dod_path
+    assert f"1. attach {led_cell}" in p and f"2. attach {dec}" in p and "3. set state to Done" in p
+    # the ledger is attached already: only the decisions file and the state remain
+    p = done.render_plan(1001, ready, cfg, _wi_with("Active", "DoD_1001.md"), decisions=dec)
+    assert f"1. attach {dec}" in p and led_cell not in p and "2. set state to Done" in p
+    # both attached: only the state
+    p = done.render_plan(1001, ready, cfg, _wi_with("Active", "DoD_1001.md", "Decisions_1001.md"), decisions=dec)
+    assert "1. attach" not in p and "will only set state to Done" in p
+    # closed by hand with the decisions file missing: attach it, no state change
+    p = done.render_plan(1001, ready, cfg, _wi_with("Done", "DoD_1001.md"), decisions=dec)
+    assert f"1. attach {dec}" in p and "set state" not in p and "nothing to do" not in p.lower()
+    assert "nothing to do" in done.render_plan(1001, ready, cfg, _wi_with("Done", "DoD_1001.md", "Decisions_1001.md"),
+                                               decisions=dec).lower()
+    # apply: both uploaded in order, then the state
+    c = FakeClient(cfg, responses=[{"url": "u1"}, {}, {"url": "u2"}, {}, {}])
+    res = done.apply(c, 1001, led, _wi_with("Active"), decisions=dec)
+    assert [x["method"] for x in c.calls] == ["POST", "PATCH", "POST", "PATCH", "PATCH"]
+    assert [a["path"] for a in res["attached"]] == [str(led), str(dec)] and res["state"] == "Done"
+    # idempotent: attached by name -> skipped; a second apply writes nothing
+    c = FakeClient(cfg)
+    res = done.apply(c, 1001, led, _wi_with("Done", "DoD_1001.md", "Decisions_1001.md"), decisions=dec)
+    assert c.calls == [] and res["skipped"] == "already done"
+    c = FakeClient(cfg, responses=[{"url": "u"}, {}, {}])
+    done.apply(c, 1001, led, _wi_with("Active", "DoD_1001.md"), decisions=dec)  # only the decisions file uploaded
+    assert [x["method"] for x in c.calls] == ["POST", "PATCH", "PATCH"] and "Decisions_1001.md" in c.calls[0]["path"]
+
+
+def test_done_decisions_file_uses_the_attach_safety_rules(tmp_path, cfg):
+    led, dec = _ledger_file(tmp_path, "- [x] a"), _decisions_file(tmp_path)
+    cfg.attachments_allow = [".txt"]  # neither is allowed: refused, and the story is not moved
+    c = FakeClient(cfg)
+    res = done.apply(c, 1001, led, _wi_with("Active"), decisions=dec)
+    assert [f["path"] for f in res["failed"]] == [str(led), str(dec)] and res["state"] is None and c.calls == []
+
+
+def test_done_cli_decisions_file_attached_and_reported(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "- [x] a")
+    dec = _decisions_file(tmp_path)
+    m, fake = _env(tmp_path, monkeypatch, [_wi_with("Active", "DoD_1001.md")])
+    assert m.main(["done", "1001", "--plan-out", "p.md"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["decisions_file"] == str(Path("dod") / "Decisions_1001.md")
+    assert f"1. attach {Path('dod') / 'Decisions_1001.md'}" in (tmp_path / "p.md").read_text()
+    assert [c["method"] for c in fake["c"].calls] == ["GET"]
+    m, fake = _env(tmp_path, monkeypatch, [_wi_with("Active", "DoD_1001.md"), {"url": "u"}, {}, {}])
+    assert m.main(["done", "1001", "--apply", "--expect-plan", "p.md"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert [a["path"] for a in out["attached"]] == [str(Path("dod") / "Decisions_1001.md")] and out["state"] == "Done"
+    assert dec.exists()
+
+
+def test_done_without_file_unchanged(tmp_path, monkeypatch, capsys, cfg):
+    ready = {"ready": True, "unticked": []}
+    for state, names, text in (("Active", (), "1. attach"), ("Active", ("DoD_1001.md",), "ledger already attached"),
+                               ("Done", (), "ledger not attached yet"), ("Done", ("DoD_1001.md",), "nothing to do")):
+        assert done.render_plan(1001, ready, cfg, _wi_with(state, *names)) == done.render_plan(
+            1001, ready, cfg, _wi_with(state, *names), decisions=None)
+        assert text in done.render_plan(1001, ready, cfg, _wi_with(state, *names)).lower()
+    _write(tmp_path, "- [x] a")
+    m, fake = _env(tmp_path, monkeypatch, [_wi_with("Active"), {"url": "u"}, {}, {}])  # each main() builds a fresh client with this queue
+    assert m.main(["done", "1001", "--plan-out", "p.md"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "decisions_file" not in out and "Decisions_" not in (tmp_path / "p.md").read_text()
+    assert m.main(["done", "1001", "--apply"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "decisions_file" not in out and [a["path"] for a in out["attached"]] == [str(Path("dod") / "DoD_1001.md")]
+    assert not any("Decisions_" in str(c) for c in fake["c"].calls)
+
+
+# ---- V3-5b fix round 1: a symlinked ledger or decisions file is never read or uploaded ----
+def _outside_secret(tmp_path):
+    out = tmp_path.parent / (tmp_path.name + "-outside")
+    out.mkdir()
+    (out / "secret.md").write_text("TOPSECRET\n")
+    return out / "secret.md"
+
+
+@pytest.mark.parametrize("target", ["outside", "inside"])
+def test_done_never_uploads_a_symlinked_decisions_file(tmp_path, monkeypatch, capsys, target):
+    _write(tmp_path, "- [x] a")
+    dec = tmp_path / "dod" / "Decisions_1001.md"
+    real = _outside_secret(tmp_path) if target == "outside" else tmp_path / "dod" / "real.md"
+    if target == "inside":
+        real.write_text("# Decisions\n")
+    dec.symlink_to(real)
+    m, fake = _env(tmp_path, monkeypatch, [_wi_with("Active", "DoD_1001.md"), {"url": "u"}, {}, {}])
+    for argv in (["done", "1001", "--plan-out", "p.md"], ["done", "1001", "--apply"]):
+        assert m.main(argv) == 2
+        err = capsys.readouterr().err
+        assert "decisions file" in err and "TOPSECRET" not in err and "secret.md" not in err
+        assert fake["c"].calls == []  # not even the story read
+    assert not (tmp_path / "p.md").exists()
+
+
+def test_done_never_uploads_a_symlinked_ledger(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, "- [x] a")
+    led = tmp_path / "dod" / "DoD_1001.md"
+    real = tmp_path / "dod" / "real_ledger.md"
+    real.write_text(led.read_text())  # a perfectly ready ledger, reached through a link
+    led.unlink()
+    led.symlink_to(real)
+    m, fake = _env(tmp_path, monkeypatch, [{}, {"url": "u"}, {}, {}])
+    assert m.main(["done", "1001", "--apply"]) == 2
+    assert "ledger" in capsys.readouterr().err and fake["c"].calls == []
+    led.unlink()
+    led.symlink_to(_outside_secret(tmp_path))
+    assert m.main(["done", "1001", "--apply"]) == 2 and fake["c"].calls == []
+
+
+def test_done_refuses_a_decisions_file_that_is_not_utf8(tmp_path, monkeypatch):
+    _write(tmp_path, "- [x] a")
+    dec = tmp_path / "dod" / "Decisions_1001.md"
+    dec.write_bytes(b"\xff\xfe")
+    m, fake = _env(tmp_path, monkeypatch, [_wi_with("Active", "DoD_1001.md"), {}])
+    assert m.main(["done", "1001", "--apply"]) == 2 and fake["c"].calls == []

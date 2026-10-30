@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from . import comments, workitems
-from .dod import DECISIONS_HEADING as HEADING, _esc, _section2_at, _text, _visible, section
+from .dod import _esc, _text, _visible
 
 KINDS = ("decision", "assumption", "override")
 _OPEN = "_(open)_"
@@ -22,13 +22,26 @@ MAX_LINE = 2000  # a longer D line is malformed: the regexes below backtrack qua
 _POSTED = re.compile(r"(\d+):([0-9a-f]{8})")
 
 
+def decisions_file(dod_dir, story_id):
+    """`<dod_path>/Decisions_<id>.md`: every assumption and decision of a story, one `D<n>` line each."""
+    return Path(dod_dir) / f"Decisions_{story_id}.md"
+
+
+def render_file(story_id):
+    """A new decisions file: a title and a format note. The note is a code span inside a paragraph, so it does not
+    parse as a decision line (`parse_decisions` only reads lines that start with a checkbox)."""
+    return (f"# Decisions — US{story_id}\n\n"
+            "Format, one line each: `- [ ] D1: <text> → _(open)_ · kind: decision · why: <reason>`; "
+            "a human records the outcome.\n\n")
+
+
 def line_hash(text):
     """First 8 hex of sha256 of the text with whitespace collapsed: an edited line no longer matches its `posted:` marker."""
     return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()[:8]
 
 
 def _line(raw):
-    """One ledger line -> the decision dict, or None when it is a `D` line that breaks the grammar."""
+    """One file line -> the decision dict, or None when it is a `D` line that breaks the grammar."""
     m = _CAND.match(raw)
     c = _COLON.match(m.group(3)) if m else None
     if not c:
@@ -60,17 +73,17 @@ def _line(raw):
             "used": kv.get("used", "")}
 
 
-def has_decision_lines(ledger_md):
-    """True when section 2 has a `D<n>` checkbox line outside fences and comments, well-formed or not."""
-    return any(_CAND.match(ln) for ln in _visible(section(ledger_md, 2) or "")[0].splitlines())
+def has_decision_lines(md):
+    """True when the decisions file has a `D<n>` checkbox line outside fences and comments, well-formed or not."""
+    return any(_CAND.match(ln) for ln in _visible(md)[0].splitlines())
 
 
-def parse_decisions(ledger_md):
-    """Ledger section 2 -> {'open': [...], 'validated': [...], 'rejected': [...], 'unparsed': bool}. Lines inside code
+def parse_decisions(md):
+    """The decisions file -> {'open': [...], 'validated': [...], 'rejected': [...], 'unparsed': bool}. Lines inside code
     fences or <!-- --> comments are ignored; the first line of a duplicate id wins. `unparsed` is true when a `D` line
-    breaks the grammar (it is left out) or a fence or comment is left open in section 2. No section 2 -> all empty."""
+    breaks the grammar (it is left out) or a fence or comment is left open. Empty text -> all empty."""
     out = {"open": [], "validated": [], "rejected": []}
-    body, out["unparsed"] = _visible(section(ledger_md, 2) or "")
+    body, out["unparsed"] = _visible(md)
     seen = set()
     for raw in body.splitlines():
         if not _CAND.match(raw):  # linear: only the `- [ ] D<n>` prefix is matched here
@@ -85,7 +98,7 @@ def parse_decisions(ledger_md):
 
 
 def render_line(d):
-    """The exact ledger line for a decision; `parse_decisions` reads it back unchanged."""
+    """The exact file line for a decision; `parse_decisions` reads it back unchanged."""
     if d["status"] == "open":
         parts = [f"- [ ] {d['id']}: {d['text']} → {_OPEN}", f"kind: {d['kind']}", f"why: {d['why']}"]
     else:
@@ -142,24 +155,21 @@ def render_plan(work_item_id, plan, unparsed=False):
              "Action: " + ("ADD a new comment (a decisions comment is never edited)" if plan["action"] == "add"
                            else "no unposted decisions; nothing to post"), ""]
     if unparsed:
-        lines += ["Note: a decision line breaks the grammar or section 2 has an unclosed fence or comment; "
+        lines += ["Note: a decision line breaks the grammar or the decisions file has an unclosed fence or comment; "
                   "those lines are not included.", ""]
     if plan["cut"]:
         lines += [f"Note: {', '.join(plan['cut'])} cut to {MAX_COMMENT_LINE} characters (…).", ""]
     if plan["action"] == "add":
         lines += ["Comment text:", ""] + [f"> {_esc(x)}" for x in _text(plan["html"]).splitlines()] + [""]
-        lines += [f"After posting, {', '.join(plan['lines'])} get ` · posted: <comment id>:<hash>` in the ledger.", ""]
+        lines += [f"After posting, {', '.join(plan['lines'])} get ` · posted: <comment id>:<hash>` in the decisions file.", ""]
     return "\n".join(lines)
 
 
 def _marked(md, hashes, comment_id):
-    """The ledger text with ` · posted: <comment_id>:<hash8>` on exactly the lines in `hashes` ({id: hash8});
+    """The decisions file text with ` · posted: <comment_id>:<hash8>` on exactly the lines in `hashes` ({id: hash8});
     ValueError when one of them is missing or edited since the plan."""
-    body = section(md, 2) or ""
-    start = md.find(body, _section2_at(md)) if body else -1
-    vis = _visible(body)[0].split("\n")
     out, todo = [], dict(hashes)
-    for raw, v in zip(body.splitlines(keepends=True), vis):
+    for raw, v in zip(md.splitlines(keepends=True), _visible(md)[0].split("\n")):
         text = raw.splitlines()[0]  # splitlines also ends a line at U+2028, \x0c, \x85, \x1c: keep that terminator
         eol = raw[len(text):]
         d = _line(v) if _CAND.match(v) and len(v) <= MAX_LINE else None
@@ -173,28 +183,31 @@ def _marked(md, hashes, comment_id):
             raw = f"{text} · posted: {comment_id}:{line_hash(d['text'])}{eol}"
         out.append(raw)
     if todo:
-        raise ValueError(f"the ledger changed since the plan ({', '.join(sorted(todo))}); nothing posted")
-    return md[:start] + "".join(out) + md[start + len(body):]
+        raise ValueError(f"the decisions file changed since the plan ({', '.join(sorted(todo))}); nothing posted")
+    return "".join(out)
 
 
 def _atomic_write(path, text):
-    """Write `text` over `path` through a uniquely named temp file in the same directory (mode kept), then os.replace."""
+    """Write `text` over `path` through a uniquely named temp file in the same directory (mode kept, 0644 for a new
+    file), then os.replace."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(text)
-        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode))
+        os.chmod(tmp, stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644)
         os.replace(tmp, path)
     finally:
         Path(tmp).unlink(missing_ok=True)
 
 
-def apply_post(client, work_item_id, plan, ledger_path):
-    """Post exactly the planned comment once, then mark its lines in the ledger (tmp file + os.replace), re-reading
-    the ledger after the post. A no-op for none. The ledger is checked before the post, so a changed line posts nothing."""
+def apply_post(client, work_item_id, plan, file_path):
+    """Post exactly the planned comment once, then mark its lines in the decisions file (tmp file + os.replace),
+    re-reading the file after the post. A no-op for none. The file is checked before the post, so a changed line
+    posts nothing."""
     if plan["action"] != "add":
         return {}
-    path = Path(ledger_path)
+    path = Path(file_path)
 
     def read():
         with path.open(encoding="utf-8", newline="") as f:
@@ -208,25 +221,25 @@ def apply_post(client, work_item_id, plan, ledger_path):
         _atomic_write(path, _marked(read(), plan["hashes"], cid))
     except (OSError, ValueError) as e:
         pairs = "; ".join(f"{i}: · posted: {cid}:{h}" for i, h in plan["hashes"].items())
-        raise ValueError(f"comment {cid} was posted but the ledger could not be updated ({e}); "
+        raise ValueError(f"comment {cid} was posted but the decisions file could not be updated ({e}); "
                          f"append to the lines by hand: {pairs}")
     return {"comment_id": cid}
 
 
 _BY = re.compile(r"[A-Za-z0-9 ]{1,40}")
 MAX_NOTE = 300
-_MARKUP = re.compile(r"<!--|-->|`{3}|~{3}")  # would open or close a comment or fence in the ledger
+_MARKUP = re.compile(r"<!--|-->|`{3}|~{3}")  # would open or close a comment or fence in the decisions file
 
 
 def _ids(parsed):
     return {d["id"]: d["status"] for k in ("open", "validated", "rejected") for d in parsed[k]}
 
 
-def resolve(ledger_md, d_id, status, by, note, force=False):
-    """The ledger text with the first `d_id` line rewritten as validated|rejected; its kind, why, posted and used
+def resolve(md, d_id, status, by, note, force=False):
+    """The file text with the first `d_id` line rewritten as validated|rejected; its kind, why, posted and used
     markers and its line ending are kept, every other byte is unchanged. A line that is already resolved needs `force`.
     ValueError for a bad status, role or note, an unknown id, a line holding an inline comment, or a result that
-    `parse_decisions` would not read back the same over the whole ledger."""
+    `parse_decisions` would not read back the same over the whole file."""
     by, note = by.strip(), note.strip()
     if status not in ("validated", "rejected"):
         raise ValueError("the status must be validated or rejected")
@@ -235,10 +248,8 @@ def resolve(ledger_md, d_id, status, by, note, force=False):
     if len(note) > MAX_NOTE or _CTRL.search(note) or _MARKUP.search(note):
         raise ValueError(f"--note must be at most {MAX_NOTE} characters with no control characters, line breaks, "
                          "`<!--`, `-->` or code fences")
-    body = section(ledger_md, 2) or ""
-    start = ledger_md.find(body, _section2_at(ledger_md)) if body else -1
     out, found = [], False
-    for raw, v in zip(body.splitlines(keepends=True), _visible(body)[0].split("\n")):
+    for raw, v in zip(md.splitlines(keepends=True), _visible(md)[0].split("\n")):
         d = _line(v) if not found and _CAND.match(v) and len(v) <= MAX_LINE else None
         if d and d["id"] == d_id:
             found = True
@@ -254,29 +265,82 @@ def resolve(ledger_md, d_id, status, by, note, force=False):
             raw = line + raw[len(raw.splitlines()[0]):]  # splitlines also ends a line at U+2028, \x0c, \x85, \x1c
         out.append(raw)
     if not found:
-        raise ValueError(f"no decision {d_id} in the ledger (see `ado decisions <id>`)")
-    new_md = ledger_md[:start] + "".join(out) + ledger_md[start + len(body):]
-    a, b = ledger_md.splitlines(keepends=True), new_md.splitlines(keepends=True)
-    before, after = parse_decisions(ledger_md), parse_decisions(new_md)
+        raise ValueError(f"no decision {d_id} in the decisions file (see `ado decisions <id>`)")
+    new_md = "".join(out)
+    a, b = md.splitlines(keepends=True), new_md.splitlines(keepends=True)
+    before, after = parse_decisions(md), parse_decisions(new_md)
     if (len(a) != len(b) or sum(x != y for x, y in zip(a, b)) != 1 or after["unparsed"] != before["unparsed"]
             or _ids(after) != {**_ids(before), d_id: status}):
-        raise ValueError(f"the rewrite of {d_id} would change more than that line or break the ledger; nothing written")
+        raise ValueError(f"the rewrite of {d_id} would change more than that line or break the file; nothing written")
     return new_md
 
 
-def apply_resolve(ledger_path, d_id, status, by, note, force=False):
-    """Rewrite one line of the ledger in place (unique temp file + os.replace). Refuses when the ledger changed
-    between the read and the write."""
-    path = Path(ledger_path)
+def _read(path):
+    with path.open(encoding="utf-8", newline="") as f:
+        return f.read()
 
-    def read():
-        with path.open(encoding="utf-8", newline="") as f:
-            return f.read()
+
+def apply_resolve(file_path, d_id, status, by, note, force=False):
+    """Rewrite one line of the decisions file in place (unique temp file + os.replace). Refuses when the file changed
+    between the read and the write."""
+    path = Path(file_path)
     try:
-        md = read()
+        md = _read(path)
         new = resolve(md, d_id, status, by, note, force)
-        if read() != md:
-            raise ValueError("the ledger changed while resolving; nothing written, run it again")
+        if _read(path) != md:
+            raise ValueError("the decisions file changed while resolving; nothing written, run it again")
         _atomic_write(path, new)
     except (OSError, UnicodeError) as e:
-        raise ValueError(f"cannot update the ledger {path} ({e.__class__.__name__}: {e}); nothing written")
+        raise ValueError(f"cannot update the decisions file {path} ({e.__class__.__name__}: {e}); nothing written")
+
+
+MAX_TEXT = 1500
+_ADD_KINDS = ("decision", "assumption")  # `override` is only created by the strict override command
+
+
+def add(md, kind, text, why=""):
+    """(the file text with one new open `D<n>` line appended, "D<n>"). n = highest id in the file + 1 (a malformed or
+    duplicate line still counts), grammar-exact. @mentions and addresses are replaced as in a posted comment.
+    ValueError (never echoing the text) for a bad kind, a text of 0 or over MAX_TEXT characters, a why over MAX_NOTE,
+    control characters, line breaks, `<!--`, `-->`, code fences, or a line that would not read back (so a file with an
+    unclosed fence or comment, which would hide the new line, is refused too)."""
+    if kind not in _ADD_KINDS:
+        raise ValueError("--kind must be decision or assumption")
+    for name, v in (("the text", text), ("--why", why)):  # before strip(), which would drop a trailing line break
+        if _CTRL.search(v) or _MARKUP.search(v):
+            raise ValueError(f"{name} must not contain control characters, line breaks, `<!--`, `-->` or code fences")
+    text, why = _scrub(text.strip()), _scrub(why.strip()) or "unspecified"
+    if not 1 <= len(text) <= MAX_TEXT:
+        raise ValueError(f"the text must be 1 to {MAX_TEXT} characters")
+    if len(why) > MAX_NOTE:
+        raise ValueError(f"--why must be at most {MAX_NOTE} characters")
+    nums = [int(n) for n in re.findall(r"(?m)^[ \t]*(?:<!--[ \t]*)?(?:[-*+][ \t]+)?\[[ xX]\][ \t]*D(\d+)", md)]  # raw text: an id inside a comment or fence is taken too
+    d_id = f"D{max(nums, default=0) + 1}"
+    new = {"id": d_id, "kind": kind, "text": text, "why": why, "status": "open", "by": "", "note": "",
+           "posted": None, "used": ""}
+    line = render_line(new)
+    eol = "\r\n" if "\r\n" in md else "\n"
+    new_md = md + ("" if not md or md.endswith(("\n", "\r")) else eol) + line + eol
+    before, after = parse_decisions(md), parse_decisions(new_md)
+    if len(line) > MAX_LINE or _line(line) != new or _ids(after) != {**_ids(before), d_id: "open"} \
+            or after["unparsed"] != before["unparsed"]:
+        raise ValueError("the line would not read back from the decisions file (a text or --why holding ` · kind:`-style "
+                         "markers or `→ validated`, or an unclosed code fence or comment in the file); nothing written")
+    return new_md, d_id
+
+
+def apply_add(file_path, story_id, kind, text, why=""):
+    # shortcut: two concurrent --add runs can lose a line (no lock); fine for a local human/agent command, add a lock if parallel agents write
+    """Append one `D<n>` line, creating the file from `render_file` when it is missing (unique temp file + os.replace).
+    Refuses when the file changed or appeared between the read and the write. Returns the new id."""
+    path = Path(file_path)
+    try:
+        exists = path.exists()
+        md = _read(path) if exists else render_file(story_id)
+        new, d_id = add(md, kind, text, why)
+        if path.exists() != exists or (exists and _read(path) != md):
+            raise ValueError("the decisions file changed while adding; nothing written, run it again")
+        _atomic_write(path, new)
+    except (OSError, UnicodeError) as e:
+        raise ValueError(f"cannot update the decisions file {path} ({e.__class__.__name__}: {e}); nothing written")
+    return d_id
