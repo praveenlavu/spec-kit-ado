@@ -881,8 +881,32 @@ def test_strict_override_fix_round_documented():
     flat = _flat("README.md")
     assert "The checks still need the red and green commits" not in flat
     assert "after the branch is deleted and its commits are garbage-collected" in flat and "from L1 it keeps only `evidence-missing`" in flat
-    assert "**no verb calls it yet**" in flat and "**never checked against ADO**" in flat
+    assert "`pr create --apply` and `done --apply` stamp" in flat and "**never checked against ADO**" in flat
     assert "optional, written by the agent, and can only add a refusal" in flat and "a detached `HEAD`" in flat
     assert "repeats an id" in flat and "every validated `kind: override` line" in flat and "e-mail address or an `@mention` (exit 2)" in flat
     assert "validated override lines" in _flat("rules/hitl.md") and "validated override line" in _flat("AGENTS.md")
     assert "git-free `evidence-missing`" in _flat("CHANGELOG.md") and "`decisions-invalid`" in _flat("CHANGELOG.md")
+
+
+def test_strict_wiring_into_pr_done_and_gate_documented():
+    readme = _flat("README.md")
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `strict check <id>"))
+    assert "[--base REF] [--head REF]" in row and "`base-unknown`" in row and "`not-in-range`" in row and "a detached checkout works" in row
+    assert "**What `pr create` and `done` refuse.**" in readme and "`error: strict check failed: " in readme
+    assert "before a plan file, a push, a request or a comment" in readme and "`ado gate` blocks on the strict default checks" in readme
+    assert "needs the merged working tree to contain the ledger and `Decisions_<id>.md`" in readme
+    assert "stamp ` · used: <date>`" in readme and "before it sends anything" in readme
+    for doc in ("AGENTS.md", "CHANGELOG.md", "docs/configuration.md", "rules/hitl.md"):
+        assert "`base-unknown`" in _flat(doc) or "run the strict check themselves" in _flat(doc) or "also run themselves" in _flat(doc) or "effective lists" in _flat(doc), doc
+    assert "--head <head branch> --base <base ref>" in _flat("commands/pr.md") and "stamps `used`" in _flat("commands/pr.md")
+    assert "runs the same check itself" in _flat("commands/done.md") and "merged ledger and `Decisions_<id>.md`" in _flat("commands/done.md")
+    assert "Strict mode wired into the verbs" in _flat("CHANGELOG.md") and "`decisions.stamp_used`" in _flat("CHANGELOG.md")
+    assert "nothing calls `decisions.stamp_used` yet" not in _flat("CHANGELOG.md")
+
+
+def test_strict_stamp_is_an_uncommitted_change_documented():
+    for doc in ("README.md", "commands/pr.md", "commands/done.md"):
+        assert "uncommitted" in _flat(doc) and "commit" in _flat(doc), doc
+    assert "commit the stamped decisions file" in _flat("README.md") and "commit the stamped decisions file" in _flat("commands/pr.md")
+    assert "defaults to the branch `origin/HEAD` points at" in _flat("README.md") and "never a tag" in _flat("README.md")
+    assert "origin/HEAD" in _flat("CHANGELOG.md") and "never a tag" in _flat("CHANGELOG.md") and "`--head` that is not the checked-out commit" in _flat("README.md")

@@ -32,9 +32,66 @@ def _finding(rule, detail, fix):
     return {"rule": rule, "detail": detail, "fix": fix}
 
 
+class Refused(ValueError):
+    """A strict check that found something: `ado pr create` and `ado done` exit 2 with these findings (`.check`) before they write or send."""
+
+    def __init__(self, check):
+        self.check = check
+        super().__init__("strict check failed: " + "; ".join(f"{f['rule']} ({f['fix']})" for f in check["findings"]))
+
+
+def require(check):
+    """The check result when it is ok, else raises Refused."""
+    if not check["ok"]:
+        raise Refused(check)
+    return check
+
+
+def _rev(repo, rev):
+    return (_out(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{rev}^{{commit}}") or b"").decode().strip()
+
+
+def base_ref(repo, base):
+    """The full ref the PR range starts at: `refs/remotes/origin/<base>` when it exists (a CI checkout has no local branch), else
+    `refs/heads/<base>`, else `<base>` unchanged (then unresolvable). Never a short name, so a tag cannot stand in for it."""
+    return next((ref for ref in (f"refs/remotes/origin/{base}", f"refs/heads/{base}") if _rev(repo, ref)), base)
+
+
+def default_base(repo):
+    """`strict check --phase pr` without --base: the full ref `origin/HEAD` points at (`refs/remotes/origin/<b>`), or "" when it is not set."""
+    out = _out(repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD")
+    return out.decode("utf-8", "replace").strip() if out else ""
+
+
+def _resolve_base(repo, base):
+    """Full commit id of `--base REF`: `refs/remotes/<REF>`, then `refs/heads/<REF>`, then a full 40-hex commit id (or a full
+    `refs/heads/` or `refs/remotes/` name). Never a tag or a short name: a tag named like a branch must not move the range. "" when none."""
+    if base.startswith(("refs/heads/", "refs/remotes/")):
+        return _rev(repo, base)
+    full = _rev(repo, f"refs/remotes/{base}") or _rev(repo, f"refs/heads/{base}")
+    return full or (_commit(repo, base) or "" if re.fullmatch(r"[0-9a-f]{40}", base) else "")
+
+
+def head_is_checkout(repo, head):
+    """True when the local branch `head` is the commit HEAD is at: strict mode judges the working-tree ledger and decisions file."""
+    full = _rev(repo, f"refs/heads/{head}")
+    return bool(full) and full == _rev(repo, "HEAD")
+
+
 class _Ctx:
-    def __init__(self, client, story_id, repo, phase=None, head="HEAD"):
+    def __init__(self, client, story_id, repo, phase=None, head="HEAD", base=None, push=False):
         self.client, self.id, self.repo, self.cfg, self.phase, self.head = client, story_id, repo, client.config, phase, head
+        self.push, self.base = push, base
+        self.base_full = _resolve_base(repo, base) if base is not None else ""  # "" = no base given, or one that is no commit here
+        # `head` is HEAD, a branch (`pr create --head`) or a commit id (CI): review_head is what prs.review_blocks is given, rev the
+        # commit L1 and the record are judged at. A hex id that is no branch becomes the full SHA (resolved by object id, never by a tag).
+        self.review_head, self.rev, self.at_commit = head, head, False
+        if head != "HEAD":
+            full = _rev(repo, f"refs/heads/{head}")
+            if not full and re.fullmatch(_HEX, head):
+                full = _commit(repo, head) or ""
+                self.review_head, self.at_commit = full or head, bool(full)
+            self.rev = full or head
         self.ledger = gate._read(Path(repo) / dod.dod_file(self.cfg.dod_path, story_id), repo, set())
         spec_dir = dod.ledger_spec_dir(self.ledger) if self.ledger is not None else None
         self.spec_dir = spec_dir.strip() or None if spec_dir else None  # a CRLF ledger leaves `\r` on the header value
@@ -288,12 +345,21 @@ def _rows_missing(rows, ac_count):
             for n in range(1, ac_count + 1) if f"AC-{n}" not in have]
 
 
+def _base(c):
+    """`base-unknown`: a base was asked for (`--base`, `pr create --base`) and is no commit here. Never overridable, never a pass."""
+    if c.base is None or c.base_full:
+        return []
+    return [_finding("base-unknown", "the base ref is not a commit in this repository (or git could not be run), so the range of the "
+                     "branch cannot be told", "pass --base <ref> (CI: origin/<target branch>), or fetch the base branch (a full clone, fetch-depth: 0; `git remote set-head origin -a` sets origin/HEAD)")]
+
+
 def _l1(c):
     if c.ledger is None:
         return []  # reported by _ledger
     tests = {**gate.DEFAULT_TESTS, **c.cfg.gate["tests"]}
-    return check_l1(gate.parse_section3(c.ledger), c.repo, "HEAD", tests, c.cfg.dod_path, c.spec_dir,
-                    c.id, len(dod.ac_lines(c.ledger)))
+    rows = gate.parse_section3(c.ledger)
+    return check_l1(rows, c.repo, c.rev, tests, c.cfg.dod_path, c.spec_dir, c.id, len(dod.ac_lines(c.ledger))) \
+        + (_range_findings(rows, c.repo, c.base_full) if c.base_full else [])  # red and green must lie in base..head
 
 
 def _evidence(c):
@@ -410,7 +476,7 @@ def validate_record(ledger_md, rows, repo, head, dod_path, spec_dir, story_id, b
 def _record(c):
     if c.ledger is None:
         return []  # reported by _ledger
-    return validate_record(c.ledger, gate.parse_section3(c.ledger), c.repo, "HEAD", c.cfg.dod_path, c.spec_dir, c.id)
+    return validate_record(c.ledger, gate.parse_section3(c.ledger), c.repo, c.rev, c.cfg.dod_path, c.spec_dir, c.id)
 
 
 def _record_done(c):
@@ -485,7 +551,8 @@ def _review(c):
     reason it returns can quote PR text, so the finding carries a fixed text: re-run the PR preview for the exact one."""
     if c.ledger is None:
         return []  # reported by _ledger
-    why = prs.review_blocks(c.id, c.cfg.effective_review_block_on(), c.head, c.cfg.dod_path, c.repo, squash=c.phase == "done")
+    why = prs.review_blocks(c.id, c.cfg.effective_review_block_on(), c.review_head, c.cfg.dod_path, c.repo, push=c.push,
+                           squash=c.phase == "done", at_commit=c.at_commit)
     if why is None:
         return []
     if why.startswith("no review logged"):
@@ -563,7 +630,7 @@ def _fidelity(c, stale):
         out.append(_finding("fidelity-fails", f"{len(fails)} AC(s) whose test does not assert the stated behaviour: "
                             f"{', '.join(sorted(fails, key=lambda a: int(a[3:])))}",
                             "make the test assert the AC's stated behaviour (a new red then green), then " + _FIDELITY_FIX))
-    if stale and (why := _record_stale(c.repo, c.head, f["block"]["sha"], c.cfg.dod_path, c.spec_dir, c.id)):
+    if stale and (why := _record_stale(c.repo, c.rev, f["block"]["sha"], c.cfg.dod_path, c.spec_dir, c.id)):
         out.append(_finding("fidelity-stale", f"the AC fidelity verdicts are stale: {why}", _FIDELITY_FIX))
     return out
 
@@ -587,7 +654,7 @@ def _fidelity_warnings(c):
 
 PHASES = {
     "implement": [_ledger, _spec_files, _placeholders, _open_questions, _board, _test_command],
-    "pr": [_ledger, _l1, _record, _decisions_pr, _review, _fidelity_pr],
+    "pr": [_ledger, _base, _l1, _record, _decisions_pr, _review, _fidelity_pr],
     "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _review, _fidelity_done],
 }
 
@@ -610,14 +677,16 @@ def overrides(c):
     return out
 
 
-def check(client, story_id, phase, repo=".", head="HEAD"):
-    """Read-only. `overrides_used`: the ids of the override lines that let a finding through (the apply paths stamp them used)."""
+def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False):
+    """Read-only. `overrides_used`: the ids of the override lines that let a finding through (the apply paths stamp them used).
+    `head`: HEAD, a branch or a commit id; `base` (pr): the ref the PR targets, red and green must lie in base..head; `push`: as
+    `pr create --push` (the remote head is not compared)."""
     if phase not in PHASES:
         raise ValueError(f"unknown phase (valid: {', '.join(PHASES)})")
     mode = client.config.mode
     if mode != "strict":
         return {"phase": phase, "mode": mode, "ok": True, "findings": [], "note": "mode is advisory"}
-    ctx = _Ctx(client, story_id, repo, phase, head)
+    ctx = _Ctx(client, story_id, repo, phase, head, base, push)
     cover = overrides(ctx)
     findings, used = [], set()
     for f in (f for rule in PHASES[phase] for f in rule(ctx)):

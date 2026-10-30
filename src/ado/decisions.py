@@ -424,3 +424,10 @@ def stamp_used(md, ids, date):
     if todo:
         raise ValueError(f"no such decision in the decisions file: {', '.join(sorted(todo))}")
     return "".join(out)
+
+
+def apply_stamp(file_path, story_id, ids):
+    """Stamp `used: <today>` on the override lines in `ids` (an apply path that relied on them, just before it sends). Same write as
+    `apply_add`: temp file + os.replace, whole-file read-back, ValueError (nothing written) on any failure."""
+    from datetime import date
+    return _apply(file_path, story_id, lambda md: (stamp_used(md, ids, date.today().isoformat()), None))

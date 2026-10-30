@@ -206,34 +206,40 @@ _SEVERITY = re.compile(r"^- \*\*Confirmed by severity:\*\*(.*)$", re.M)
 _RERUN = " — re-run speckit.ado.review"
 
 
-def review_blocks(work_item_id, block_on, head, dod_path, repo=".", push=False, squash=False):
+def review_blocks(work_item_id, block_on, head, dod_path, repo=".", push=False, squash=False, at_commit=False):
     """Why `ado pr create` must refuse under `review_block_on`, or None. Empty block_on → None
     (advisory). Blocking is opted into, so missing info (no review, no git, unknown head) refuses.
     The ledger is read from the head commit, never the working tree. `squash` (`ado strict check --phase done`): the
     reviewed commit is no ancestor of a squash-merged head, so only the verdict and counts are checked, not the staleness;
-    a detached HEAD is read as the commit it is, without the origin comparison."""
+    a detached HEAD is read as the commit it is, without the origin comparison. `at_commit` (`ado strict check --head <sha>`, CI):
+    `head` is a full commit id, read as that commit, without the origin comparison."""
     if not block_on:
         return None
     try:
-        _check_review(work_item_id, block_on, head, dod_path, repo, push, squash)
+        _check_review(work_item_id, block_on, head, dod_path, repo, push, squash, at_commit)
     except _Refuse as e:
         return str(e)
     return None
 
 
-def _check_review(work_item_id, block_on, head, dod_path, repo, push, squash=False):
+def _check_review(work_item_id, block_on, head, dod_path, repo, push, squash=False, at_commit=False):
     detached = False
+    rev = None  # explicit refs/heads below: a tag named like the branch never shadows it
     if head == "HEAD":  # full ref, not --short: a tag named like the branch makes --short say heads/<name>
         sym = _git(repo, "symbolic-ref", "--quiet", "HEAD")
         detached = squash and sym.returncode == 1  # a CI checkout of the merged commit: there is no branch to compare
-        if not detached:
+        if detached:
+            rev = "HEAD^{commit}"
+        else:
             ref = _text(sym, "HEAD is detached; pass a branch").strip()
             if not ref.startswith("refs/heads/"):
                 raise _Refuse(f"cannot check the review: HEAD points at {ref!r}, not a branch")
             head = ref[len("refs/heads/"):]
-    # explicit refs/heads: a tag named like the branch never shadows it
-    head_sha = _text(_git(repo, "rev-parse", "--verify", "HEAD^{commit}" if detached else f"refs/heads/{head}^{{commit}}"),
-                     f"unknown head {head!r}").strip()
+    elif at_commit:
+        if not re.fullmatch(r"[0-9a-f]{40}", head):
+            raise _Refuse(f"unknown head {head!r}")
+        detached, rev = True, f"{head}^{{commit}}"
+    head_sha = _text(_git(repo, "rev-parse", "--verify", rev or f"refs/heads/{head}^{{commit}}"), f"unknown head {head!r}").strip()
     if not push and not detached:  # without --push the PR opens from the remote branch, so it must be what we check
         r = _git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{head}^{{commit}}")
         if r.returncode == 0 and r.stdout.decode("ascii", "replace").strip() != head_sha:

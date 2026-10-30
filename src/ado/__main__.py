@@ -76,7 +76,15 @@ def _push(client, args):
     return {"parent": args.id, "from": str(path), "applied": args.apply, "ops": ops, **result}
 
 
+def _stamp_used(client, args, ids):
+    """The apply paths, after the strict check passed and just before anything is sent: stamp `used` on the overrides it relied on.
+    A failed write is exit 2 with nothing sent."""
+    if ids:
+        decisions.apply_stamp(decisions.decisions_file(client.config.dod_path, args.id), args.id, ids)
+
+
 def _done(client, args):
+    used = strict.require(strict.check(client, args.id, "done"))["overrides_used"] if client.config.mode == "strict" else []
     path = dod.dod_file(client.config.dod_path, args.id)
     # both files are uploaded: read them as confined as the gate does (no symlink, real path under the working tree, 1 MiB)
     ledger_md = gate._read(path, ".", set()) if os.path.lexists(path) else None
@@ -98,6 +106,8 @@ def _done(client, args):
     known = {"already_done": done._status(work_item, "", client.config.done_state)[0]} if work_item else {}
     dec = dec if os.path.lexists(dec) else None  # attached next to the ledger only when it exists (checked above)
     _plan(args, done.render_plan(args.id, chk, client.config, work_item, dec))
+    if args.apply and chk["ready"]:
+        _stamp_used(client, args, used)
     result = done.apply(client, args.id, path, work_item, dec) if args.apply and chk["ready"] else {}
     return {"id": args.id, "applied": bool(args.apply and chk["ready"]), **chk, **known,
             **({"decisions_file": str(dec)} if dec else {}), **result}
@@ -156,7 +166,13 @@ def _pr(client, args):
             raise ValueError("--title, --body-file, --base and --head are required (or use --from-prepared)")
     prs.check_branch("base", args.base)
     prs.check_branch("head", args.head)
-    if why := prs.review_blocks(args.id, cfg.review_block_on, args.head, cfg.dod_path, push=args.push):
+    used = []
+    if cfg.mode == "strict":  # first: any finding refuses before a plan file, a push or a request
+        if not strict.head_is_checkout(".", args.head):
+            raise ValueError("strict mode judges the working-tree ledger and decisions file: check out the --head branch first")
+        used = strict.require(strict.check(client, args.id, "pr", head=args.head, base=strict.base_ref(".", args.base),
+                                           push=args.push))["overrides_used"]
+    if why := prs.review_blocks(args.id, cfg.effective_review_block_on(), args.head, cfg.dod_path, push=args.push):
         raise ValueError(f"refusing to open a PR: {why}")
     open_ids, tasks_row = _task_status(client, args)
     if open_ids and not args.allow_incomplete:
@@ -171,6 +187,7 @@ def _pr(client, args):
     info = {"applied": args.apply, "host": host, "title": title, "base": args.base, "head": args.head}
     if not args.apply:
         return info
+    _stamp_used(client, args, used)
     if args.push and (pushed := prs.push_branch(args.head)).get("error"):
         return pushed
     if azure:
@@ -188,7 +205,10 @@ def dispatch(client, args):
     if args.command == "strict":
         if args.strict_command == "verify":
             return strict.verify(client, args.id, record=args.record, base=args.base)
-        return strict.check(client, args.id, args.phase)
+        base = args.base
+        if base is None and args.phase == "pr" and client.config.mode == "strict":
+            base = strict.default_base(".")  # "" when origin/HEAD is not set: the finding base-unknown, never a pass
+        return strict.check(client, args.id, args.phase, head=args.head, base=base)
     if args.command == "pr":
         return _pr(client, args)
     if args.command == "done":
@@ -292,7 +312,7 @@ def dispatch(client, args):
         sources = gate.discover_tests(args.src, tests, skipped)
         changed = {f: t for f in (args.changed or []) if (t := gate._read(f, args.src, skipped)) is not None}
         return gate.run_gate(ledger_md, sources, changed, work_item, skipped=len(skipped),
-                             block=client.config.gate["block"], tests=tests, reason=reason,
+                             block=client.config.effective_gate_block(), tests=tests, reason=reason,
                              commits=gate.check_commits(args.src, args.id, getattr(args, "base", None)),
                              decisions_md=decisions_md, decisions_unreadable=unreadable)
     raise SystemExit(2)
@@ -482,6 +502,11 @@ def main(argv=None):
     q = ssub.add_parser("check", help="Check the strict-mode rules of a phase (read-only; exit 2 lists the findings as JSON)")
     q.add_argument("id", type=int, help="story id")
     q.add_argument("--phase", required=True, choices=sorted(strict.PHASES), help="implement, pr or done")
+    q.add_argument("--base", metavar="REF", help="pr: the ref the PR targets, e.g. origin/main (resolved as refs/remotes/REF, refs/heads/REF, "
+                   "then a full commit id, never a tag); red and green must lie in REF..head (an unknown REF is the finding base-unknown; "
+                   "default: the branch origin/HEAD points at)")
+    q.add_argument("--head", metavar="REF", default="HEAD", help="the branch or commit the PR is made from (default HEAD; CI passes the head SHA, "
+                   "so a detached checkout works)")
     q = ssub.add_parser("override", help="A human, in their own terminal, records a `kind: override` decision that lets ONE strict rule pass for "
                         "this story (a local write of Decisions_<id>.md; refuses without a terminal; not a security boundary; the entry must be posted "
                         "before `pr`); without --apply prints the line it would record")
@@ -550,6 +575,8 @@ def main(argv=None):
     except AdoError as e:
         err, code = e, 1
     if err is not None:
+        if isinstance(err, strict.Refused):
+            print(json.dumps(err.check, indent=2))  # the findings, as `strict check` prints them
         print(f"error: {err}", file=sys.stderr)
     else:
         print(json.dumps(out, indent=2))
