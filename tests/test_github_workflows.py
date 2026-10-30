@@ -1,6 +1,9 @@
 """Static checks on .github/workflows (actionlint itself runs in CI)."""
 import json
+import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -257,7 +260,7 @@ def _gate_id_snippet():
 ADO_CLI = "import sys;sys.path.pop(0);from ado.__main__ import main;sys.exit(main())"  # the console script has no cwd on sys.path
 
 
-def _run_snippet(tmp_path, snippet, branch, *, get_code=0, config=True, have_ado=True, temp=None, ado_body=None):
+def _run_snippet(tmp_path, snippet, branch, *, get_code=0, config=True, have_ado=True, temp=None, ado_body=None, flags=()):
     """Run a CI shell snippet; `ado branch` is the real CLI, `ado get` a stub. Returns (exit code, output)."""
     import os, subprocess, sys
     base_env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
@@ -265,7 +268,7 @@ def _run_snippet(tmp_path, snippet, branch, *, get_code=0, config=True, have_ado
     assert probe.returncode == 0, probe.stderr  # this interpreter's own ado (never a PATH one); fail, don't skip
     if have_ado:  # `ado branch ...` -> this interpreter's CLI; `ado get` -> canned answer
         stub = tmp_path / "ado"
-        stub.write_text("#!/bin/bash\n" + ado_body if ado_body else f'#!/bin/bash\n[ "$1" = branch ] && exec "{sys.executable}" -c \'{ADO_CLI}\' "$@"\n'
+        stub.write_text("#!/bin/bash\n" + ado_body if ado_body else f'#!/bin/bash\n[ "$1" = branch ] || [ "$1" = strict ] && exec "{sys.executable}" -c \'{ADO_CLI}\' "$@"\n'
                         f'c={get_code}; [ $c = 0 ] && exit 0; echo "HTTP $c" >&2; exit 1\n')
         stub.chmod(0o755)
     cfg = tmp_path / "ado.config.json"
@@ -274,10 +277,10 @@ def _run_snippet(tmp_path, snippet, branch, *, get_code=0, config=True, have_ado
     script = tmp_path / "snippet.sh"
     script.write_text(snippet)
     env = {**base_env, "PATH": (f"{tmp_path}:" if have_ado else "") + "/usr/bin:/bin", "RUNNER_TEMP": str(temp or tmp_path),
-           "ADO_CONFIG": str(cfg), "BRANCH": branch, "SOURCE_BRANCH": branch}
+           "ADO_CONFIG": str(cfg), "BRANCH": branch, "SOURCE_BRANCH": branch, "TARGET_BRANCH": "refs/heads/main"}
     if temp is False:  # the runner did not set its temp dir
         env.pop("RUNNER_TEMP")
-    r = subprocess.run(["bash", str(script)], env=env, cwd=tmp_path, capture_output=True, text=True)
+    r = subprocess.run(["bash", *flags, str(script)], env=env, cwd=tmp_path, capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -303,13 +306,12 @@ def test_guard_snippet_runs_real_id_from(tmp_path, path, var, branch, kw, expect
 
 
 @pytest.mark.parametrize("branch,kw,id_line", [
-    ("feature/ab12-x", {}, "ID=12"), ("001-x", {}, None), ("001-x", {"config": False}, None),
-    ("feature/ab12-x", {"have_ado": False}, None)])
+    ("feature/ab12-x", {}, "ID=12"), ("001-x", {}, None), ("001-x", {"config": False}, None)])
 def test_azure_gate_id_step_skips_never_fails(tmp_path, branch, kw, id_line):
     rc, out = _run_snippet(tmp_path, _gate_id_snippet(), branch, **kw)
     if id_line is not None:
         assert rc == 0 and id_line in out and "skipped" not in out, out
-    else:  # no id, no config or no ado: exit 0 (skipped) before the "ID=" echo
+    else:  # no id or no config: exit 0 (skipped) before the "ID=" echo
         assert rc == 0 and "skipped" in out and "ID=" not in out, out
 
 
@@ -322,7 +324,7 @@ def _gate_step_run(path):
     return run.replace('"origin/${BASE_REF}"', "origin/main").replace("origin/${BASE_REF}", "origin/main")
 
 
-def _run_gate_step(tmp_path, path, config, *, block=(), temp=None, ado_body=None):
+def _run_gate_step(tmp_path, path, config, *, block=(), temp=None, ado_body=None, extra_env=None, flags=()):
     import os, subprocess, sys
     git = lambda *a: subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)
     git("init", "-q", "-b", "main")
@@ -350,12 +352,13 @@ def _run_gate_step(tmp_path, path, config, *, block=(), temp=None, ado_body=None
     env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "PATH": f"{bindir}:/usr/bin:/bin", "RUNNER_TEMP": str(temp or tmp_path),
            "ADO_CONFIG": str(tmp_path / "ado.config.json"), "STORY_ID": "1001", "BASE_REF": "main", "PR_NUM": "7",
            "GITHUB_REPOSITORY": "contoso/app", "PR_ID": "7", "SOURCE_BRANCH": "refs/heads/feature/ab1001-x",
-           "TARGET_BRANCH": "refs/heads/main"}
+           "TARGET_BRANCH": "refs/heads/main", "HEAD_SHA": "0123456789abcdef0123456789abcdef01234567"}
     env.pop("ADO_TOKEN", None)
     env["HOME"] = str(tmp_path)  # no real keychain/.azdo token
+    env.update(extra_env or {})
     if temp is False:  # the runner did not set its temp dir
         env.pop("RUNNER_TEMP")
-    r = subprocess.run(["bash", str(script)], env=env, cwd=tmp_path, capture_output=True, text=True)
+    r = subprocess.run(["bash", *flags, str(script)], env=env, cwd=tmp_path, capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr, tmp_path
 
 
@@ -421,8 +424,10 @@ HOSTILE = {
 
 
 def _ann_line(path):
+    """The template's `ann` definition. A step cannot see another step's shell functions, so a template whose several steps sanitise
+    (V3-14a: the strict-mode step next to the gate step) defines it once per step: every copy must be byte-identical."""
     lines = [l.strip() for l in path.read_text().splitlines() if l.strip().startswith("ann() {")]
-    assert len(lines) == 1, path
+    assert lines and len(set(lines)) == 1, path
     return lines[0]
 
 
@@ -461,7 +466,7 @@ def test_ann_neutralises_hostile_text_in_a_real_bash(tmp_path, family, name):
 
 def test_untrusted_text_in_annotations_always_goes_through_ann():
     risky = re.compile(r"\.err\b|\$branch|\$BRANCH|\$subject|\$\{?(SOURCE_BRANCH|PR_TITLE)")
-    annotation = re.compile(r"echo \"(##vso\[task\.logissue|::(error|warning|notice)::|ado gate: )")  # log lines that carry CLI stderr count too
+    annotation = re.compile(r"echo \"(##vso\[task\.logissue|::(error|warning|notice)::|ado gate: |ado strict (mode|check): )")  # log lines that carry CLI stderr count too
     uses_ann = re.compile(r"\| ann\)|ann < ")
     for p in ANN_FILES:
         lines = [l for l in p.read_text().splitlines() if annotation.search(l)]
@@ -591,6 +596,12 @@ MARKER_SCENARIOS = {  # every shell snippet with a python3 call, on a path that 
     "guard-azure-untied": lambda d: _run_snippet(d, _guard_snippet(GUARDS[1][0]), "not-tied"),
     "link-github": lambda d: _run_snippet(d, _link_with_ledger(d) + _link_snippet(LINK_FILES[0]), "main"),
     "link-azure": lambda d: _run_snippet(d, _link_with_ledger(d) + _link_snippet(LINK_FILES[1]), "main"),
+    "mode-github": lambda d: _gh_run(d, _gh("ado-gate", "mode"), MODE_ENV, ado='echo \'{"mode": "strict"}\'\n'),
+    "strict-github": lambda d: _gh_run(d, _gh("ado-gate", "Strict check"), STRICT_ENV, ado=_findings_ado(d)),
+    "enforce-github": lambda d: _gh_run(d, _gh("ado-gate", "Enforce strict check"), {}),
+    "gate-azure-strict": lambda d: _run_az(d),
+    "link-github-refused": lambda d: _link_run(d, LINK_FILES[0], _refused_ado(d)),
+    "link-azure-refused": lambda d: _link_run(d, LINK_FILES[1], _refused_ado(d)),
 }
 
 
@@ -639,6 +650,9 @@ UNSET_SCENARIOS = {
     "guard-azure": lambda d: _run_snippet(d, _guard_snippet(GUARDS[1][0]), "feature/ab12-x", temp=False),
     "link-github": lambda d: _run_snippet(d, _link_with_ledger(d) + _link_snippet(LINK_FILES[0]), "main", temp=False),
     "link-azure": lambda d: _run_snippet(d, _link_with_ledger(d) + _link_snippet(LINK_FILES[1]), "main", temp=False),
+    "mode-github": lambda d: _gh_run(d, _gh("ado-gate", "mode"), MODE_ENV, no_temp=True),
+    "strict-github": lambda d: _gh_run(d, _gh("ado-gate", "Strict check"), STRICT_ENV, no_temp=True),
+    "enforce-github": lambda d: _gh_run(d, _gh("ado-gate", "Enforce strict check"), {}, no_temp=True),
 }
 
 
@@ -669,7 +683,7 @@ def _assert_no_injected_command(out, path):
 
 @pytest.mark.parametrize("path", GATE_STEPS, ids=["github", "azure"])
 def test_gate_step_sanitises_ado_stderr(tmp_path, path):
-    body = ('case "$1" in branch) echo 1001; exit 0;; esac\n' + STDOUT_ADO + STDERR_ADO + "exit 1\n")  # gate and pr comment both fail loudly
+    body = ('case "$1" in branch) echo 1001; exit 0;; strict) exit 2;; esac\n' + STDOUT_ADO + STDERR_ADO + "exit 1\n")  # gate and pr comment both fail loudly
     rc, out, _ = _run_gate_step(tmp_path, path, {}, ado_body=body)
     assert rc == 0, out  # advisory: a CLI crash never turns the build red
     _assert_no_injected_command(out, path)
@@ -771,3 +785,476 @@ def test_link_on_merge_without_close_story_still_transitions(tmp_path, path):
     assert (tmp_path / "calls.log").read_text().splitlines() == ["comment 7 " + (
         "Merged via PR #1: u" if path.parent.name != "pipelines" else "Merged to main in commit abcdef12."),
         "update 7 --state Resolved"]
+
+
+# ======================================================================================================================
+# V3-14a: the shipped CI templates enforce strict (mode from the target branch, no skipping, strict check, strict done)
+# ======================================================================================================================
+# The shells the templates really run under: a GitHub `run:` is `bash -e {0}` (with `shell: bash`: `-eo pipefail`); an Azure `script:` is
+# `bash --noprofile --norc` with NO -e. Every new shim test below runs under all three (the `shell_flags` fixture sets SHELL_FLAGS).
+SHELL_CASES = {"bash-e": ["-e"], "bash-eo-pipefail": ["-eo", "pipefail"], "bash-plain": ["--noprofile", "--norc"]}
+SHELL_FLAGS = ["-e"]
+
+
+@pytest.fixture(params=list(SHELL_CASES))
+def shell_flags(request, monkeypatch):
+    monkeypatch.setattr(sys.modules[__name__], "SHELL_FLAGS", SHELL_CASES[request.param])
+    return SHELL_CASES[request.param]
+
+SHA = "0123456789abcdef0123456789abcdef01234567"
+STEP_MODE, STEP_STORY, STEP_STRICT, STEP_POST, STEP_ENFORCE = "mode", "story", "Strict check", "Post summary and enforce", "Enforce strict check"
+AZ_GATE = ROOT / "pipelines" / "ado-gate.yml"
+AZ_LINK = ROOT / "pipelines" / "ado-link-on-merge.yml"
+
+
+def _gh(wf, key):
+    """A step of a GitHub workflow by id or name."""
+    return next(s for s in steps(load(wf)) if key in (s.get("id"), s.get("name")))
+
+
+def _blocks(path):
+    doc = yaml.safe_load(path.read_text())
+    return [s.get("run") or s.get("script") for s in (doc["steps"] if path.parent.name == "pipelines" else steps(doc)) if s.get("run") or s.get("script")]
+
+
+@pytest.mark.parametrize("path", CI_TEMPLATES, ids=lambda p: f"{p.parent.name}/{p.name}")
+def test_every_shell_block_parses_with_bash_n(path):
+    for text in _blocks(path):
+        r = subprocess.run(["bash", "-n"], input=text, capture_output=True, text=True)
+        assert r.returncode == 0, (path.name, r.stderr, text[:80])
+
+
+# ---- static pins ----
+def test_github_gate_strict_steps_are_ordered_and_hold_no_token_they_do_not_need():
+    st = list(steps(load("ado-gate")))
+    ids = [s.get("id") or s.get("name") for s in st]
+    order = [STEP_MODE, STEP_STORY, "Run gate", STEP_STRICT, STEP_POST, STEP_ENFORCE]
+    assert [i for i in ids if i in order] == order  # mode FIRST, then the story id, the gate, the strict check, the comment, the verdict
+    mode, strict = _gh("ado-gate", STEP_MODE), _gh("ado-gate", STEP_STRICT)
+    assert re.search(r'^\s*ado strict mode --base "origin/\$\{BASE_REF\}" > "\$RUNNER_TEMP/mode\.json"', mode["run"], re.M)
+    assert mode["run"].index("ado strict mode") < mode["run"].index("::error::")
+    assert set(mode["env"]) == {"ADO_CONFIG", "BASE_REF"}  # no token of any kind: the answer is local
+    assert set(strict["env"]) == {"ADO_CONFIG", "STORY_ID", "BASE_REF", "HEAD_SHA"}  # the check is local too: no ADO_TOKEN, no GH_TOKEN
+    assert strict["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    assert 'ado strict check "$STORY_ID" --phase pr --head "$HEAD_SHA" --base "origin/${BASE_REF}"' in strict["run"]
+    assert strict["if"] == "steps.story.outputs.id != '' && steps.mode.outputs.mode == 'strict'"
+    assert "ADO_TOKEN" not in strict["run"] and "GH_TOKEN" not in strict["run"] and not re.search(r"(^|\s)gh (api|pr)\b", strict["run"])
+    assert _gh("ado-gate", STEP_ENFORCE)["if"] == strict["if"] and "env" not in _gh("ado-gate", STEP_ENFORCE)
+
+
+def test_github_gate_advisory_path_steps_keep_their_shape():
+    gate = _gh("ado-gate", "Run gate")  # the v0.2 step, untouched: same condition, same four env values
+    assert gate["if"] == "steps.story.outputs.id != ''" and set(gate["env"]) == {"ADO_TOKEN", "ADO_CONFIG", "STORY_ID", "BASE_REF"}
+    assert _gh("ado-gate", STEP_POST)["if"] == "steps.story.outputs.id != ''"
+    assert set(_gh("ado-gate", STEP_POST)["env"]) == {"GH_TOKEN", "PR_NUM", "MODE"} and "ADO_TOKEN" not in _gh("ado-gate", STEP_POST)["env"]
+    story = _gh("ado-gate", STEP_STORY)
+    assert story["env"]["MODE"] == "${{ steps.mode.outputs.mode }}"  # only ever strict or advisory (validated by the mode step)
+    assert triggers(load("ado-gate"))["workflow_call"]["inputs"]["config-path"]["default"] == "ado.config.json"
+
+
+def test_github_link_on_merge_checks_out_the_merged_commit_in_full():
+    first, toolkit = [s for s in steps(load("ado-link-on-merge")) if s.get("uses", "").startswith("actions/checkout")]
+    assert first["with"] == {"ref": "${{ github.event.pull_request.merge_commit_sha }}", "fetch-depth": 0, "persist-credentials": False}
+    assert first["if"] == "steps.ab.outputs.ids != ''" and toolkit["with"]["ref"] == "${{ inputs.toolkit-ref }}" and toolkit["with"]["repository"] == "praveenlavu/spec-kit-ado"
+    assert load("ado-link-on-merge")["permissions"] == {"contents": "read"}
+
+
+def test_azure_gate_calls_strict_mode_first_and_passes_base_to_the_id_step():
+    (script,) = [s for s in _blocks(AZ_GATE) if "ado gate" in s]
+    assert 'ado strict mode --base "origin/${TARGET_BRANCH#refs/heads/}" > "$AGENT_TEMPDIRECTORY/mode.json"' in script
+    id_cmd = 'ado branch --id-from="$branch" --base "origin/${TARGET_BRANCH#refs/heads/}" 2> "$AGENT_TEMPDIRECTORY/id.err"'
+    strict = 'env -u ADO_TOKEN ado strict check "$id" --phase pr --head "$HEAD_SHA" --base "origin/${TARGET_BRANCH#refs/heads/}" > "$AGENT_TEMPDIRECTORY/strict.json"'
+    assert script.index("ado strict mode") < script.index(id_cmd) < script.index("ado gate ") < script.index(strict) < script.index('ado pr comment "$PR_ID"')
+    steps_ = yaml.safe_load(AZ_GATE.read_text())["steps"]
+    assert steps_[-1]["env"]["HEAD_SHA"] == "$(System.PullRequest.SourceCommitId)"
+    assert all(s.get("persistCredentials") is False for s in steps_ if "checkout" in s)  # checkouts still do not persist credentials
+
+
+def test_azure_link_on_merge_still_detaches_at_full_depth():
+    own = next(s for s in yaml.safe_load(AZ_LINK.read_text())["steps"] if s.get("checkout") == "self")
+    assert own["fetchDepth"] == 0 and own["persistCredentials"] is False
+
+
+# ---- GitHub: real bash, one step at a time, with an `ado` shim ----
+def _bin(tmp_path, **bodies):
+    d = tmp_path / "bin"
+    d.mkdir(exist_ok=True)
+    for name, body in bodies.items():
+        (d / name).write_text("#!/bin/bash\n" + body)
+        (d / name).chmod(0o755)
+    return d
+
+
+def _gh_run(tmp_path, step, env, *, no_temp=False, cwd=None, **bodies):
+    """Run one step's `run:` as the runner does (bash -eo pipefail). The test must supply every key of the step's `env:` and no other:
+    a token the step does not declare cannot reach the shim. Returns (exit code, output); scratch files are in tmp_path/rt."""
+    assert set(env) == set(step.get("env", {})), (sorted(env), sorted(step.get("env", {})))
+    (tmp_path / "rt").mkdir(exist_ok=True)
+    (tmp_path / "gho").touch()
+    full = {"PATH": f"{_bin(tmp_path, **bodies)}:/usr/bin:/bin", "HOME": str(tmp_path), "RUNNER_TEMP": str(tmp_path / "rt"),
+            "GITHUB_OUTPUT": str(tmp_path / "gho"), "CALLS": str(tmp_path / "calls.log"), "GITHUB_REPOSITORY": "contoso/app", **env}
+    if no_temp:  # the runner did not set its temp dir
+        full.pop("RUNNER_TEMP")
+    (tmp_path / "step.sh").write_text(step["run"])
+    r = subprocess.run(["bash", *SHELL_FLAGS, str(tmp_path / "step.sh")], env=full, cwd=cwd or tmp_path, capture_output=True, text=True)
+    return r.returncode, r.stdout + r.stderr
+
+
+def _calls(tmp_path):
+    p = tmp_path / "calls.log"
+    return p.read_text().splitlines() if p.exists() else []
+
+
+def _gho(tmp_path):
+    return (tmp_path / "gho").read_text()
+
+
+LOG = 'printf "%s | token=%s gh=%s\\n" "$*" "${ADO_TOKEN-unset}" "${GH_TOKEN-unset}" >> "$CALLS"\n'
+MODE_ENV = {"ADO_CONFIG": "/ws/ado.config.json", "BASE_REF": "main"}
+GH_GATE = WF_DIR / "ado-gate.yml"
+
+
+@pytest.mark.parametrize("body,mode", [
+    ('echo \'{"mode": "strict", "source": "target branch"}\'', "strict"),
+    ('echo \'{"mode": "advisory", "source": "pull request"}\'', "advisory"),
+    ("echo 'error: no ado.config.json' >&2; exit 2", "advisory"),  # no usable config (exit 2) stays advisory, exactly as before
+])
+def test_github_mode_step_outputs_the_mode_and_treats_other_failures_as_advisory(tmp_path, body, mode, shell_flags):
+    rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_MODE), MODE_ENV, ado=LOG + body + "\n")
+    assert rc == 0 and _gho(tmp_path) == f"mode={mode}\n", out
+    assert _calls(tmp_path) == ["strict mode --base origin/main | token=unset gh=unset"]  # exactly this call, no token, and nothing else
+
+
+@pytest.mark.parametrize("body", ["exit 1", "exit 4", "exit 126", "exit 127", "exit 139", None], ids=lambda b: b or "no-ado-installed")
+def test_github_mode_step_fails_closed_on_every_exit_code_but_0_2_and_3(tmp_path, body, shell_flags):
+    # exit 1 (a crash), 127 (no ado) and anything else: the mode is unknown, so it is never read as advisory, under ANY target
+    bodies = {} if body is None else {"ado": STDOUT_ADO + STDERR_ADO + body + "\n"}
+    rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_MODE), MODE_ENV, **bodies)
+    assert rc == 1 and _gho(tmp_path) == "", out
+    (line,) = [l for l in out.splitlines() if l.startswith("::error::")]
+    assert "could not determine the strict mode" in line and (body is None or "boom" in line)
+    if body is not None:
+        _assert_no_injected_command(out, GH_GATE)  # the stderr is flattened by ann; nothing else of ado's reaches the log
+
+
+@pytest.mark.parametrize("body", ["echo not-json", 'echo \'{"mode": "lax"}\'', "echo '{}'", "true"])
+def test_github_mode_step_fails_closed_on_output_it_cannot_read(tmp_path, body, shell_flags):
+    rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_MODE), MODE_ENV, ado=body + "\n")
+    assert rc == 1 and "::error::" in out and _gho(tmp_path) == "", out  # exit 0 with a mode that is neither word: never a silent advisory
+
+
+def test_github_mode_step_exit_3_fails_closed_with_a_sanitised_annotation(tmp_path, shell_flags):
+    rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_MODE), MODE_ENV, ado=STDOUT_ADO + STDERR_ADO + "exit 3\n")
+    assert rc == 3 and _gho(tmp_path) == "", out
+    _assert_no_injected_command(out, GH_GATE)
+    assert len([l for l in out.splitlines() if l.startswith("::error::")]) == 1
+
+
+@pytest.mark.parametrize("mode,title,body,rc,ok", [
+    ("strict", "AB#1001 fix", "", 0, True),
+    ("strict", "no reference", "", 1, False),  # strict: the gate cannot be skipped
+    ("strict", "HOSTILE-TITLE\n::set-output name=x::y", "AB#", 1, False),
+    ("advisory", "no reference", "", 0, False),  # v0.2: a notice, and no gate
+    ("", "no reference", "", 0, False),
+])
+def test_github_story_step_fails_instead_of_skipping_under_strict(tmp_path, mode, title, body, rc, ok, shell_flags):
+    got, out = _gh_run(tmp_path, _gh("ado-gate", STEP_STORY), {"PR_TITLE": title, "PR_BODY": body, "MODE": mode})
+    assert got == rc, out
+    assert ("id=1001\n" in _gho(tmp_path)) == ok
+    if rc == 1:
+        assert "::error::" in out and "set-output" not in out and "HOSTILE" not in out  # the message is fixed text, never the PR's
+    elif not ok:
+        assert "::notice::No AB# reference in PR title/body - ADO gate skipped (advisory)." in out
+
+
+FINDINGS = {"phase": "pr", "mode": "strict", "ok": False, "findings": (
+    [{"rule": "red-passes", "detail": "HOSTILE-DETAIL ::error::x ##vso[task.complete result=Succeeded]", "fix": "FIXTEXT"},
+     {"rule": "::error::pwn\n##vso[x]", "detail": "d", "fix": "f"}, {"rule": "a" * 100, "detail": "d", "fix": "f"}]
+    + [{"rule": f"r{i}", "detail": "d", "fix": "f"} for i in range(30)])}
+STRICT_ENV = {"ADO_CONFIG": "/ws/ado.config.json", "STORY_ID": "1001", "BASE_REF": "main", "HEAD_SHA": SHA}
+
+
+def _findings_ado(tmp_path, doc=FINDINGS, rc=2):
+    (tmp_path / "findings.json").write_text(json.dumps(doc))
+    return LOG + f'cat "{tmp_path}/findings.json"\necho "error: strict check failed: boom ::error::pwned" >&2\nexit {rc}\n'
+
+
+def _assert_rule_ids_only(text):
+    assert "HOSTILE-DETAIL" not in text and "FIXTEXT" not in text and "task.complete" not in text, text
+    (line,) = [l for l in text.splitlines() if "rule ids:" in l]
+    ids = line.split("rule ids:", 1)[1].split()
+    assert 0 < len(ids) <= 20 and all(re.fullmatch(r"[A-Za-z0-9_-]{1,40}", i) for i in ids), ids
+    assert ids[:3] == ["red-passes", "errorpwnvsox", "a" * 40]  # sanitised: only [A-Za-z0-9_-], cut to 40, at most 20 of them
+
+
+def test_github_strict_step_runs_the_exact_check_without_a_token_and_reports_rule_ids_only(tmp_path, shell_flags):
+    rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_STRICT), STRICT_ENV, ado=_findings_ado(tmp_path))
+    assert rc == 0, out  # the verdict is the next steps'
+    assert _calls(tmp_path) == [f"strict check 1001 --phase pr --head {SHA} --base origin/main | token=unset gh=unset"]
+    assert (tmp_path / "rt" / "strict.code").read_text().strip() == "2"
+    _assert_rule_ids_only((tmp_path / "rt" / "strict.md").read_text())
+    assert (tmp_path / "rt" / "strict.rules").read_text().split()[:1] == ["red-passes"]
+    assert "HOSTILE-DETAIL" not in out and "task.complete" not in out  # ado's stdout (the findings) never reaches the log
+    for line in out.splitlines():
+        assert not line.startswith(("::error::pwned", "::set-output")), repr(line)
+    assert "boom" in out  # the CLI's own stderr line is there, flattened by ann
+
+
+def test_github_strict_step_passes_cleanly(tmp_path, shell_flags):
+    rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_STRICT), STRICT_ENV, ado=LOG + 'echo \'{"ok": true, "findings": []}\'\n')
+    assert rc == 0 and (tmp_path / "rt" / "strict.code").read_text().strip() == "0" and not (tmp_path / "rt" / "strict.md").exists(), out
+
+
+@pytest.mark.parametrize("body", ["exit 1", "exit 127", "echo '{}'; exit 2", "echo not-json; exit 2"])
+def test_github_strict_step_failure_without_findings_still_fails_the_job_later(tmp_path, body, shell_flags):
+    (tmp_path / "rt").mkdir()
+    (tmp_path / "rt" / "strict.md").write_text("STALE")  # a stale file must never be mistaken for this run's
+    rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_STRICT), STRICT_ENV, ado=LOG + body + "\n")
+    assert rc == 0 and (tmp_path / "rt" / "strict.code").read_text().strip() not in ("", "0"), out
+    assert "STALE" not in (tmp_path / "rt" / "strict.md").read_text() and "could not run" in (tmp_path / "rt" / "strict.md").read_text()
+
+
+@pytest.mark.parametrize("code,rules,rc", [("0", "", 0), ("2", "red-passes l2", 1), ("1", "", 1), (None, "", 1), ("garbage", "", 1)])
+def test_github_enforce_step_fails_on_any_strict_failure(tmp_path, code, rules, rc, shell_flags):
+    (tmp_path / "rt").mkdir()
+    if code is not None:
+        (tmp_path / "rt" / "strict.code").write_text(code + "\n")
+    (tmp_path / "rt" / "strict.rules").write_text(rules + "\n")
+    got, out = _gh_run(tmp_path, _gh("ado-gate", STEP_ENFORCE), {})
+    assert got == rc, out
+    if rc:
+        assert "::error::spec-kit-ado: strict check failed" in out and (not rules or f"rule ids: {rules}" in out)
+    else:
+        assert "::error::" not in out
+
+
+def test_github_post_step_adds_the_rule_ids_to_the_comment_only_under_strict(tmp_path, shell_flags):
+    (tmp_path / "rt").mkdir()
+    (tmp_path / "rt" / "gate.md").write_text("GATE-BODY\n")
+    (tmp_path / "rt" / "gate.code").write_text("0\n")
+    (tmp_path / "rt" / "strict.md").write_text("\nSTRICT-LINE rule ids: red-passes\n")
+    gh = 'case "$*" in "pr comment"*) cp "$5" "$POSTED";; esac\nexit 0\n'
+    for mode in ("strict", "advisory", ""):
+        posted = tmp_path / f"posted-{mode or 'unset'}.md"
+        rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_POST), {"GH_TOKEN": "t", "PR_NUM": "7", "MODE": mode}, gh=gh.replace("$POSTED", str(posted)))
+        assert rc == 0, out
+        text = posted.read_text()
+        assert text.startswith("<!-- spec-kit-ado:gate -->\nGATE-BODY\n") and ("STRICT-LINE rule ids: red-passes" in text) == (mode == "strict"), (mode, text)
+
+
+# ---- Azure gate: the whole script, real bash, an `ado` shim ----
+def _az_shim(*, mode=("strict", 0), id_rc=0, gate_rc=0, strict_rc=2, strict_doc=FINDINGS, mode_err="", mode_out=None):
+    mode_name, mode_rc = mode
+    mode_json = mode_out if mode_out is not None else json.dumps({"mode": mode_name, "source": "target branch"})
+    return ('echo "$* | token=${ADO_TOKEN:+set}" >> calls.log\n'
+            'case "$1 $2" in\n'
+            f' "strict mode") echo \'{mode_json}\'; {"echo " + repr(mode_err) + " >&2; " if mode_err else ""}exit {mode_rc};;\n'
+            f' "branch --id-from="*|"branch --id-from") [ {id_rc} = 0 ] && echo 1001; exit {id_rc};;\n'
+            f' "strict check") cat strict-doc.json; echo "error: strict check failed: boom" >&2; exit {strict_rc};;\n'
+            ' "pr comment") cp "$5" posted.md; exit 0;;\n'
+            f' "gate 1001") echo \'{{"blocking": false}}\'; exit {gate_rc};;\n'
+            'esac\nexit 0\n')
+
+
+def _run_az(tmp_path, **kw):
+    (tmp_path / "strict-doc.json").write_text(json.dumps(kw.pop("strict_doc", FINDINGS)))
+    shim = _az_shim(**kw)
+    rc, out, _ = _run_gate_step(tmp_path, AZ_GATE, {}, ado_body=shim, extra_env={"ADO_TOKEN": "tok-secret"}, flags=SHELL_FLAGS)
+    return rc, out
+
+
+def test_azure_gate_strict_target_without_a_story_id_fails_instead_of_skipping(tmp_path, shell_flags):
+    rc, out = _run_az(tmp_path, id_rc=1)
+    assert rc == 1 and "##vso[task.logissue type=error]ADO gate FAILED: strict mode needs a work item id" in out, out
+    assert [c.split(" |")[0] for c in _calls(tmp_path)][:2] == ["strict mode --base origin/main", "branch --id-from=feature/ab1001-x --base origin/main"]
+    assert not any(c.startswith(("gate", "pr comment", "strict check")) for c in _calls(tmp_path)) and "skipped" not in out
+
+
+def test_azure_gate_advisory_without_a_story_id_still_skips(tmp_path, shell_flags):
+    rc, out = _run_az(tmp_path, mode=("advisory", 0), id_rc=1)
+    assert rc == 0 and "##vso[task.logissue type=warning]No work item id in the source branch - ADO gate skipped (advisory)." in out, out
+    assert not any(c.startswith(("gate", "pr comment", "strict check")) for c in _calls(tmp_path))
+
+
+@pytest.mark.parametrize("id_rc", [2, 127])
+def test_azure_gate_strict_target_cannot_read_the_id_fails_closed_and_advisory_skips(tmp_path, id_rc, shell_flags):
+    assert _run_az(tmp_path, id_rc=id_rc)[0] == 1
+    other = tmp_path / "adv"
+    other.mkdir()
+    rc, out = _run_az(other, mode=("advisory", 0), id_rc=id_rc)
+    assert rc == 0 and "skipped (advisory)" in out
+
+
+def test_azure_gate_strict_check_runs_after_the_gate_without_the_token_and_lists_rule_ids_only(tmp_path, shell_flags):
+    rc, out = _run_az(tmp_path)
+    assert rc == 1, out
+    calls = _calls(tmp_path)
+    assert [c.split(" ")[0] + " " + c.split(" ")[1] for c in calls] == ["strict mode", "branch --id-from=feature/ab1001-x", "gate 1001", "strict check", "pr comment"]
+    assert calls[2].endswith("token=set") and calls[4].endswith("token=set")  # the gate and the comment keep the token
+    assert calls[3] == f"strict check 1001 --phase pr --head {SHA} --base origin/main | token="  # and the strict check does not
+    posted = (tmp_path / "posted.md").read_text()
+    _assert_rule_ids_only(posted)
+    (err,) = [l for l in out.splitlines() if l.startswith("##vso[task.logissue type=error]")]
+    _assert_rule_ids_only(err)
+    assert "HOSTILE-DETAIL" not in out and "task.complete" not in out.replace("##vso[task.logissue", "")
+    _assert_no_injected_command(out, AZ_GATE)
+
+
+def test_azure_gate_strict_check_passes(tmp_path, shell_flags):
+    rc, out = _run_az(tmp_path, strict_doc={"ok": True, "findings": []}, strict_rc=0)
+    assert rc == 0 and "strict check failed" not in (tmp_path / "posted.md").read_text() and "##vso[task.logissue type=error]" not in out, out
+
+
+@pytest.mark.parametrize("strict_rc,doc", [(1, {}), (127, {}), (2, {"nothing": 1})])
+def test_azure_gate_strict_check_that_cannot_run_fails_closed(tmp_path, strict_rc, doc, shell_flags):
+    rc, out = _run_az(tmp_path, strict_rc=strict_rc, strict_doc=doc)
+    assert rc == 1 and "none" in (tmp_path / "posted.md").read_text(), out
+
+
+def test_azure_gate_strict_check_failure_wins_over_a_clean_gate_but_a_blocking_gate_still_fails(tmp_path, shell_flags):
+    assert _run_az(tmp_path, gate_rc=0)[0] == 1
+    other = tmp_path / "adv"
+    other.mkdir()
+    rc, out = _run_az(other, mode=("advisory", 0), strict_rc=2)  # advisory: the strict check never runs, whatever it would say
+    assert rc == 0 and not any(c.startswith("strict check") for c in _calls(other)), out
+
+
+def test_azure_gate_mode_exit_3_fails_closed_before_anything_else(tmp_path, shell_flags):
+    rc, out = _run_az(tmp_path, mode=("strict", 3), mode_err="error: target branch config: boom ##vso[task.complete result=Succeeded]")
+    assert rc == 1 and "##vso[task.logissue type=error]ADO gate FAILED: ado.config.json is invalid" in out and out.count("##vso[") == 1, out
+    assert len(_calls(tmp_path)) == 1  # nothing after the mode call
+
+
+@pytest.mark.parametrize("mode_rc", [1, 4, 126, 127, 139])
+def test_azure_gate_mode_fails_closed_on_every_exit_code_but_0_2_and_3(tmp_path, mode_rc, shell_flags):
+    rc, out = _run_az(tmp_path, mode=("advisory", mode_rc), mode_err="error: boom ##vso[task.complete result=Succeeded]")
+    assert rc == 1 and "##vso[task.logissue type=error]ADO gate FAILED: could not determine the strict mode" in out and "boom" in out, out
+    assert out.count("##vso[") == 1 and len(_calls(tmp_path)) == 1  # one annotation of our own; nothing runs after the mode call
+
+
+def test_azure_gate_mode_exit_2_is_advisory_as_before(tmp_path, shell_flags):
+    rc, out = _run_az(tmp_path, mode=("advisory", 2))
+    assert rc == 0 and any(c.startswith("gate 1001") for c in _calls(tmp_path)) and not any(c.startswith("strict check") for c in _calls(tmp_path)), out
+
+
+@pytest.mark.parametrize("mode_out", ["not json", '{"mode": "lax"}', "{}"])
+def test_azure_gate_mode_it_cannot_read_fails_closed(tmp_path, mode_out, shell_flags):
+    rc, out = _run_az(tmp_path, mode_out=mode_out)
+    assert rc == 1 and "##vso[task.logissue type=error]ADO gate FAILED: could not read the strict mode" in out, out
+
+
+# ---- link-on-merge: a strict done refusal is reported by rule id and fails the job ----
+def _refused_ado(tmp_path, doc=FINDINGS, plan_rc=2, stderr="error: strict check failed: 2 finding(s)"):
+    (tmp_path / "refusal.json").write_text(json.dumps(doc))
+    return ('echo "$*" >> calls.log\n'
+            'case "$*" in\n'
+            f' *--plan-out*) cat refusal.json; echo "{stderr}" >&2; exit {plan_rc};;\n'
+            'esac\nexit 0\n')
+
+
+def _link_run(tmp_path, path, ado, *, ids="7", state=""):
+    _link_with_ledger(tmp_path)
+    (tmp_path / "dod" / "DoD_8.md").write_text("x")
+    snippet = f"export IDS='{ids}' CLOSE_STORY=true STATE={state} PR_NUM=1 PR_URL=u BRANCH=main SOURCE_VERSION=abcdef123456\n" + _link_snippet(path)
+    snippet = snippet.replace("\nids=7\n", f"\nids='{ids}'\n", 1)  # the Azure template reads its ids from the merge commit message
+    return _run_snippet(tmp_path, snippet, "main", ado_body=ado, flags=SHELL_FLAGS)
+
+
+ERR_PREFIX = {"github": "::error::", "azure": "##vso[task.logissue type=error]"}
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_reports_a_strict_refusal_by_rule_id_and_fails_the_job(tmp_path, path, shell_flags):
+    family = "azure" if path.parent.name == "pipelines" else "github"
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path), ids="7 8")
+    assert rc == 1, out
+    lines = [l for l in out.splitlines() if l.startswith(ERR_PREFIX[family]) and "strict done refused" in l]
+    assert len(lines) == 2 and lines[0].startswith(f"{ERR_PREFIX[family]}7: strict done refused: ") and "8: strict done refused" in lines[1], out
+    for line in lines:
+        _assert_rule_ids_only(line.replace("strict done refused: ", "rule ids: "))
+    assert "check ADO_TOKEN" not in out and "could not evaluate" not in out  # the misleading advisory warning is not for a refusal
+    calls = _calls(tmp_path)
+    assert not any("--apply" in c for c in calls) and [c for c in calls if c.startswith("comment")]  # nothing attached; the merge note still posted
+    assert "HOSTILE-DETAIL" not in out
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_a_refusal_does_not_stop_the_other_stories_from_closing(tmp_path, path, shell_flags):
+    ado = ('echo "$*" >> calls.log\ncase "$*" in\n'
+           ' "done 7 --plan-out"*) cat refusal.json; exit 2;;\n'
+           ' "done 8 --plan-out"*) echo \'{"ready": true}\'; exit 0;;\n'
+           ' "done 8 --apply") echo \'{"attached": [{"path": "p"}], "failed": [], "state": "Done"}\'; exit 0;;\nesac\nexit 0\n')
+    (tmp_path / "refusal.json").write_text(json.dumps(FINDINGS))
+    (tmp_path / "dod").mkdir()
+    (tmp_path / "dod" / "DoD_8.md").write_text("x")
+    rc, out = _link_run(tmp_path, path, ado, ids="7 8")
+    assert rc == 1 and "8: DoD complete - ledger attached, story closed." in out and "7: strict done refused" in out, out
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+@pytest.mark.parametrize("doc", [{"error": "x"}, [], "text"])
+def test_link_on_merge_only_the_refusal_shape_is_a_refusal(tmp_path, path, doc, shell_flags):
+    # exit 2 with something else on stdout (or none) is the v0.2 "could not evaluate" path: a warning, never a failure
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path, doc=doc))
+    assert rc == 0 and "could not evaluate the DoD ledger" in out and "strict done refused" not in out, out
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_refusal_with_hostile_rule_ids_stays_one_line_of_ids(tmp_path, path, shell_flags):
+    doc = {"phase": "done", "mode": "strict", "ok": False,
+           "findings": [{"rule": "::error::pwn ##vso[task.complete result=Succeeded]"}, {"rule": "x" * 500}, {"rule": 5}, {"rule": "‮\x1b[31mbidi"}]}
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path, doc=doc))
+    assert rc == 1
+    (line,) = [l for l in out.splitlines() if "strict done refused" in l]
+    ids = line.split("strict done refused: ", 1)[1].split()
+    assert ids == ["errorpwnvsotaskcompleteresultSucceeded", "x" * 40, "5", "31mbidi"] and not re.search(r"[^\x20-\x7e]", line), repr(line)
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_a_result_with_ready_is_never_a_refusal(tmp_path, path, shell_flags):
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path, doc={"ready": False, "findings": [{"rule": "x"}]}, plan_rc=1))
+    assert rc == 0 and "DoD not ready" in out and "strict done refused" not in out, out
+
+
+def test_github_mode_step_with_the_real_cli_follows_the_target_branch(tmp_path, shell_flags):
+    git = lambda *a: subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *a], cwd=tmp_path / "ws", check=True, capture_output=True)
+    (tmp_path / "ws").mkdir()
+    org = {"organization": "contoso", "project": "Fabrikam"}
+    git("init", "-q", "-b", "main")
+    (tmp_path / "ws" / "ado.config.json").write_text(json.dumps({**org, "mode": "strict"}))
+    git("add", "-A")
+    git("commit", "-q", "-m", "base")
+    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    (tmp_path / "ws" / "ado.config.json").write_text(json.dumps(org))  # the PR says advisory
+    real = f'exec "{sys.executable}" -c \'{ADO_CLI}\' "$@"\n'
+    env = {"ADO_CONFIG": str(tmp_path / "ws" / "ado.config.json"), "BASE_REF": "main", "PYTHONPATH": str(ROOT / "src")}
+    step = dict(_gh("ado-gate", STEP_MODE), env={**_gh("ado-gate", STEP_MODE)["env"], "PYTHONPATH": ""})
+    rc, out = _gh_run(tmp_path, step, env, cwd=tmp_path / "ws", ado=real)
+    assert rc == 0 and _gho(tmp_path) == "mode=strict\n", out
+    (tmp_path / "gho").write_text("")
+    rc, out = _gh_run(tmp_path, step, {**env, "BASE_REF": "nosuch"}, cwd=tmp_path / "ws", ado=real)  # a base this checkout lacks, an advisory PR config: the v0.2 path
+    assert rc == 0 and _gho(tmp_path) == "mode=advisory\n", out
+    (tmp_path / "ws" / "ado.config.json").write_text(json.dumps({**org, "mode": "strict"}))
+    (tmp_path / "gho").write_text("")
+    rc, out = _gh_run(tmp_path, step, {**env, "BASE_REF": "nosuch"}, cwd=tmp_path / "ws", ado=real)  # ... and with a strict PR config it fails closed
+    assert rc == 3 and _gho(tmp_path) == "" and "::error::" in out, out
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_a_refused_story_is_never_transitioned_the_others_are(tmp_path, path, shell_flags):
+    ado = ('echo "$*" >> calls.log\ncase "$*" in\n'
+           ' "done 7 --plan-out"*) cat refusal.json; echo "error: strict check failed: 2 finding(s)" >&2; exit 2;;\n'
+           ' "done 8 --plan-out"*) echo \'{"ready": false}\'; exit 1;;\n'
+           'esac\nexit 0\n')
+    (tmp_path / "refusal.json").write_text(json.dumps(FINDINGS))
+    rc, out = _link_run(tmp_path, path, ado, ids="7 8", state="Resolved")
+    assert rc == 1 and "7: strict done refused" in out and "8: DoD not ready" in out, out  # the job still fails at the end
+    calls = _calls(tmp_path)
+    assert "update 8 --state Resolved" in calls and not any(c.startswith("update 7") for c in calls), calls  # only 8 transitions
+    assert any(c.startswith("comment 7") for c in calls) and any(c.startswith("comment 8") for c in calls)  # both merge notes are posted
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_a_refused_story_is_not_moved_to_done_state_even_when_asked(tmp_path, path, shell_flags):
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path), state="Done")  # transition-state == done_state: the worst case
+    assert rc == 1 and not any(c.startswith("update") for c in _calls(tmp_path)), _calls(tmp_path)

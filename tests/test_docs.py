@@ -919,21 +919,54 @@ def test_ci_trust_documented():
     assert "The first PR that introduces strict mode is therefore judged by its own config" in cfg
     assert "`ado gate` and `ado branch --id-from` exit **3**, so CI fails closed" in cfg and "Without `--base` nothing changes" in cfg
     assert "**Protect what judges the PR**" in cfg and "**Only the repo-root `ado.config.json` is trusted.**" in cfg
-    assert "the CI definition itself, which is PR-controlled too" in cfg and "**Not yet full protection.**" in cfg
+    assert "the CI definition itself, which is PR-controlled too" in cfg and "**What the shipped templates now enforce, and what is still yours.**" in cfg
+    assert "**Not yet full protection.**" not in cfg and "V3-14" not in cfg
     assert "the v0.2 path applies unchanged" in cfg and "`config: pull request`" in cfg
     for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
         text = _flat(doc)
         assert "The config comes from the target branch when that is strict" in text and "`config: target branch (strict)`" in text, doc
         assert "the first PR that introduces strict mode is judged by its own config" in text, doc
-        assert "**Not full protection yet:**" in text and "PR-controlled too" in text and "V3-14" in text, doc
+        assert "**What is protected now:**" in text and "**Still the owner's job:**" in text and "PR-controlled too" in text, doc
+        assert "**Not full protection yet:**" not in text and "V3-14" not in text, doc
         assert "The gate trusts the PR's own files" not in text, doc
     readme = _flat("README.md")
     assert "**CI trust: the config comes from the target branch.**" in readme
     assert "The first PR that introduces strict mode is judged by its own config" in readme
     assert "protect `ado.config.json`, the workflow or pipeline files and `dod/` on the target branch with branch rules or `CODEOWNERS`" in readme
-    assert "a PR can still make that step skip the gate" in readme and "The CI definition is itself PR-controlled" in readme
+    assert "a PR can still make that step skip the gate" not in readme and "The CI definition is itself PR-controlled" in readme
     assert "a non-default `config-path` (GitHub) or `ADO_CONFIG` no target file is found and the PR's config applies silently" in readme
     assert "`error:` line and exit 2 (no JSON)" in readme and "`config: pull request`" in readme
     assert "CI trust: `ado gate --base REF`, `ado strict check --base REF` and `ado strict verify --base REF`" in _flat("CHANGELOG.md")
     assert "uses a strict target branch's config (CI trust;" in _flat("AGENTS.md")
     assert "the gate take a strict `ado.config.json` from the target branch instead of the PR's" in _flat("commands/gate.md")
+
+
+def test_strict_ci_templates_documented():
+    """V3-14a: the shipped templates enforce strict; `ado strict mode`; what stays the owner's job."""
+    readme = _flat("README.md")
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `strict mode"))
+    assert "no token, no network" in row and '"source": "target branch\\|pull request"' in row and "Exit 3" in row
+    assert "**What the shipped CI templates now enforce under a strict target**" in readme and "**Still your job:**" in readme
+    assert "strict done refused: <rule ids>" in readme and "`merge_commit_sha`" in readme and "have not been run in this project's environment" in readme
+    assert "the workflow or pipeline files are `.github/workflows/*`, the caller workflow and the `toolkit-ref` it passes, and the Azure pipeline YAML" in readme
+    assert "`ado strict mode [--base REF]`" in _flat("CHANGELOG.md") and "strict done refused: <rule ids>" in _flat("CHANGELOG.md")
+    assert "ado strict mode [--base REF]" in _flat("AGENTS.md") and "`ado strict mode` (read-only, local)" in _flat("rules/hitl.md")
+    for doc, ref in (("docs/ci-github.md", "<PR base branch>"), ("docs/ci-azure-pipelines.md", "<target branch>")):
+        text = _flat(doc)
+        assert f"`ado strict mode --base origin/{ref}`" in text and "strict done refused: <rule ids>" in text, doc
+        assert "`ado strict check <id> --phase pr --head" in text and "have not been run in this project's environment" in text, doc
+        assert "the story-id fail-closed" in text or "fails (not skips)" in text, doc
+    assert "merge_commit_sha" in _flat("docs/ci-github.md") and "`fetch-depth: 0`" in _flat("docs/ci-github.md")
+    assert "fail (not skip)" in _flat("docs/configuration.md") and "Strict mode" in (ROOT / "pipelines" / "README.md").read_text(encoding="utf-8")
+
+
+def test_strict_ci_fix_round_documented():
+    for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        text = _flat(doc)
+        assert "every other non-zero exit" in text and "is not moved by" in text, doc
+    azure = _flat("docs/ci-azure-pipelines.md")
+    assert "branch policy build of the target's YAML" not in azure and "runs the YAML from the PR's merge commit" in azure
+    assert "a required build-validation pipeline whose YAML or template lives in a protected repository" in azure
+    assert "not moved by the optional transition" in _flat("README.md") and "the refused story is not moved" in _flat("CHANGELOG.md")
+    assert "is not moved by `transitionState`" in _flat("pipelines/README.md")
+    assert "# Strict (the target branch's ado.config.json says mode: strict" in (ROOT / ".github" / "workflows" / "ado-gate.yml").read_text(encoding="utf-8")

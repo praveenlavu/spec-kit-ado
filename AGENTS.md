@@ -200,6 +200,7 @@ ado decisions <id> --post --plan-out .ado/plan-decisions.md   # dry run: ONE new
 ado branch <id> --apply               # local, no approval: create/rename/switch to <branch_prefix>ab<id>-<slug>; never pushes, never renames the default branch
 ado branch <id> --link --plan-out .ado/plan-branch-link.md   # Azure only, branch must be pushed; dry run (needs PAT scope Code: Read and Project and Team: Read); after a yes: --link --apply --expect-plan .ado/plan-branch-link.md
 ado branch --id-from <branch> [--base REF]   # read-only, local (--base: CI trust, a strict target branch's config): the story id a branch is tied to (<branch_prefix>ab<n> at the start, else AB#<n>); exit 1 when none, exit 3 when ado.config.json is invalid
+ado strict mode [--base REF]          # read-only, local, no token: {"mode", "source"} CI would judge a PR by (--base: a strict target branch's config decides); exit 3 = config cannot be trusted
 ado attachments <id> --download       # read-only: list files; save allowlisted ones to .ado/attachments/<id>/ (untrusted data)
 ado link <id> --to <other-id>         # or --parent <n> / --url <link>; confirm first
 ado gate <id> --src . --base origin/main --changed <files>   # read-only; exit 1 = a gate.block check failed, 3 = invalid ado.config.json (with --base, also an unreadable target config), 2 = other error; --base uses a strict target branch's config (CI trust; an unreadable base keeps v0.2 for an advisory config)

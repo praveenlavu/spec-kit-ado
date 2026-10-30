@@ -1,5 +1,7 @@
 # ADO gate (step template) for Azure Repos PR validation builds. Posts the result on the PR.
-# Advisory: the step fails ONLY when `ado gate` exits 1 and gate.json says blocking: true, or the story-id step finds an invalid ado.config.json (`ado branch --id-from` exit 3).
+# Advisory: the step fails ONLY when `ado gate` exits 1 and gate.json says blocking: true, or `ado strict mode` / the story-id step finds an invalid ado.config.json (exit 3).
+# Strict (the target branch's ado.config.json says mode: strict): the step also fails when no story id can be read from the branch, and runs
+# `ado strict check <id> --phase pr` after the gate (its rule ids go into the PR thread; the check runs without the token).
 #   - template: pipelines/ado-gate.yml@spec-kit-ado
 # The story id comes from the source branch name by the `ado branch --id-from` rule
 # (<branch_prefix>ab<id>-<slug>, or AB#<id>; branch_prefix comes from ado.config.json).
@@ -33,11 +35,34 @@ steps:
       # Annotation text from untrusted data (CLI stderr, branch names): one line, no control chars, UTF-8-safe 300-char cut ('#' -> '# ' so no ##vso command can form)
       ann() { python3 -I -c 'import re,sys;t=re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]"," ",sys.stdin.buffer.read().decode("utf-8","replace"));sys.stdout.buffer.write(t.replace("#","# ")[:300].encode())'; }
       branch=${SOURCE_BRANCH#refs/heads/}
+      # Strict mode first: local and read-only (a strict config on the target branch decides). Exit 3 = a config that cannot be trusted: fail closed.
+      # Exit 2 (no usable config) is advisory, as before; the story-id step below then fails instead of skipping under strict. Every other non-zero exit
+      # (a crash, 127 = no ado, a signal) means the mode is unknown: fail closed too, whatever the target says.
+      mcode=0
+      ado strict mode --base "origin/${TARGET_BRANCH#refs/heads/}" > "$AGENT_TEMPDIRECTORY/mode.json" 2> "$AGENT_TEMPDIRECTORY/mode.err" || mcode=$?
+      if [ "$mcode" -eq 3 ]; then
+        echo "##vso[task.logissue type=error]ADO gate FAILED: ado.config.json is invalid — $(head -n 1 "$AGENT_TEMPDIRECTORY/mode.err" | ann)"
+        exit 1
+      fi
+      if [ "$mcode" -ne 0 ] && [ "$mcode" -ne 2 ]; then
+        echo "##vso[task.logissue type=error]ADO gate FAILED: could not determine the strict mode (ado strict mode exit $mcode) — $(head -n 1 "$AGENT_TEMPDIRECTORY/mode.err" | ann)"
+        exit 1
+      fi
+      mode=advisory
+      [ "$mcode" -ne 0 ] || mode=$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1]))["mode"])' "$AGENT_TEMPDIRECTORY/mode.json" 2>/dev/null) || mode=unreadable
+      if [ "$mode" != strict ] && [ "$mode" != advisory ]; then
+        echo "##vso[task.logissue type=error]ADO gate FAILED: could not read the strict mode (unexpected output of ado strict mode)"
+        exit 1
+      fi
       code=0
-      id=$(ado branch --id-from="$branch" 2> "$AGENT_TEMPDIRECTORY/id.err") || code=$?
+      id=$(ado branch --id-from="$branch" --base "origin/${TARGET_BRANCH#refs/heads/}" 2> "$AGENT_TEMPDIRECTORY/id.err") || code=$?
       if [ "$code" -eq 3 ]; then  # invalid ado.config.json: fail closed (a missing config, exit 2, stays advisory)
         # No PR thread: `ado pr comment` loads the same invalid config, so it could not post one.
         echo "##vso[task.logissue type=error]ADO gate FAILED: ado.config.json is invalid — $(head -n 1 "$AGENT_TEMPDIRECTORY/id.err" | ann)"
+        exit 1
+      fi
+      if [ "$mode" = strict ] && [ "$code" -ne 0 ]; then  # the gate cannot be skipped under a strict target
+        echo "##vso[task.logissue type=error]ADO gate FAILED: strict mode needs a work item id in the source branch name and none could be read (ado exit $code)"
         exit 1
       fi
       if [ "$code" -eq 1 ]; then
@@ -57,8 +82,23 @@ steps:
       else code=2; fi
       if [ -s "$AGENT_TEMPDIRECTORY/gate.err" ]; then echo "ado gate: $(ann < "$AGENT_TEMPDIRECTORY/gate.err")"; fi  # CLI stderr can carry config/ADO text
       [ -s "$AGENT_TEMPDIRECTORY/gate.md" ] || echo "ADO gate could not run (see job log)." > "$AGENT_TEMPDIRECTORY/gate.md"
+      scode=0; rules=
+      if [ "$mode" = strict ]; then
+        # A local check of the PR's own files and git history: the token is taken out of its environment. Rule ids reach the thread and the log, never the finding text.
+        rm -f "$AGENT_TEMPDIRECTORY/strict.json" "$AGENT_TEMPDIRECTORY/strict.err"
+        env -u ADO_TOKEN ado strict check "$id" --phase pr --head "$HEAD_SHA" --base "origin/${TARGET_BRANCH#refs/heads/}" > "$AGENT_TEMPDIRECTORY/strict.json" 2> "$AGENT_TEMPDIRECTORY/strict.err" || scode=$?
+        if [ -s "$AGENT_TEMPDIRECTORY/strict.err" ]; then echo "ado strict check: $(ann < "$AGENT_TEMPDIRECTORY/strict.err")"; fi
+        if [ "$scode" -ne 0 ]; then
+          rules=$(python3 -I -c 'import json,re,sys;print(" ".join(re.sub("[^A-Za-z0-9_-]","",str(x["rule"]))[:40] for x in json.load(open(sys.argv[1]))["findings"][:20]))' "$AGENT_TEMPDIRECTORY/strict.json" 2>/dev/null) || rules=
+          printf '\n**spec-kit-ado strict check failed** - rule ids: %s\n' "${rules:-none (the check could not run, see the job log)}" >> "$AGENT_TEMPDIRECTORY/gate.md"
+        fi
+      fi
       ado pr comment "$PR_ID" --body-file "$AGENT_TEMPDIRECTORY/gate.md" > /dev/null 2> "$AGENT_TEMPDIRECTORY/pr.err" \
         || echo "##vso[task.logissue type=warning]Could not post the PR comment (the build identity needs Contribute to pull requests): $(ann < "$AGENT_TEMPDIRECTORY/pr.err")"
+      if [ "$scode" -ne 0 ]; then
+        echo "##vso[task.logissue type=error]ADO gate FAILED: strict check failed - rule ids: ${rules:-none reported}"
+        exit 1
+      fi
       [ "$code" -eq 0 ] || { [ "$code" -eq 1 ] && python3 -I -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1]))["blocking"] is True else 1)' "$AGENT_TEMPDIRECTORY/gate.json" 2>/dev/null; } || echo "##vso[task.logissue type=warning]spec-kit-ado gate could not run (see the PR comment and job log)"
       # Fail ONLY when ado gate exits 1 AND gate.json says blocking: true; anything else is advisory.
       if [ "$code" -eq 1 ] && python3 -I -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1]))["blocking"] is True else 1)' "$AGENT_TEMPDIRECTORY/gate.json" 2>/dev/null; then exit 1; fi
@@ -70,4 +110,5 @@ steps:
       ADO_CONFIG: $(Agent.BuildDirectory)/${{ parameters.repoPath }}/${{ parameters.configPath }}
       SOURCE_BRANCH: $(System.PullRequest.SourceBranch)
       TARGET_BRANCH: $(System.PullRequest.TargetBranch)
+      HEAD_SHA: $(System.PullRequest.SourceCommitId)
       PR_ID: $(System.PullRequest.PullRequestId)

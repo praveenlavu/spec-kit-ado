@@ -49,6 +49,9 @@ jobs:
       - uses: actions/checkout@v4
         if: steps.ab.outputs.ids != ''
         with:
+          # The exact merged commit, detached and in full: it holds the ledger and Decisions_<id>.md `ado done` reads.
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@v4
         if: steps.ab.outputs.ids != ''
@@ -89,6 +92,12 @@ jobs:
             fi
             # Dry run first: only a genuinely not-ready ledger is a quiet notice.
             ado done "$id" --plan-out "${RUNNER_TEMP}/plan_${id}.md" > "${RUNNER_TEMP}/done_${id}.json" 2> "${RUNNER_TEMP}/done_${id}.err" || true
+            # A strict refusal (exit 2, a findings JSON without `ready` on stdout) is not an evaluation failure: report its rule ids, never its text, and fail the job at the end.
+            if rules=$(python3 -I -c 'import json,re,sys;r=json.load(open(sys.argv[1]));assert "ready" not in r;print(" ".join(re.sub("[^A-Za-z0-9_-]","",str(x["rule"]))[:40] for x in r["findings"][:20]) or "none")' "${RUNNER_TEMP}/done_${id}.json" 2>/dev/null); then
+              echo "::error::$id: strict done refused: $rules"
+              refused=true; story_refused=true  # a refused story is not transitioned either
+              return 1
+            fi
             st=$(python3 -I -c 'import json,sys;r=json.load(open(sys.argv[1]));print("true" if r["ready"] else "false", "done" if r.get("already_done") is True else "open")' "${RUNNER_TEMP}/done_${id}.json" 2>/dev/null || echo "unknown open")
             ready=${st% *}
             # A story already in done_state is never transitioned, whatever happened to its ledger: every note ends in $keep and the function returns 0.
@@ -117,14 +126,16 @@ jobs:
             fi
             [ -n "$keep" ]
           }
+          refused=false
           for id in $IDS; do
             ado comment "$id" "Merged via PR #${PR_NUM}: ${PR_URL}" > /dev/null 2> "${RUNNER_TEMP}/ado.err" \
               || echo "::warning::$id: could not comment on the work item (check ADO_TOKEN and config): $(ann < "${RUNNER_TEMP}/ado.err")"
             # Closing is opt-in and runs BEFORE any transition: a story already moved to done_state would be skipped by `ado done`.
-            closed=false
+            closed=false; story_refused=false
             case "$CLOSE_STORY" in [Tt]rue) close_out && closed=true ;; esac
-            if [ -n "$STATE" ] && [ "$closed" = false ]; then
+            if [ -n "$STATE" ] && [ "$closed" = false ] && [ "$story_refused" = false ]; then
               ado update "$id" --state "$STATE" > /dev/null 2> "${RUNNER_TEMP}/ado.err" \
                 || echo "::warning::$id: could not set state '$STATE': $(ann < "${RUNNER_TEMP}/ado.err")"
             fi
           done
+          [ "$refused" = false ] || exit 1  # a refused strict done fails the job, after every story has been handled

@@ -52,6 +52,10 @@ bash 3.2 (the gate degrades to "could not run"); Windows agents cannot run the s
 build service identity needs Contribute to pull requests (PR comments) and edit access to
 work items (comments, state, attachments). Without them the templates warn and carry on.
 
+## Strict mode
+
+With `mode: strict` on the target branch (`ado strict mode --base origin/<target>`), `ado-gate.yml` fails the build when the source branch carries no story id and runs `ado strict check <id> --phase pr` after the gate (rule ids only in the PR thread, no `ADO_TOKEN` for that command); `ado-link-on-merge.yml` fails the build when the strict `ado done` check refuses (that story is not moved by `transitionState`; the others are). A mode that cannot be determined (any exit of `ado strict mode` other than 0, 2 or 3) also fails the gate build. Otherwise both behave as before. Protect the pipeline YAML and `ado.config.json` yourself: see docs/ci-azure-pipelines.md.
+
 ## Limitations
 
 - Azure Pipelines has no predefined variable for the PR title or description, so the gate and

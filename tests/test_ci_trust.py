@@ -311,3 +311,82 @@ def test_strict_verify_base_cannot_be_shadowed_by_a_tag(tmp_path, monkeypatch, c
     assert _cli(mod, capsys, "strict", "verify", "1001", "--no-record", "--base", "origin/trunk")[0] == 0
     for base in ("v-none", "", "refs/tags/origin/trunk"):  # nothing that is a tag or unknown stands in for the base
         assert _cli(mod, capsys, "strict", "verify", "1001", "--no-record", "--base", base)[0] == 2
+
+
+# ---- V3-14a: `ado strict mode [--base REF]`: the mode CI would judge a PR by (read-only, no token, no network) ----
+def _mode(monkeypatch, capsys, *extra):
+    monkeypatch.setattr(m, "AdoClient", lambda c: (_ for _ in ()).throw(AssertionError("strict mode is local: no client")))
+    rc = main(["strict", "mode", *extra])
+    cap = capsys.readouterr()
+    return rc, (json.loads(cap.out) if cap.out.strip() else None), cap.err
+
+
+TARGET, PULL = "target branch", "pull request"
+
+
+@pytest.mark.parametrize("target,head,mode,source", [
+    (STRICT, ORG, "strict", TARGET),  # the PR says advisory: the target's strict config wins
+    (STRICT, None, "strict", TARGET),  # a PR that deletes its config
+    (STRICT, {**ORG, "mode": "advisory"}, "strict", TARGET),
+    (None, ORG, "advisory", PULL),
+    (ORG, ORG, "advisory", PULL),
+    ({**ORG, "mode": "advisory", "gate": {"block": ["ac_traceability"]}}, ORG, "advisory", PULL),
+    (None, STRICT, "strict", PULL),  # the first PR that introduces strict mode: its own config
+    (ORG, STRICT, "strict", PULL),  # a PR that adds strictness to an advisory target
+])
+def test_strict_mode_says_which_config_judges_the_pr(tmp_path, monkeypatch, capsys, git_env, target, head, mode, source):
+    _gate_pr(tmp_path, monkeypatch, git_env, target, head)
+    rc, out, err = _mode(monkeypatch, capsys, "--base", "origin/main")
+    assert (rc, out, err) == (0, {"mode": mode, "source": source}, "")
+
+
+def test_strict_mode_without_base_is_the_pr_config_and_reads_no_ref(tmp_path, monkeypatch, capsys, git_env):
+    _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG)
+    monkeypatch.setattr(m.Config, "load_from_ref", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no --base: no ref is read")))
+    assert _mode(monkeypatch, capsys)[:2] == (0, {"mode": "advisory", "source": PULL})
+
+
+@pytest.mark.parametrize("target", ['{"organization": "contoso"}', "{not json", "[]", '{"organization": "contoso", "project": "p", "mode": "lax"}'])
+def test_strict_mode_with_an_invalid_target_exit_3(tmp_path, monkeypatch, capsys, git_env, target):
+    _gate_pr(tmp_path, monkeypatch, git_env, target, ORG)  # a valid head config does not rescue it
+    rc, out, err = _mode(monkeypatch, capsys, "--base", "origin/main")
+    assert rc == 3 and out is None and err.startswith("error: ") and err.count("\n") == 1
+    assert str(tmp_path) not in err and "origin/main" not in err.replace("target branch", "")  # fixed text: no path, no ref
+
+
+def test_strict_mode_with_an_invalid_head_config_exit_3(tmp_path, monkeypatch, capsys, git_env):
+    _gate_pr(tmp_path, monkeypatch, git_env, None, '{"organization": "contoso", "project": "Fabrikam", "gate": {"block": ["nope"]}}')
+    assert _mode(monkeypatch, capsys, "--base", "origin/main")[0] == 3
+    assert _mode(monkeypatch, capsys)[0] == 3
+
+
+@pytest.mark.parametrize("base", ["origin/nosuch", "nosuch", "abc", "--output=x", "origin/main:ado.config.json"])
+def test_strict_mode_unresolvable_base_under_a_strict_pr_config_exit_3(tmp_path, monkeypatch, capsys, git_env, base):
+    _gate_pr(tmp_path, monkeypatch, git_env, STRICT, STRICT)
+    rc, out, err = _mode(monkeypatch, capsys, f"--base={base}")
+    assert rc == 3 and out is None and err.startswith("error: ") and not (tmp_path / "x").exists()
+
+
+@pytest.mark.parametrize("base", ["origin/nosuch", "HEAD~5", "nosuch", "--output=x"])
+def test_strict_mode_unresolvable_base_with_an_advisory_pr_config_keeps_advisory(tmp_path, monkeypatch, capsys, git_env, base):
+    _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG)  # the target is strict, but this base cannot be read here: the v0.2 path
+    assert _mode(monkeypatch, capsys, f"--base={base}") == (0, {"mode": "advisory", "source": PULL}, "")
+
+
+def test_strict_mode_without_any_config_is_a_plain_error_not_fail_closed(tmp_path, monkeypatch, capsys, git_env):
+    _gate_pr(tmp_path, monkeypatch, git_env, None, None)  # no config anywhere: the templates treat this as advisory
+    rc, out, err = _mode(monkeypatch, capsys, "--base", "origin/main")
+    assert rc == 2 and out is None and err.startswith("error: ")
+
+
+def test_strict_mode_a_tag_named_like_the_base_cannot_shadow_it(tmp_path, monkeypatch, capsys, git_env):
+    _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG)
+    git(tmp_path, "tag", "origin/main", "HEAD")  # a tag on the PR's own commit
+    assert _mode(monkeypatch, capsys, "--base", "origin/main")[:2] == (0, {"mode": "strict", "source": TARGET})
+
+
+def test_strict_mode_needs_no_token_and_makes_no_request(tmp_path, monkeypatch, capsys, git_env):
+    _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG)
+    monkeypatch.delenv("ADO_TOKEN", raising=False)
+    monkeypatch.setenv("HOME", str(tmp_path))  # no keychain, no stored token
+    assert _mode(monkeypatch, capsys, "--base", "origin/main")[0] == 0

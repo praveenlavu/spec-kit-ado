@@ -51,9 +51,12 @@ def test_persist_credentials_false(name):
 
 
 def _without_invalid_config_exit(script):
-    """Drop the one separately tested `--id-from` exit-3 block (its own `exit 1`); everything else stays checked."""
-    rest, n = re.subn(r'^if \[ "\$code" -eq 3 \]; then.*?\nfi\n', "", script, flags=re.S | re.M)
-    assert n == 1 and "ADO gate FAILED: ado.config.json is invalid" in script
+    """Drop the separately tested fail-closed blocks (the invalid-config exit, the strict-mode failures: each a top-level `if ...; fi`
+    whose message starts `ADO gate FAILED` and ends in its own `exit 1`); everything else stays checked."""
+    rest, n = re.subn(r'^if [^\n]*; then[^\n]*\n(?:(?!fi\n).)*?ADO gate FAILED.*?\nfi\n', "", script, flags=re.S | re.M)
+    rest0, n0 = re.subn(r'^if \[ "\$code" -eq 3 \]; then.*?\nfi\n', "", script, flags=re.S | re.M)
+    assert n0 == 1 and "ADO gate FAILED: ado.config.json is invalid" in script
+    assert n == 6, n  # invalid config (strict mode, story id), mode failed, unreadable mode, strict needs an id, strict check failed
     return rest
 
 
@@ -69,7 +72,7 @@ def test_gate_fails_only_on_blocking():
 def test_gate_comment_comes_from_cli_summary():
     (script,) = [s for s in scripts("ado-gate") if "ado gate" in s]
     assert "--summary-out" in script and '> "$AGENT_TEMPDIRECTORY/gate.json"' in script
-    assert "ADO_TOKEN" not in script and "${msg" not in script and "comment.md" not in script
+    assert "ADO_TOKEN" not in script.replace("env -u ADO_TOKEN ado strict check ", "") and "${msg" not in script and "comment.md" not in script
     assert 'ado pr comment "$PR_ID" --body-file "$AGENT_TEMPDIRECTORY/gate.md"' in script
     assert "could not run (see job log)" in script
     (fail,) = [ln for ln in _without_invalid_config_exit(script).splitlines() if "exit 1" in ln]

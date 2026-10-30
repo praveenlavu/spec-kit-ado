@@ -372,14 +372,14 @@ def _override(args):
 
 
 def _config(args):
-    """The config this run uses. With `--base REF` on `gate`, `strict check`, `strict verify` or `branch --id-from`, the target branch's
+    """The config this run uses. With `--base REF` on `gate`, `strict check`, `strict verify`, `strict mode` or `branch --id-from`, the target branch's
     `ado.config.json` is read first: when it says `mode: strict`, the whole run uses it and the PR's own file is never read (a PR cannot
     weaken its own strictness); an unreadable one raises ConfigInvalid (fail closed). A target with no config, or an advisory one, leaves
     the PR's config in charge. A REF that is no commit here (a shallow clone, `origin/main` in a repo with no origin) cannot say what the
     target holds: with an advisory PR config that is the v0.2 path (the gate notes it and goes on); with a strict one, or an invalid one,
     it fails closed."""
     base = getattr(args, "base", None)
-    if base is not None and (args.command in ("gate", "branch") or (args.command == "strict" and args.strict_command in ("check", "verify"))):
+    if base is not None and (args.command in ("gate", "branch") or (args.command == "strict" and args.strict_command in ("check", "verify", "mode"))):
         repo = getattr(args, "src", None) or "."  # gate: the checkout --base belongs to
         try:
             target = Config.load_from_ref(base, repo=repo)
@@ -541,6 +541,10 @@ def main(argv=None):
                    "default: the branch origin/HEAD points at)")
     q.add_argument("--head", metavar="REF", default="HEAD", help="the branch or commit the PR is made from (default HEAD; CI passes the head SHA, "
                    "so a detached checkout works)")
+    q = ssub.add_parser("mode", help="Which mode CI judges a PR by (read-only, no token, no network): prints {\"mode\", \"source\"}; exit 3 when the "
+                        "config cannot be trusted (CI fails closed)")
+    q.add_argument("--base", metavar="REF", help="the ref the PR targets, e.g. origin/main: a strict config there decides (source: target branch), "
+                   "else the PR's own config (source: pull request)")
     q = ssub.add_parser("override", help="A human, in their own terminal, records a `kind: override` decision that lets ONE strict rule pass for "
                         "this story (a local write of Decisions_<id>.md; refuses without a terminal; not a security boundary; the entry must be posted "
                         "before `pr`); without --apply prints the line it would record")
@@ -599,6 +603,9 @@ def main(argv=None):
             out = _resolve_decision(args)
         elif args.command == "strict" and args.strict_command == "override":  # local only: no token, no request
             out = _override(args)
+        elif args.command == "strict" and args.strict_command == "mode":  # local only: no token, no request
+            cfg = _config(args)
+            out = {"mode": cfg.mode, "source": "target branch" if cfg.from_target else "pull request"}
         elif args.command == "branch" and args.id_from is not None:  # local only: no token, no request
             out = prs.story_from_branch(args.id_from, _config(args).branch_prefix)
         else:
@@ -610,7 +617,8 @@ def main(argv=None):
                 out["config"] = gate.PR_CONFIG_NOTE
     except (ConfigError, AuthError, dod.DodExists, ValueError) as e:
         # 3 (invalid config) lets CI fail closed: `gate`, and `branch --id-from` (the Azure gate reads its story id with it)
-        fail_closed = args.command == "gate" or (args.command == "branch" and args.id_from is not None)
+        fail_closed = args.command == "gate" or (args.command == "branch" and args.id_from is not None) or (
+            args.command == "strict" and args.strict_command == "mode")
         err, code = e, 3 if fail_closed and isinstance(e, ConfigInvalid) else 2
     except AdoError as e:
         err, code = e, 1
@@ -629,7 +637,7 @@ def main(argv=None):
             print("warning: could not write the --summary-out file", file=sys.stderr)
     if err is not None:
         return code
-    if args.command == "strict" and not out["ok"]:
+    if args.command == "strict" and args.strict_command != "mode" and not out["ok"]:
         print(f"error: strict {args.strict_command} failed: {len(out['findings'])} finding(s)", file=sys.stderr)
         return 2
     if args.command == "branch" and out is None:
