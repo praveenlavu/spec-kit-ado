@@ -634,3 +634,11 @@ def test_release_plan_records_fresh_repo_and_v0_policy():
                    "scrub_check.py --require-denylist --history", "private vulnerability reporting", "move `v0` to it last"):
         assert needle in cs, needle
     assert "`v0` and breaking changes" in ver and "pins an exact tag" in ver and "git tag -f v0 v0.1.1" in ver
+
+
+def test_configuration_documents_mode_and_strict_keys():
+    text = _flat("docs/configuration.md")
+    for needle in ("| `mode` |", "| `strict` |", "`strict.test_command`", "`strict.test_timeout`",
+                   "`mode` must be `advisory` or `strict`"):
+        assert needle in text, needle
+    assert "## 0.3.0 — unreleased" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")

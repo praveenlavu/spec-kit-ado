@@ -2,6 +2,14 @@
 
 All notable changes are listed here. Versions follow [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md).
 
+## 0.3.0 — unreleased
+
+### Added
+
+- Config: `mode` (`"advisory"` default, or `"strict"`) and the `strict` object (`test_command`,
+  `test_timeout`); in strict mode the effective `gate.block` and `review_block_on` are the
+  project's lists plus the strict floor. Invalid values are a config error.
+
 ## 0.2.0 — 2026-10-29
 
 Feature release: the story's discussion and attachments are read, open questions go to the

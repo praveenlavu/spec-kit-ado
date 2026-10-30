@@ -7,6 +7,10 @@ from pathlib import Path
 DEFAULT_API_VERSION = "7.1"
 ORG_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")  # organization goes into a URL path
 REVIEW_SEVERITIES = ("blocker", "major", "minor")  # review_block_on entries (case-sensitive)
+MODES = ("advisory", "strict")
+STRICT_GATE_BLOCK = ("ac_traceability", "assertion", "open_questions", "commits_without_story")  # gate.block floor in strict mode
+STRICT_REVIEW_BLOCK = ("blocker",)  # review_block_on floor in strict mode
+STRICT_DEFAULTS = {"test_command": None, "test_timeout": 300}
 
 
 BRANCH_PREFIX_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]*")
@@ -29,7 +33,7 @@ _HARMLESS_FORMAT = "\u200c\u200d\u200e\u200f"  # ZWNJ, ZWJ, LRM, RLM: Persian/In
 _FIELDS = frozenset({  # fixed config field names: safe to print
     "organization", "project", "api_version", "dod_path", "gate", "tests", "block", "attachments_allow", "review_block_on",
     "done_state", "task_type", "repo_host", "repository", "story_type", "removed_state", "branch_prefix", "stack", "kit",
-    "phases", "dod_gate"})
+    "phases", "dod_gate", "mode", "strict", "test_command", "test_timeout"})
 
 
 def _has_control(s):
@@ -70,7 +74,8 @@ class Config:
                  dod_path="dod", gate=None, attachments_allow=None, review_block_on=None,
                  done_state="Done", task_type="Task",
                  repo_host="github", repository="",
-                 story_type="User Story", removed_state="Removed", branch_prefix="feature/"):
+                 story_type="User Story", removed_state="Removed", branch_prefix="feature/",
+                 mode="advisory", strict=None):
         self.organization = organization
         self.project = project
         self.api_version = api_version
@@ -86,6 +91,22 @@ class Config:
         self.story_type = story_type
         self.removed_state = removed_state
         self.branch_prefix = branch_prefix
+        self.mode = mode
+        self.strict = {**STRICT_DEFAULTS, **(strict or {})}
+
+    def _effective(self, project_list, floor):
+        out = list(project_list)
+        if self.mode == "strict":
+            out += [x for x in floor if x not in out]
+        return out
+
+    def effective_gate_block(self):
+        """gate.block in force: the project's list, plus the strict floor when mode is strict."""
+        return self._effective(self.gate["block"], STRICT_GATE_BLOCK)
+
+    def effective_review_block_on(self):
+        """review_block_on in force: the project's list, plus the strict floor when mode is strict."""
+        return self._effective(self.review_block_on, STRICT_REVIEW_BLOCK)
 
     @classmethod
     def load(cls, start_dir=None):
@@ -159,6 +180,21 @@ class Config:
                     if r not in REVIEW_SEVERITIES:
                         raise ConfigInvalid(f"{path}: review_block_on[{i}]: unknown severity "
                                           f"(valid: {', '.join(REVIEW_SEVERITIES)})")
+                if "mode" in data and data["mode"] not in MODES:
+                    raise ConfigInvalid(f"{path}: 'mode' must be \"advisory\" or \"strict\"")
+                strict = data.get("strict", {})
+                if not isinstance(strict, dict):
+                    raise ConfigInvalid(f"{path}: 'strict' must be a JSON object")
+                for n, k in enumerate(strict, 1):
+                    if k not in STRICT_DEFAULTS:  # named by position: the key is PR-controlled text
+                        raise ConfigInvalid(f"{path}: strict entry #{n}: unknown key "
+                                          f"(valid: {', '.join(STRICT_DEFAULTS)})")
+                cmd = strict.get("test_command")
+                if "test_command" in strict and not (isinstance(cmd, str) and 0 < len(cmd) <= 500):
+                    raise ConfigInvalid(f"{path}: 'strict.test_command' must be a string of 1-500 characters")
+                tt = strict.get("test_timeout")
+                if "test_timeout" in strict and not (isinstance(tt, int) and not isinstance(tt, bool) and 1 <= tt <= 3600):
+                    raise ConfigInvalid(f"{path}: 'strict.test_timeout' must be an integer from 1 to 3600")
                 return cls(
                     organization=data["organization"],
                     project=data["project"],
@@ -174,6 +210,8 @@ class Config:
                     story_type=data.get("story_type", "User Story"),
                     removed_state=data.get("removed_state", "Removed"),
                     branch_prefix=data.get("branch_prefix", "feature/"),
+                    mode=data.get("mode", "advisory"),
+                    strict=strict,
                 )
         raise ConfigError(
             "No ADO config found. Run `ado setup` to create ado.config.json here, "

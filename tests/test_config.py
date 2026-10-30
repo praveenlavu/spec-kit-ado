@@ -290,7 +290,7 @@ def _wi(ac):
 
 
 # ---- F31: control characters are rejected in every string of the (PR-supplied) config ----
-from ado.config import ConfigInvalid  # noqa: E402
+from ado.config import STRICT_GATE_BLOCK, STRICT_REVIEW_BLOCK, ConfigInvalid  # noqa: E402
 
 BAD_CHARS = {"newline": "\n", "nul": "\x00", "esc": "\x1b", "ls": "\u2028", "ps": "\u2029", "zwsp": "\u200b",
              "del": "\x7f", "c1": "\x85", "private": "\ue000", "rlo": "\u202e", "bidi-isolate": "\u2066",
@@ -358,3 +358,69 @@ def test_ordinary_non_ascii_text_and_unassigned_code_points_stay_valid(tmp_path,
         encoding="utf-8")
     cfg = Config.load(start_dir=tmp_path)
     assert cfg.project == s and cfg.done_state == s
+
+
+def _load(tmp_path, **extra):
+    (tmp_path / "ado.config.json").write_text(json.dumps({**BASE, **extra}))
+    return Config.load(start_dir=tmp_path)
+
+
+def test_mode_defaults_to_advisory(tmp_path):
+    cfg = _load(tmp_path)
+    assert cfg.mode == "advisory"
+    assert cfg.strict == {"test_command": None, "test_timeout": 300}
+
+
+def test_mode_rejects_unknown_value(tmp_path):
+    for bad in ("Strict", "off", "", None, True, ["strict"]):
+        with pytest.raises(ConfigInvalid, match="'mode'"):
+            _load(tmp_path, mode=bad)
+    assert _load(tmp_path, mode="strict").mode == "strict"
+
+
+def test_strict_object_keys_validated(tmp_path):
+    cfg = _load(tmp_path, strict={"test_command": "pytest -q", "test_timeout": 60})
+    assert cfg.strict == {"test_command": "pytest -q", "test_timeout": 60}
+    assert _load(tmp_path, strict={"test_timeout": 3600}).strict == {"test_command": None, "test_timeout": 3600}
+    for bad in ([], "x", None, 5):  # strict not an object
+        with pytest.raises(ConfigInvalid, match="'strict' must be a JSON object"):
+            _load(tmp_path, strict=bad)
+    for strict, where in (({"test_command": ""}, "strict.test_command"), ({"test_command": 5}, "strict.test_command"),
+                          ({"test_command": "x" * 501}, "strict.test_command"),
+                          ({"test_timeout": 0}, "strict.test_timeout"), ({"test_timeout": 3601}, "strict.test_timeout"),
+                          ({"test_timeout": "60"}, "strict.test_timeout"), ({"test_timeout": True}, "strict.test_timeout"),
+                          ({"test_timeout": 1.5}, "strict.test_timeout")):
+        with pytest.raises(ConfigInvalid, match=where.replace(".", r"\.")):
+            _load(tmp_path, strict=strict)
+    with pytest.raises(ConfigInvalid, match="control character"):
+        _load(tmp_path, strict={"test_command": "pytest\n::error::x"})
+    with pytest.raises(ConfigInvalid) as e:  # unknown key: named by position, never echoed
+        _load(tmp_path, strict={"secret-key-name": 1})
+    assert "strict entry #1" in str(e.value) and "secret-key-name" not in str(e.value)
+
+
+def test_effective_lists_in_strict_union_project_and_defaults(tmp_path):
+    cfg = _load(tmp_path, mode="strict", review_block_on=["major"], gate={"block": ["assertion", "ac_drift"]})
+    assert cfg.effective_review_block_on() == ["major", "blocker"]
+    assert cfg.effective_gate_block() == ["assertion", "ac_drift", "ac_traceability", "open_questions",
+                                          "commits_without_story"]
+    cfg = _load(tmp_path, mode="strict", review_block_on=["blocker"], gate={"block": list(STRICT_GATE_BLOCK)})
+    assert cfg.effective_review_block_on() == ["blocker"] and cfg.effective_gate_block() == list(STRICT_GATE_BLOCK)
+    cfg = _load(tmp_path, mode="strict")
+    assert cfg.effective_review_block_on() == ["blocker"] and cfg.effective_gate_block() == list(STRICT_GATE_BLOCK)
+
+
+def test_effective_lists_unchanged_in_advisory(tmp_path):
+    cfg = _load(tmp_path, review_block_on=["major"], gate={"block": ["ac_drift"]})
+    assert cfg.effective_review_block_on() == ["major"] and cfg.effective_gate_block() == ["ac_drift"]
+    cfg = _load(tmp_path, mode="advisory")
+    assert cfg.effective_review_block_on() == [] and cfg.effective_gate_block() == []
+    cfg.review_block_on.append("minor")  # the returned lists are copies
+    assert cfg.effective_review_block_on() == ["minor"]
+    cfg.effective_gate_block().append("x")
+    assert cfg.effective_gate_block() == []
+
+
+def test_strict_gate_block_names_are_valid_checks():
+    assert set(STRICT_GATE_BLOCK) <= set(GATE_CHECKS)
+    assert set(STRICT_REVIEW_BLOCK) <= set(REVIEW_SEVERITIES)
