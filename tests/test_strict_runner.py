@@ -272,3 +272,10 @@ def test_read_only_and_mode_000_dirs_do_not_defeat_cleanup(repo, made):
            "mkdir -p sub/deep && echo b > sub/deep/f && chmod 000 sub/deep && chmod 000 sub; mkdir ro && touch ro/f && chmod 555 ro")
     assert strict.run_at(str(repo), git(repo, "rev-parse", "HEAD"), cmd, 30)["exit"] == 0
     _gone(repo, made)
+
+
+def test_seconds_stop_at_the_process_exit_not_the_pipe_drain(repo):
+    # an escapee in its own session keeps the pipes open for 2 s after the command exited
+    cmd = f"{shlex.quote(sys.executable)} -c \"import subprocess; subprocess.Popen(['sleep', '2'], start_new_session=True)\""
+    res = strict.run_at(str(repo), git(repo, "rev-parse", "--short", "HEAD"), cmd, 30)
+    assert res["exit"] == 0 and res["seconds"] < 1.5

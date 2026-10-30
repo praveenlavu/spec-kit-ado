@@ -786,3 +786,29 @@ def test_l1_order_evidence_documented():
     assert "reads git history" in _flat("docs/ci-github.md") and "reads git history" in _flat("pipelines/README.md")
     assert "Strict mode, L1 order evidence" in _flat("CHANGELOG.md")
     assert "check the red/green commit evidence" in _flat("docs/configuration.md")
+
+
+def test_strict_verify_and_record_documented():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    row = next(x for x in readme.splitlines() if x.startswith("| `strict verify <id>"))
+    assert "[--record\\|--no-record] [--base REF]" in row and "`### Verification — <date> @ <head sha>`" in row
+    assert "before `## 5.`" in row and "` (superseded)`" in row
+    assert "`--no-record` (CI) writes nothing" in row and "no token and no ADO request" in row
+    check_row = next(x for x in readme.splitlines() if x.startswith("| `strict check <id>"))
+    for rule in ("red-passes", "green-fails", "head-fails", "timeout", "test-command", "runner-error"):
+        for doc in ("README.md", "AGENTS.md", "CHANGELOG.md"):
+            assert f"`{rule}`" in _flat(doc), (doc, rule)
+    for rule in ("record-missing", "record-stale", "record-incomplete", "record-failed"):
+        assert f"`{rule}`" in check_row, rule
+        for doc in ("README.md", "AGENTS.md", "CHANGELOG.md", "docs/configuration.md"):
+            assert f"`{rule}`" in _flat(doc), (doc, rule)
+    assert "`- head: <12 hex> exit <n>`" in row and "and at `HEAD` (it must exit 0 there too" in readme.replace("\n", " ")
+    assert "`- head: <12 hex> exit <n>`" in _flat("CHANGELOG.md") and "at `HEAD` (must exit 0" in _flat("docs/configuration.md") + _flat("CHANGELOG.md")
+    assert "**L2: `ado strict verify <id>`**" in _flat("README.md") and "survives a squash merge" in _flat("README.md")
+    assert "run `ado strict verify <id>`" in _flat("commands/implement.md") and "`ado strict verify <id>`" in _flat("AGENTS.md")
+    hitl = next(x for x in (ROOT / "rules" / "hitl.md").read_text(encoding="utf-8").splitlines() if "`ado strict verify <id>`" in x)
+    assert "local ledger write" in hitl and "no gate" in hitl
+    assert "Strict mode, `ado strict verify <id> [--record|--no-record] [--base REF]`" in _flat("CHANGELOG.md")
+    for doc in ("README.md", "docs/configuration.md", "CHANGELOG.md"):
+        assert "Git LFS filters do not run" in _flat(doc) and "pointer files" in _flat(doc), doc
+    assert "stop when the command exits, not when its output pipes close" in _flat("README.md")

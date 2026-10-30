@@ -962,3 +962,27 @@ def test_pr_empty_tasks_md_with_nothing_on_the_board_is_still_not_checked(tmp_pa
     _spec(tmp_path, "")
     assert m.main(ARGS + ["--plan-out", "plan.md"]) == 0
     assert "not checked (no tasks found in" in (tmp_path / "plan.md").read_text()
+
+
+# ---- prs._git: bounded, pager-free, and blind to inherited repository selectors ----
+def test_git_helper_times_out_and_cannot_run_are_refusals(monkeypatch):
+    def slow(cmd, *a, **k):
+        assert k["timeout"] == 30 and k["stdin"] == subprocess.DEVNULL and "--no-pager" in cmd
+        raise subprocess.TimeoutExpired(cmd, 30)
+    monkeypatch.setattr(subprocess, "run", slow)
+    with pytest.raises(prs._Refuse, match="30 s"):
+        prs._git(".", "status")
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(PermissionError("x")))
+    with pytest.raises(prs._Refuse, match="could not be run"):
+        prs._git(".", "status")
+
+
+def test_git_helper_ignores_inherited_repository_selectors(tmp_path, monkeypatch):
+    from tests.conftest import commit, git
+    git(tmp_path, "init", "-q", "-b", "main")
+    commit(tmp_path, "one", {"f": "1\n"})
+    for k, v in (("GIT_DIR", str(tmp_path / "nowhere")), ("GIT_INDEX_FILE", str(tmp_path / "idx")),
+                 ("GIT_WORK_TREE", str(tmp_path / "elsewhere")), ("GIT_OBJECT_DIRECTORY", str(tmp_path / "objs"))):
+        monkeypatch.setenv(k, v)
+    r = prs._git(str(tmp_path), "rev-parse", "--show-toplevel")
+    assert r.returncode == 0 and r.stdout.decode().strip() == str(tmp_path.resolve())

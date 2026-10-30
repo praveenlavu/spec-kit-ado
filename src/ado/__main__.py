@@ -186,6 +186,8 @@ def _pr(client, args):
 
 def dispatch(client, args):
     if args.command == "strict":
+        if args.strict_command == "verify":
+            return strict.verify(client, args.id, record=args.record, base=args.base)
         return strict.check(client, args.id, args.phase)
     if args.command == "pr":
         return _pr(client, args)
@@ -455,11 +457,19 @@ def main(argv=None):
     q.add_argument("pr_id", type=int)
     q.add_argument("--body-file", required=True, metavar="F")
 
-    p = sub.add_parser("strict", help="Strict SDD+TDD mode: read-only phase checks")
+    p = sub.add_parser("strict", help="Strict SDD+TDD mode: phase checks (read-only) and `verify` (runs the tests, records the result)")
     ssub = p.add_subparsers(dest="strict_command", required=True)
     q = ssub.add_parser("check", help="Check the strict-mode rules of a phase (read-only; exit 2 lists the findings as JSON)")
     q.add_argument("id", type=int, help="story id")
     q.add_argument("--phase", required=True, choices=sorted(strict.PHASES), help="implement, pr or done")
+    q = ssub.add_parser("verify", help="Run L1, then strict.test_command at each AC's red (must fail) and green (must pass) commit; "
+                        "records the result in ledger section 4 (exit 2 lists the findings as JSON)")
+    q.add_argument("id", type=int, help="story id")
+    rec = q.add_mutually_exclusive_group()
+    rec.add_argument("--record", dest="record", action="store_true", default=True,
+                     help="append the verification record to the ledger (default)")
+    rec.add_argument("--no-record", dest="record", action="store_false", help="write nothing, only set the exit code (CI)")
+    q.add_argument("--base", metavar="REF", help="refuse a red or green commit that is already in REF (it must be this branch's own work)")
 
     args = parser.parse_args(argv)
     if getattr(args, "expect_plan", None) and not args.apply:
@@ -524,7 +534,7 @@ def main(argv=None):
     if err is not None:
         return code
     if args.command == "strict" and not out["ok"]:
-        print(f"error: strict check failed: {len(out['findings'])} finding(s)", file=sys.stderr)
+        print(f"error: strict {args.strict_command} failed: {len(out['findings'])} finding(s)", file=sys.stderr)
         return 2
     if args.command == "branch" and out is None:
         return 1

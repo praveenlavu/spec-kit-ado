@@ -148,6 +148,7 @@ AC, a **red** commit with only the failing tests (only the story's `DoD_<id>.md`
 and record `red <sha> → green <sha>` in the AC's ledger section 3 `status` cell. Use the real SHAs (7 to 40 hex characters); a made-up one,
 a missing pair, a red commit that touches code, or a green commit not on this branch is refused (`evidence-missing`, `sha-unknown`,
 `merge-commit`, `red-not-ancestor`, `red-touches-code`, `red-no-test`, `green-not-on-branch`).
+After the green commits, run `ado strict verify <id>` (it executes `strict.test_command`, code from the project, at each red and green commit, and by default appends a `### Verification` record to ledger section 4: a local write, no gate; commit the ledger afterwards). Red tests that pass, green tests that fail, a timeout or an unset `strict.test_command` are refused (`red-passes`, `green-fails`, `head-fails` (the tests must also pass at HEAD), `timeout`, `test-command`, `runner-error`). `ado strict check --phase pr|done` only validates that record (`record-missing`, `record-stale`, `record-incomplete`, `record-failed`): after a code change run `verify` again, never edit the record by hand.
 
 ### Open questions
 

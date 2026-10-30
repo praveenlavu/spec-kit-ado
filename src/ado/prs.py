@@ -128,15 +128,24 @@ class _Refuse(Exception):
 
 
 # replace refs and old-style grafts rewrite history as git reports it: never let them hide a change
-_GIT_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull}
+_GIT_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull, "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"}
+# an inherited selector (a hook's GIT_INDEX_FILE, an outer GIT_DIR) must not point git at another repository or index
+_GIT_SELECTORS = {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                  "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_PREFIX", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_EXEC_PATH"}
+GIT_TIMEOUT = 30  # seconds per git call
 
 
 def _git(repo, *args):
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_SELECTORS and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
     try:  # bytes: file names need not be UTF-8
-        return subprocess.run(["git", "--no-replace-objects", "-C", repo, *args], check=False,
-                              capture_output=True, env={**os.environ, **_GIT_ENV})
+        return subprocess.run(["git", "--no-pager", "--no-replace-objects", "-C", repo, *args], check=False, capture_output=True,
+                              stdin=subprocess.DEVNULL, timeout=GIT_TIMEOUT, env={**env, **_GIT_ENV})
     except FileNotFoundError:
         raise _Refuse("cannot check the review: `git` is not installed or not on PATH")
+    except subprocess.TimeoutExpired:
+        raise _Refuse(f"cannot check the review: git did not answer within {GIT_TIMEOUT} s")
+    except (OSError, subprocess.SubprocessError):
+        raise _Refuse("cannot check the review: git could not be run")
 
 
 def _text(r, what):
@@ -272,22 +281,44 @@ def _check_review(work_item_id, block_on, head, dod_path, repo, push):
     full = objs[0]
     if _git(repo, "merge-base", "--is-ancestor", full, head_sha).returncode:
         raise _Refuse(f"review is stale: review is for {sha}, which is not an ancestor of {head}" + _RERUN)
-    # --no-renames: a move out of src/ into the ledger dir must still list the deleted path
-    names = _text(_git(repo, "diff", "--name-only", "--no-renames", "-z", full, head_sha, "--"),
-                  f"git diff {sha} {head}").split("\0")
     # Spec dir as the ledger had it at the reviewed commit: a later commit cannot widen what counts as spec
     old = _git(repo, "show", f"{full}:{ledger_rel}")
     old_spec = dod.ledger_spec_dir(_text(old, f"ledger {ledger_rel} at {sha}")) if old.returncode == 0 else None
-    spec = spec_dir_in_tree(old_spec, dod_path, full, repo)
-    if spec is None:  # step 2a commits the spec dir after the review: count it only if it is new since then
-        new = spec_dir_in_tree(old_spec, dod_path, head_sha, repo)
-        if new and not _text(_git(repo, "ls-tree", "--full-tree", "-z", full, "--", new), f"ls-tree {sha}"):
-            spec = new
-    prefixes = [p for p in (dod_rel, spec) if p not in (None, ".")]
-    outside = [f for f in names if f and f != ledger_rel and not any(f.startswith(p + "/") for p in prefixes)]
+    outside = _outside_ledger(repo, full, head_sha, dod_path, old_spec, work_item_id, whole_dirs=True)
     if outside:
         raise _Refuse(f"review is stale: review is for {sha}; later commits change {len(outside)} file(s) "
                       "outside the ledger/spec" + _RERUN)
+
+
+def _outside_ledger(repo, base_sha, head_sha, dod_path, spec_dir, story_id, whole_dirs):
+    """The files changed from commit `base_sha` to `head_sha` that are not the story's ledger material. `whole_dirs`
+    (reviews): the ledger plus anything under `dod_path` or the valid spec dir. Else (verification records) exactly the
+    ledger, `Decisions_<id>.md` and `<spec dir>/tasks.md`. The spec dir is the one valid at `base_sha`, or one that is new
+    since (step 2a commits it after the review). Raises _Refuse when git cannot answer."""
+    dod_rel = _repo_rel(repo, dod_path)
+    if dod_rel is None:
+        raise _Refuse("cannot check the review: dod_path is outside the repository")
+    pre = f"{dod_rel}/" if dod_rel != "." else ""
+    ledger_rel = f"{pre}DoD_{story_id}.md"
+    # --no-renames: a move out of src/ into the ledger dir must still list the deleted path
+    names = _text(_git(repo, "diff", "--name-only", "--no-renames", "-z", base_sha, head_sha, "--"),
+                  f"git diff {base_sha[:12]} {head_sha[:12]}").split("\0")
+    spec = spec_dir_in_tree(spec_dir, dod_path, base_sha, repo)
+    if spec is None:  # step 2a commits the spec dir after the review: count it only if it is new since then
+        new = spec_dir_in_tree(spec_dir, dod_path, head_sha, repo)
+        if new and not _text(_git(repo, "ls-tree", "--full-tree", "-z", base_sha, "--", new), f"ls-tree {base_sha[:12]}"):
+            spec = new
+    if whole_dirs:
+        prefixes = [p for p in (dod_rel, spec) if p not in (None, ".")]
+        return [f for f in names if f and f != ledger_rel and not any(f.startswith(p + "/") for p in prefixes)]
+    allowed = {ledger_rel, f"{pre}Decisions_{story_id}.md"} | ({f"{spec}/tasks.md"} if spec else set())
+    return [f for f in names if f and f not in allowed]
+
+
+def only_ledger_since(repo, base_sha, head, dod_path, spec_dir, story_id):
+    """True when everything changed from commit `base_sha` to `head` is the story's ledger, its decisions file or
+    the spec dir's tasks.md (the exact files, never a directory's worth). Raises _Refuse when git cannot answer."""
+    return not _outside_ledger(repo, base_sha, head, dod_path, spec_dir, story_id, whole_dirs=False)
 
 
 def push_branch(head):

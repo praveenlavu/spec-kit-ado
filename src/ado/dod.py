@@ -143,10 +143,10 @@ def _repair_at(md):
     return -1
 
 
-def section(ledger_md, n):
-    """Body of `## <n>.` up to the next `## ` heading, searched only after the last SECTION2
-    marker, so story text copied into section 1 can never stand in for it. Headings inside fences
-    or comments are not headings (the returned text is still the authored original). None if absent."""
+def section_span(ledger_md, n):
+    """(start, end) offsets of the body of `## <n>.` (up to the next `## ` heading or the end), searched only after the
+    last SECTION2 marker, so story text copied into section 1 can never stand in for it. Headings inside fences or
+    comments are not headings. None if absent."""
     vis = _mask(ledger_md)
     i = _section2_at(ledger_md)
     m = re.search(rf"^## {n}\.", vis[i:], re.M) if i != -1 else None
@@ -154,7 +154,14 @@ def section(ledger_md, n):
         return None
     start = i + m.end()
     nxt = re.search(r"^## ", vis[start:], re.M)
-    return ledger_md[start:start + nxt.start()] if nxt else ledger_md[start:]
+    return start, (start + nxt.start() if nxt else len(ledger_md))
+
+
+def section(ledger_md, n):
+    """Body of `## <n>.` (see section_span; the returned text is the authored original). None if absent."""
+    span = section_span(ledger_md, n)
+    return ledger_md[span[0]:span[1]] if span else None
+
 
 _LIST_MARKER = re.compile(r"^(?:[-*+]|\d+[.)])(?:\s+|$)")  # `$`: _text leaves a bare marker line before <li><div>
 _AC_NONE = re.compile(r"^_\(none[^)]*\)_$")  # the placeholder render_dod writes when ADO has no AC

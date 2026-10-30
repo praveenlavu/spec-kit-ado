@@ -65,7 +65,7 @@ dir, scope, and this instruction set:
 - In strict mode make **two commits per AC** instead: a **red** commit with only the failing test files (only the story's `DoD_<id>.md`, its
   `Decisions_<id>.md` and the `tasks.md` tick may ride along, no other file), then a **green** commit with the code, and record `red <sha> → green <sha>` in the AC's
   section 3 `status` cell (step 3). `ado strict check <id> --phase pr` refuses a missing pair, a made-up SHA, a red commit that touches code and a green commit
-  that is not on this branch.
+  that is not on this branch. When the pairs are done run `ado strict verify <id>`: it runs the tests at every red (must fail) and green (must pass) commit and records the result in ledger section 4 (commit the ledger).
 - Tick the task in `tasks.md` (`- [x]`) when its commit lands. Never delete, reword or reorder task lines (only the
   box changes): `ado push` and `ado pr create` read that file, and a file with no tasks is treated as emptied.
 - Ledger section 3 rows map only acceptance criteria that appear **verbatim** in

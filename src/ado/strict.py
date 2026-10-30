@@ -1,10 +1,11 @@
 """`ado strict check`: the rules of strict SDD+TDD mode (design D§4). Read-only: it never writes and never runs tests
-(`run_at` below is the L2 test runner, a separate entry point that `check` does not call).
+(`run_at` below is the L2 test runner, called only by `verify`, which writes the verification record `check` validates).
 
 Each phase is its own list of rule functions in PHASES; a later task appends to a list without touching `check`.
 A rule takes a _Ctx and returns findings `{"rule", "detail", "fix"}`. The ledger and the spec dir come from the PR
 in CI, so every file is read through gate._read (regular, <= 1 MiB, confined to the repo, never a symlink), and a
 `detail` carries only ids, file names and counts: never ledger, spec or ADO text."""
+import hashlib
 import os
 import posixpath
 import re
@@ -14,9 +15,10 @@ import subprocess
 import tempfile
 import threading
 import time
+from datetime import date
 from pathlib import Path
 
-from . import dod, gate, prs, push, questions, tasks
+from . import decisions, dod, gate, prs, push, questions, tasks
 from .auth import AuthError
 from .client import AdoError
 
@@ -289,10 +291,117 @@ def _l1(c):
                     c.id, len(dod.ac_lines(c.ledger)))
 
 
+# ---- verification record (D§5): written by `verify`, only validated by `check` ----
+_V_HEADING = re.compile(r"^### Verification\b[^\r\n]*", re.M)
+_V_HEAD = re.compile(r"### Verification — (\d{4}-\d{2}-\d{2}) @ ([0-9a-f]{7,40})")
+_V_AC = re.compile(r"- (AC-\d+): red ([0-9a-f]{12}) exit (\d{1,3}) · green ([0-9a-f]{12}) exit (\d{1,3}) · L1 ok")
+_V_HEADLINE = re.compile(r"- head: ([0-9a-f]{12}) exit (\d{1,3})")
+_SUPERSEDED = " (superseded)"
+
+
+def _range_findings(rows, repo, base):
+    """`not-in-range` when `base` is no commit here, or a red or green commit is already in `base` (not this branch's work)."""
+    base_full = (_out(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{base}^{{commit}}") or b"").decode().strip() \
+        if base.strip() else ""
+    if not base_full:
+        return [_finding("not-in-range", "the base ref is not a commit in this repository (or git could not be run)",
+                         "pass an existing branch, tag or commit as --base")]
+    out = []
+    for row in rows:
+        for k, sha in (parse_evidence(row["status"]) or {}).items():
+            full = _commit(repo, sha)
+            if full and _is_ancestor(repo, full, base_full):
+                out.append(_l1_finding("not-in-range", row["ac"], f"the {k} commit is already in the base",
+                                       "record red and green commits made after the base: this branch's own work"))
+    return out
+
+
+def _same_sha(cell_sha, recorded12):
+    n = min(len(cell_sha), 12)
+    return cell_sha[:n].lower() == recorded12[:n]
+
+
+def _record_stale(repo, head, recorded, dod_path, spec_dir, story_id):
+    """Why the record (made at the commit `recorded`) no longer covers `head`, or None when it does: head is that commit
+    or a descendant whose later commits touch only the ledger, the decisions file and tasks.md."""
+    head_full = (_out(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", f"{head}^{{commit}}") or b"").decode().strip()
+    rec_full = _commit(repo, recorded)
+    if not head_full:
+        return "HEAD does not resolve to a commit"
+    if rec_full is None:
+        return "the commit the record was made at is not in this repository (or git could not be run)"
+    if rec_full == head_full:
+        return None
+    if not _is_ancestor(repo, rec_full, head_full):
+        return "the commit the record was made at is not an ancestor of HEAD"
+    try:
+        if prs.only_ledger_since(str(repo), rec_full, head_full, dod_path, spec_dir, story_id):
+            return None
+    except prs._Refuse:
+        return "git could not compare the record's commit with HEAD"
+    return "later commits change files other than the ledger, the decisions file and tasks.md"
+
+
+def validate_record(ledger_md, rows, repo, head, dod_path, spec_dir, story_id, base=None, squash_ok=False):
+    """Findings for the latest live `### Verification` block of ledger section 4 (a block in a fence or comment is not
+    one): `record-missing`, `record-stale`, `record-incomplete`, `record-failed`, and `not-in-range` with `base`. It runs
+    no test and reads only the ledger and git. `squash_ok` (the `done` phase, after a squash merge the red and green
+    commits are no ancestors of HEAD): no staleness or range check, only completeness, SHAs against the status cells and exit codes."""
+    redo = f"run `ado strict verify {story_id}` and commit the ledger"
+    log = dod._visible(dod.section(ledger_md, 4) or "")[0]
+    live = [m for m in _V_HEADING.finditer(log) if not m.group(0).rstrip().endswith(_SUPERSEDED.strip())]
+    head_m = _V_HEAD.fullmatch(live[-1].group(0).rstrip()) if live else None
+    if head_m is None:
+        return [_finding("record-missing", "ledger section 4 has no verification record (a `### Verification — <date> @ <sha>` block)", redo)]
+    rest = log[live[-1].end():]
+    nxt = re.search(r"^#{1,3} ", rest, re.M)
+    found, heads = {}, []
+    for line in (rest[:nxt.start()] if nxt else rest).splitlines():
+        m = _V_AC.fullmatch(line.strip())
+        if m:
+            found.setdefault(m[1], []).append(m.groups()[1:])
+        if m := _V_HEADLINE.fullmatch(line.strip()):
+            heads.append(m.groups())
+    out = []
+    if not squash_ok:
+        if why := _record_stale(repo, head, head_m[2], dod_path, spec_dir, story_id):
+            return [_finding("record-stale", f"the verification record is stale: {why}", redo)]
+        if base is not None:
+            out += _range_findings(rows, repo, base)
+    if len(heads) != 1 or not _same_sha(head_m[2], heads[0][0]):
+        out.append(_finding("record-incomplete", "the verification record has no single `- head:` line naming the recorded head", redo))
+    elif int(heads[0][1]) != 0:
+        out.append(_finding("record-failed", "the record shows the tests failing at the recorded HEAD",
+                            "fix the code so the tests pass at HEAD, then " + redo))
+    for row in rows:
+        ac, ev, got = row["ac"], parse_evidence(row["status"]), found.get(row["ac"], [])
+        if len(got) != 1:
+            out.append(_l1_finding("record-incomplete", ac, "the verification record has no line for it" if not got
+                                   else "the verification record has more than one line for it", redo))
+        elif ev is None or not (_same_sha(ev["red"], got[0][0]) and _same_sha(ev["green"], got[0][2])):
+            out.append(_l1_finding("record-incomplete", ac, "the recorded red and green SHAs differ from the section 3 status cell", redo))
+        elif int(got[0][1]) == 0 or int(got[0][3]) != 0:
+            out.append(_l1_finding("record-failed", ac, "the record shows a red run that passed or a green run that failed",
+                                   "make the red tests fail and the green tests pass, then " + redo))
+    return out
+
+
+def _record(c):
+    if c.ledger is None:
+        return []  # reported by _ledger
+    return validate_record(c.ledger, gate.parse_section3(c.ledger), c.repo, "HEAD", c.cfg.dod_path, c.spec_dir, c.id)
+
+
+def _record_done(c):
+    if c.ledger is None:
+        return []
+    return validate_record(c.ledger, gate.parse_section3(c.ledger), c.repo, "HEAD", c.cfg.dod_path, c.spec_dir, c.id, squash_ok=True)
+
+
 PHASES = {
     "implement": [_ledger, _spec_files, _placeholders, _open_questions, _board, _test_command],
-    "pr": [_ledger, _l1],
-    "done": [_ledger, _l1],
+    "pr": [_ledger, _l1, _record],
+    "done": [_ledger, _l1, _record_done],
 }
 
 
@@ -308,7 +417,7 @@ def check(client, story_id, phase, repo="."):
 
 
 # ---- L2 test runner (D§5): the project's test command at one commit, in a throwaway checkout ----
-# The command is code from the project under test. It runs in a temporary worktree outside the repo with an allow-listed
+# The command is code from the project under test. It runs in a throwaway clone outside the repo with an allow-listed
 # environment, stdin closed, a timeout and its own process group; nothing it prints is returned or logged (counts only).
 _ENV_ALLOW = ("PATH", "LANG", "TERM", "TMPDIR", "VIRTUAL_ENV", "JAVA_HOME", "GOPATH", "CARGO_HOME", "NODE_PATH")
 _ENV_DENY_NAMES = {"ADO_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "AZURE_DEVOPS_EXT_PAT", "SYSTEM_ACCESSTOKEN", "SSH_AUTH_SOCK"}
@@ -356,10 +465,10 @@ def _count_lines(fd, counts, i):
 
 
 def _run_group(command, cwd, env, timeout):
-    """(exit or None, timed_out, stdout lines, stderr lines); the whole process group dies on a timeout, an interrupt or exit.
+    """(exit or None, timed_out, stdout lines, stderr lines, seconds to the process exit); the whole process group dies on a timeout, an interrupt or exit.
     shortcut: a descendant that calls setsid escapes the group; if it also holds the output pipes the drain gives up after
     10 s (its later output is not counted) and the thread stays until it exits."""
-    (r_out, w_out), (r_err, w_err), counts = os.pipe(), os.pipe(), [0, 0]
+    (r_out, w_out), (r_err, w_err), counts, t0 = os.pipe(), os.pipe(), [0, 0], time.monotonic()
     try:
         try:
             p = subprocess.Popen(["/bin/sh", "-c", command], cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=w_out,
@@ -386,10 +495,11 @@ def _run_group(command, cwd, env, timeout):
             _kill_group(p)
             raise
         _kill_group(p)  # background processes the command left behind
+    elapsed = time.monotonic() - t0  # not the drain wait below
     end = time.monotonic() + 10
     for t in readers:
         t.join(max(0.0, end - time.monotonic()))
-    return (None if timed_out else p.returncode), timed_out, counts[0], counts[1]
+    return (None if timed_out else p.returncode), timed_out, counts[0], counts[1], elapsed
 
 
 def _rmtree(path):
@@ -445,9 +555,8 @@ def run_at(repo, sha, command, timeout):
             r = _git(where, *no_hooks, *args, env=genv, timeout=120)
             if r is None or r.returncode != 0:
                 raise ValueError("could not create a temporary checkout of the commit")
-        t0 = time.monotonic()
-        code, timed_out, n_out, n_err = _run_group(command, wt, _git_env(os.environ, home), timeout)
-        return {"sha": full, "exit": code, "timed_out": timed_out, "seconds": round(time.monotonic() - t0, 2),
+        code, timed_out, n_out, n_err, secs = _run_group(command, wt, _git_env(os.environ, home), timeout)
+        return {"sha": full, "exit": code, "timed_out": timed_out, "seconds": round(secs, 2),
                 "stdout_lines": n_out, "stderr_lines": n_err}
     finally:
         try:
@@ -459,3 +568,105 @@ def run_at(repo, sha, command, timeout):
 def run_configured(cfg, repo, sha):
     """run_at with `strict.test_command` and `strict.test_timeout` from the (already validated) config."""
     return run_at(repo, sha, cfg.strict.get("test_command"), cfg.strict.get("test_timeout"))
+
+
+# ---- `ado strict verify` (D§5): L1, then the test command at every red and green commit, then the record ----
+def _with_record(md, heading, lines):
+    """`md` with the earlier live `### Verification` headings of section 4 marked superseded and the new block appended at
+    the end of section 4 (before `## 5.`), in the ledger's own line ending. Nothing else changes."""
+    span = dod.section_span(md, 4)
+    if span is None or dod.unclosed(md):
+        raise ValueError("the ledger has no section 4 (`## 4.`), or an unclosed code fence or comment; nothing written")
+    start, end = span
+    mask = dod._mask(md)  # same length as md: offsets found here slice the original
+    for m in reversed([m for m in _V_HEADING.finditer(mask, start, end) if not m.group(0).rstrip().endswith(_SUPERSEDED.strip())]):
+        md, end = md[:m.end()] + _SUPERSEDED + md[m.end():], end + len(_SUPERSEDED)
+    eol = "\r\n" if "\r\n" in md else "\n"
+    before = md[:end]
+    pre = "" if before.endswith(("\n\n", "\r\n\r\n")) else eol if before.endswith("\n") else eol * 2
+    return before + pre + eol.join([heading, *lines, ""]) + eol + md[end:]
+
+
+def _write_record(path, repo, old, heading, lines):
+    """Append the record to the ledger at `path` through a temp file + os.replace; refuses (nothing written) when the
+    ledger changed while the tests ran."""
+    new = _with_record(old, heading, lines)
+    if gate._read(path, repo, set()) != old:
+        raise ValueError("the ledger changed while the tests ran; nothing written, run it again")
+    try:
+        decisions._atomic_write(Path(path), new)
+    except (OSError, UnicodeError) as e:
+        raise ValueError(f"cannot write the ledger ({e.__class__.__name__}); nothing written")
+
+
+def verify(client, story_id, record=True, base=None, repo="."):
+    """L1 for every AC, then the test command at each AC's red commit (must exit non-zero) and green commit (must exit 0),
+    once per distinct commit. Strict mode only. With `record` and a pass, appends the verification record to ledger
+    section 4. Returns `{"mode","ok","findings","recorded",...}`; nothing is returned or logged from the tests' output."""
+    mode = client.config.mode
+    if mode != "strict":
+        return {"mode": mode, "ok": True, "findings": [], "note": "mode is advisory"}
+    c = _Ctx(client, story_id, repo)
+    rows = gate.parse_section3(c.ledger) if c.ledger is not None else []
+    findings = _ledger(c) + _l1(c) + _test_command(c)
+    if c.ledger is not None and not rows and not any(f["rule"] == "evidence-missing" for f in findings):
+        findings.append(_finding("evidence-missing", "ledger section 3 has no AC row", _EVIDENCE_FIX))
+    if base is not None:
+        findings += _range_findings(rows, repo, base)
+    if findings:
+        return {"mode": mode, "ok": False, "findings": findings, "recorded": False}
+    head = (_out(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}") or b"").decode().strip()
+    if not head:
+        raise ValueError("cannot resolve HEAD to a commit; nothing written")
+    runs, timeout = {}, c.cfg.strict.get("test_timeout")  # a failed run is cached too: one failure, not one per AC
+
+    def run(full):
+        if full not in runs:
+            try:
+                runs[full] = run_configured(c.cfg, repo, full)
+            except ValueError:
+                runs[full] = None
+        return runs[full]
+    lines = []
+    for row in rows:
+        ac, ev, shown = row["ac"], parse_evidence(row["status"]), []
+        for kind in ("red", "green"):
+            full = _commit(repo, ev[kind])
+            r = run(full)
+            if r is None:
+                findings.append(_l1_finding("runner-error", ac, f"the {kind} run could not be started: the checkout of the commit failed "
+                                            "or git could not be run", "use a full clone (fetch-depth: 0) with a working git, then re-run"))
+            elif r["timed_out"]:
+                findings.append(_l1_finding("timeout", ac, f"the {kind} run timed out after {timeout} s",
+                                            "make the tests faster, or raise strict.test_timeout in ado.config.json"))
+            elif kind == "red" and r["exit"] == 0:
+                findings.append(_l1_finding("red-passes", ac, f"the tests pass at the red commit {full[:12]}: a red commit must fail",
+                                            "make the red commit's test fail without the code (assert the new behaviour), "
+                                            "or correct the red SHA or strict.test_command"))
+            elif kind == "green" and r["exit"] != 0:
+                findings.append(_l1_finding("green-fails", ac, f"the tests fail at the green commit {full[:12]} (exit {r['exit']})",
+                                            "make the green commit pass the test command, or correct the green SHA"))
+            else:
+                shown.append(f"{kind} {full[:12]} exit {r['exit']}")
+        if len(shown) == 2:
+            lines.append(f"- {ac}: {' · '.join(shown)} · L1 ok")
+    r = run(head)  # the record says `@ <head>`: the tests must pass there too (cached when HEAD is a recorded green)
+    if head not in {_commit(repo, parse_evidence(row["status"])["green"]) for row in rows}:  # a green HEAD was judged above
+        if r is None:
+            findings.append(_finding("runner-error", "the HEAD run could not be started: the checkout of the commit failed or git "
+                                     "could not be run", "use a full clone (fetch-depth: 0) with a working git, then re-run"))
+        elif r["timed_out"]:
+            findings.append(_finding("timeout", f"the HEAD run timed out after {timeout} s",
+                                     "make the tests faster, or raise strict.test_timeout in ado.config.json"))
+        elif r["exit"] != 0:
+            findings.append(_finding("head-fails", f"the tests fail at HEAD {head[:12]} (exit {r['exit']}): a later commit broke them",
+                                     "fix the code on this branch so the test command passes at HEAD, then re-run verify"))
+    seconds = round(sum(r["seconds"] for r in runs.values() if r), 2)
+    out = {"mode": mode, "ok": not findings, "findings": findings, "recorded": False, "runs": len(runs), "seconds": seconds}
+    if findings or not record:
+        return out
+    cmd = hashlib.sha256(c.cfg.strict["test_command"].encode()).hexdigest()[:12]
+    _write_record(Path(repo) / dod.dod_file(c.cfg.dod_path, story_id), repo, c.ledger,
+                  f"### Verification — {date.today().isoformat()} @ {head[:12]}",
+                  [*lines, f"- head: {head[:12]} exit {runs[head]['exit']}", f"- command-sha256: {cmd}", f"- seconds: {seconds}"])
+    return {**out, "recorded": True}
