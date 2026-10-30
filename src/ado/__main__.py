@@ -5,7 +5,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, attachments, branch, comments, dod, done, gate, prs, push, questions, tasks, workitems
+from . import __version__, attachments, branch, comments, decisions, dod, done, gate, prs, push, questions, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid
@@ -241,6 +241,12 @@ def dispatch(client, args):
         if args.apply:
             questions.apply_post(client, args.id, plan)
         return {"id": args.id, "applied": args.apply, "action": plan["action"], "comment_id": plan["comment_id"]}
+    if args.command == "decisions":  # read-only: the ledger is never written
+        path = dod.dod_file(client.config.dod_path, args.id)
+        try:
+            return decisions.parse_decisions(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError) as e:
+            raise ValueError(f"cannot read ledger {path} ({e.__class__.__name__}); run `ado dod {args.id}` first")
     if args.command == "gate":
         path = dod.dod_file(client.config.dod_path, args.id)
         if not path.exists():
@@ -333,6 +339,8 @@ def main(argv=None):
     p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
     p.add_argument("--expect-plan", metavar="PATH",
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+    p = sub.add_parser("decisions", help="List the ledger's open, validated and rejected D<n> decision lines (read-only)")
+    p.add_argument("id", type=int)
     p = sub.add_parser("gate",
                        help="Advisory DoD gate: AC<->test traceability, assertions, AC drift, evidence")
     p.add_argument("id", type=int)

@@ -201,6 +201,7 @@ def ac_stats(work_item):
 
 
 _AC_FIELD = "Microsoft.VSTS.Common.AcceptanceCriteria"
+DECISIONS_HEADING = "### Decisions & assumptions (development)"  # decisions.HEADING; decisions imports this module
 SPEC_DIR_UNSET = "_(set by speckit.ado.pull)_"
 
 
@@ -273,6 +274,9 @@ def render_dod(work_item, organization, project, synced="", spec_dir=""):
         "- **Open questions → answers:** _(fill in as they arise)_",
         "  Format, one line each: `- [ ] Q1: <question> → _(open)_ · owner: PO`; answered: `- [x] Q1: <question> → <answer> · owner: PO`",
         "- **Use cases & edge cases:** _(fill in — each: covered-by test / N/A + why)_",
+        "",
+        DECISIONS_HEADING,
+        "Format, one line each: `- [ ] D1: <text> → _(open)_ · kind: decision · why: <reason>`; a human records the outcome.",
         "",
         "## 3. AC → tests (traceability)  (tag each AC as AC-1, AC-2…)",
         "",

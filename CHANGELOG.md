@@ -9,6 +9,8 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
 - Config: `mode` (`"advisory"` default, or `"strict"`) and the `strict` object (`test_command`,
   `test_timeout`); in strict mode the effective `gate.block` and `review_block_on` are the
   project's lists plus the strict floor. Invalid values are a config error.
+- `ado decisions <id>` (read-only, local): the ledger's open, validated and rejected `D<n>` decision lines as
+  JSON; the ledger template seeds the `### Decisions & assumptions (development)` heading in section 2.
 
 ## 0.2.0 — 2026-10-29
 

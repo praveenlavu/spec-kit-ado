@@ -642,3 +642,10 @@ def test_configuration_documents_mode_and_strict_keys():
                    "`mode` must be `advisory` or `strict`"):
         assert needle in text, needle
     assert "## 0.3.0 — unreleased" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+
+def test_decisions_verb_documented_read_only():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `decisions <id>` |"))
+    assert "Read-only, local" in row and "`### Decisions & assumptions (development)`" in row and "`unparsed`" in row
+    assert "`ado decisions`, `ado dod`" in _flat("AGENTS.md") and "`ado decisions <id>` (read-only, local)" in _flat("AGENTS.md")
+    assert "`ado decisions` (local ledger read)" in _flat("rules/hitl.md")

@@ -12,7 +12,7 @@ request) is a no — revise the preview and ask again.
 
 | Action class | Rule |
 |---|---|
-| Read ADO (`ado get`, `ado comments`, `ado attachments` (`--download` writes only under `.ado/`), `ado questions` without `--post` (local ledger read), `ado dod`, `ado gate`, any dry-run, `speckit.ado.status`) | Free. No approval needed. |
+| Read ADO (`ado get`, `ado comments`, `ado attachments` (`--download` writes only under `.ado/`), `ado questions` without `--post` (local ledger read), `ado decisions` (local ledger read), `ado dod`, `ado gate`, any dry-run, `speckit.ado.status`) | Free. No approval needed. |
 | Write local files for the story (spec dir, `tasks.md`, ledger `dod/DoD_<id>.md`) | Free. They reach the team through PR review. |
 | Name the local feature branch (`ado branch <id> --apply`: create, rename the Spec Kit branch made for this spec, or switch; `ado branch --id-from` is a read) | Free. Local only: it never pushes and never renames the default branch. Pushing the branch is the ⛔ row below. |
 | Any ADO mutation — create, update, state change, comment, link (`--to`, `--parent`, `--url`), attach | ⛔ Preview the exact change, get an explicit yes, then apply. One yes covers one previewed batch, nothing more. |
