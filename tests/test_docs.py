@@ -752,3 +752,27 @@ def test_attachment_symlink_hardening_documented():
     assert "Attachments no longer follow symlinks: `ado attach` and `ado done` refuse" in log and "`O_NOFOLLOW`" in log
     assert "a committed link cannot make CI upload another file" in log
     assert "a symlink or special file is refused" in _flat("README.md")
+
+
+def test_l1_order_evidence_documented():
+    rules = ("evidence-missing", "sha-unknown", "merge-commit", "red-not-ancestor", "red-touches-code", "red-no-test",
+             "green-not-on-branch")
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `strict check <id>"))
+    for rule in rules:
+        assert f"`{rule}`" in row, rule
+        for doc in ("README.md", "AGENTS.md", "CHANGELOG.md"):
+            assert f"`{rule}`" in _flat(doc), (doc, rule)
+    assert "`red <sha> → green <sha>`" in _flat("README.md") and "two commits per AC" in _flat("README.md")
+    assert "**L1 order evidence**" in _flat("README.md") and "needing a full clone" in _flat("README.md")
+    assert "record `red <sha> → green <sha>` in the AC's ledger section 3 `status` cell" in _flat("AGENTS.md")
+    assert "**two commits per AC**" in _flat("commands/implement.md")
+    assert "`red <sha> → green <sha>`" in _flat("commands/implement.md")
+    for doc in ("README.md", "AGENTS.md", "commands/implement.md", "CHANGELOG.md", "docs/configuration.md"):
+        assert "`Decisions_<id>.md`" in _flat(doc), doc
+        assert "under `dod_path` or" not in _flat(doc) and "`dod_path` or the spec dir" not in _flat(doc), doc
+    assert "never a whole directory" in _flat("README.md") and "`<spec dir>/tasks.md`" in _flat("README.md")
+    for doc in ("README.md", "docs/configuration.md", "docs/ci-github.md", "pipelines/README.md", "CHANGELOG.md"):
+        assert "fetch-depth: 0" in _flat(doc) or "fetchDepth: 0" in _flat(doc), doc
+    assert "reads git history" in _flat("docs/ci-github.md") and "reads git history" in _flat("pipelines/README.md")
+    assert "Strict mode, L1 order evidence" in _flat("CHANGELOG.md")
+    assert "check the red/green commit evidence" in _flat("docs/configuration.md")

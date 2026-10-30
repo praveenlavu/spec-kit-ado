@@ -143,7 +143,11 @@ and ask the human to run it in their own terminal.
 
 When `ado.config.json` says `"mode": "strict"`, run `ado strict check <id> --phase implement` before implementing and stop on exit 2: it
 prints the findings as JSON (`rule`, `detail`, `fix`); do each `fix`, never edit the ledger or `tasks.md` just to silence a rule.
-It is read-only; advisory mode returns `ok: true`. The `pr` and `done` phases have no rules yet.
+It is read-only; advisory mode returns `ok: true`. The `pr` and `done` phases check L1 order evidence: in strict mode make two commits per
+AC, a **red** commit with only the failing tests (only the story's `DoD_<id>.md`, its `Decisions_<id>.md` and the `tasks.md` tick may ride along, no other file), then a **green** commit with the code,
+and record `red <sha> → green <sha>` in the AC's ledger section 3 `status` cell. Use the real SHAs (7 to 40 hex characters); a made-up one,
+a missing pair, a red commit that touches code, or a green commit not on this branch is refused (`evidence-missing`, `sha-unknown`,
+`merge-commit`, `red-not-ancestor`, `red-touches-code`, `red-no-test`, `green-not-on-branch`).
 
 ### Open questions
 

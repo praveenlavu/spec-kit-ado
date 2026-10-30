@@ -37,8 +37,12 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   line, an unclosed fence or comment, or an unreadable file; a repo without the file keeps the v0.2 output.
 - `ado strict check <id> --phase implement|pr|done` (read-only): in strict mode exits 2 with JSON findings (`rule`, `detail`, `fix`)
   until the spec dir has `spec.md`, `plan.md`, `tasks.md`, section 2 has no `_(fill in` placeholder, no question is open, every
-  `tasks.md` task has a board Task (an unreadable board is a finding) and `strict.test_command` is set; `pr` and `done` have no
-  rules yet; advisory mode returns `ok: true`.
+  `tasks.md` task has a board Task (an unreadable board is a finding) and `strict.test_command` is set; advisory mode returns `ok: true`.
+- Strict mode, L1 order evidence (`pr` and `done` phases of `ado strict check`): each ledger section 3 AC row needs
+  `red <sha> → green <sha>` in its `status` cell (7 to 40 hex characters; `->` also works), resolved in git with replace refs ignored and a
+  30 s timeout. Rules: `evidence-missing`, `sha-unknown`, `merge-commit`, `red-not-ancestor` (also one commit used twice),
+  `red-touches-code` (a file that is neither a test file nor exactly `<dod_path>/DoD_<id>.md`, `<dod_path>/Decisions_<id>.md` or the valid spec dir's `tasks.md`), `red-no-test`, `green-not-on-branch`.
+  Findings carry counts and at most 12 hex characters of a SHA, never a file name. `commands/implement.md` asks for two commits per AC in strict mode. L1 needs a full clone (`fetch-depth: 0`).
 
 ### Security
 

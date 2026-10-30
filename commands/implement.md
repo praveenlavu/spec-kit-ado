@@ -62,6 +62,10 @@ dir, scope, and this instruction set:
   the Azure Boards GitHub app link the commit to the story). Example:
   `git commit -m "feat: T003 count active members (AC-1) AB#<id>"`. `ado gate` lists
   commits in `<base>..HEAD` without it as `commits_without_story`.
+- In strict mode make **two commits per AC** instead: a **red** commit with only the failing test files (only the story's `DoD_<id>.md`, its
+  `Decisions_<id>.md` and the `tasks.md` tick may ride along, no other file), then a **green** commit with the code, and record `red <sha> → green <sha>` in the AC's
+  section 3 `status` cell (step 3). `ado strict check <id> --phase pr` refuses a missing pair, a made-up SHA, a red commit that touches code and a green commit
+  that is not on this branch.
 - Tick the task in `tasks.md` (`- [x]`) when its commit lands. Never delete, reword or reorder task lines (only the
   box changes): `ado push` and `ado pr create` read that file, and a file with no tasks is treated as emptied.
 - Ledger section 3 rows map only acceptance criteria that appear **verbatim** in
@@ -77,7 +81,7 @@ As each AC goes green, update its row:
 |---|---|
 | tests | free-form IDs: `path::test_name`, `Class.method`, or `describe > it` |
 | commit/PR | the commit SHA (and PR number once it exists) |
-| status | `red` while failing, `green` once the test passes on the committed code |
+| status | `red` while failing, `green` once the test passes on the committed code. In strict mode: `red <sha> → green <sha>` (the real SHAs of the two commits below) |
 
 Never mark a row `green` without a passing run you saw in this session, and never
 without the commit/PR value. Optionally run `ado gate <id> --offline` (read-only) to

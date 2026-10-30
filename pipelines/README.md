@@ -9,6 +9,8 @@ Step templates (`parameters:` + `steps:`) that mirror the GitHub Actions workflo
 | `ado-gate.yml` | PR validation build | Runs `ado gate`, posts the result on the PR. Fails on exit 1 **and** `"blocking": true`, or when `ado.config.json` is invalid (error annotation, no PR thread); every other outcome succeeds; a gate that could not run also posts a "could not run" comment and logs a `##vso[task.logissue type=warning]`. |
 | `ado-branch-guard.yml` | PR validation build | Fails unless `ado branch --id-from` finds a story id in the source branch (`feature/ab1001-thing` or `AB#<n>`) that `ado get` does not report as 404. Missing config/token is a warning. |
 
+In strict mode `ado strict check` (L1 order evidence) reads git history: check out with `fetchDepth: 0`, since a shallow clone reports `sha-unknown`.
+
 ## Use
 
 ```yaml
