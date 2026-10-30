@@ -43,6 +43,12 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   30 s timeout. Rules: `evidence-missing`, `sha-unknown`, `merge-commit`, `red-not-ancestor` (also one commit used twice),
   `red-touches-code` (a file that is neither a test file nor exactly `<dod_path>/DoD_<id>.md`, `<dod_path>/Decisions_<id>.md` or the valid spec dir's `tasks.md`), `red-no-test`, `green-not-on-branch`.
   Findings carry counts and at most 12 hex characters of a SHA, never a file name. `commands/implement.md` asks for two commits per AC in strict mode. L1 needs a full clone (`fetch-depth: 0`).
+- Strict mode, L2 test runner (library functions `strict.run_at` and `strict.scrubbed_env`; no verb yet): runs `strict.test_command` at a
+  commit in a temporary checkout, a throwaway `git clone --shared --no-checkout` outside the repo (origin removed, hooks off, no shared config or index),
+  removed in every case (also on Ctrl-C, and read-only directories such as Go's module cache); every git call and the command get an allow-listed environment
+  (`PATH`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, toolchain variables, an empty temporary `HOME`, no `GIT_*`) with a deny-list pass for `*_TOKEN`, `*_PAT`, `*_SECRET`, `*_KEY`,
+  `*_PASSWORD`, `*_CREDENTIALS`, `AWS_*` and the ADO, GitHub and SSH credentials; no stdin, the whole process group killed at the timeout, output never returned
+  (line counts only, constant memory). Hygiene, not a sandbox. The test command is code from your project: CI must run it without secrets.
 
 ### Security
 

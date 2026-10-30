@@ -1,4 +1,5 @@
-"""`ado strict check`: the rules of strict SDD+TDD mode (design D§4). Read-only: it never writes and never runs tests.
+"""`ado strict check`: the rules of strict SDD+TDD mode (design D§4). Read-only: it never writes and never runs tests
+(`run_at` below is the L2 test runner, a separate entry point that `check` does not call).
 
 Each phase is its own list of rule functions in PHASES; a later task appends to a list without touching `check`.
 A rule takes a _Ctx and returns findings `{"rule", "detail", "fix"}`. The ledger and the spec dir come from the PR
@@ -7,7 +8,12 @@ in CI, so every file is read through gate._read (regular, <= 1 MiB, confined to 
 import os
 import posixpath
 import re
+import shutil
+import signal
 import subprocess
+import tempfile
+import threading
+import time
 from pathlib import Path
 
 from . import dod, gate, prs, push, questions, tasks
@@ -151,28 +157,28 @@ _GIT_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull, "GIT_TE
             "GIT_PAGER": "cat", "GIT_OPTIONAL_LOCKS": "0"}
 
 
-def _git(repo, *args):
-    """A finished git run (bytes), or None when git is missing, cannot start or runs past 30 s: a failure, never a pass."""
+def _git(repo, *args, env=None, timeout=30):
+    """A finished git run (bytes), or None when git is missing, cannot start or runs past `timeout` s (30): a failure, never a pass."""
     try:
         return subprocess.run(["git", "--no-pager", "--no-replace-objects", "-c", "core.fsmonitor=false", "-C", str(repo), *args],
-                              check=False, capture_output=True, stdin=subprocess.DEVNULL, timeout=30,
-                              env={**os.environ, **_GIT_ENV})
+                              check=False, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout,
+                              env={**os.environ, **_GIT_ENV} if env is None else env)
     except (OSError, subprocess.SubprocessError):
         return None
 
 
-def _out(repo, *args):
+def _out(repo, *args, **kw):
     """stdout (bytes) of a successful git run, else None."""
-    r = _git(repo, *args)
+    r = _git(repo, *args, **kw)
     return r.stdout if r is not None and r.returncode == 0 else None
 
 
-def _commit(repo, sha):
+def _commit(repo, sha, **kw):
     """Full id of the one commit whose id starts with the hex `sha`, else None. Object lookup only: a branch or tag
     named like the SHA never stands in, and an ambiguous prefix or a non-commit object is refused."""
-    out = _out(repo, "rev-parse", f"--disambiguate={sha.lower()}")
+    out = _out(repo, "rev-parse", f"--disambiguate={sha.lower()}", **kw)
     objs = out.decode("ascii", "replace").split() if out is not None else []
-    return objs[0] if len(objs) == 1 and _out(repo, "cat-file", "-t", objs[0]) == b"commit\n" else None
+    return objs[0] if len(objs) == 1 and _out(repo, "cat-file", "-t", objs[0], **kw) == b"commit\n" else None
 
 
 def _is_merge(repo, full):
@@ -299,3 +305,157 @@ def check(client, story_id, phase, repo="."):
     ctx = _Ctx(client, story_id, repo)
     findings = [f for rule in PHASES[phase] for f in rule(ctx)]
     return {"phase": phase, "mode": mode, "ok": not findings, "findings": findings}
+
+
+# ---- L2 test runner (D§5): the project's test command at one commit, in a throwaway checkout ----
+# The command is code from the project under test. It runs in a temporary worktree outside the repo with an allow-listed
+# environment, stdin closed, a timeout and its own process group; nothing it prints is returned or logged (counts only).
+_ENV_ALLOW = ("PATH", "LANG", "TERM", "TMPDIR", "VIRTUAL_ENV", "JAVA_HOME", "GOPATH", "CARGO_HOME", "NODE_PATH")
+_ENV_DENY_NAMES = {"ADO_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "AZURE_DEVOPS_EXT_PAT", "SYSTEM_ACCESSTOKEN", "SSH_AUTH_SOCK"}
+_ENV_DENY_SUFFIX = ("_TOKEN", "_PAT", "_SECRET", "_KEY", "_PASSWORD", "_CREDENTIALS")
+
+
+def scrubbed_env(env, home="/nonexistent"):
+    """The environment a test run gets: only the allow-list (PATH, LANG, LC_*, TERM, TMPDIR and the toolchain variables
+    that are present), then a deny-list pass for secret-looking names (defence in depth). HOME is `home`, never the real one."""
+    out = {k: v for k, v in env.items() if k in _ENV_ALLOW or k.startswith("LC_")}
+    out = {k: v for k, v in out.items() if not (k.upper() in _ENV_DENY_NAMES or k.upper().startswith("AWS_")
+                                                  or k.upper().endswith(_ENV_DENY_SUFFIX))}
+    return {**out, "HOME": home, "PYTHONDONTWRITEBYTECODE": "1"}
+
+
+def _git_env(env, home="/nonexistent"):
+    """`scrubbed_env` for every git call and for the test command: no GIT_* from the parent (GIT_INDEX_FILE, GIT_DIR,
+    GIT_ASKPASS, GIT_SSH*, GIT_CONFIG_*), no system or global git config, no prompts, no replace refs."""
+    return {**scrubbed_env(env, home), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull, "GIT_TERMINAL_PROMPT": "0",
+            "GIT_NO_REPLACE_OBJECTS": "1"}
+
+
+def _kill_group(p):
+    # shortcut: after a normal exit the pid is already reaped; its reuse as a group id within microseconds is ignored
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _count_lines(fd, counts, i):
+    """Read `fd` in 64 KiB chunks until EOF, keeping only the number of lines (memory stays constant); owns and closes `fd`."""
+    n, last = 0, b"\n"
+    try:
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return
+            n, last = n + chunk.count(b"\n"), chunk[-1:]
+            counts[i] = n + (last != b"\n")
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _run_group(command, cwd, env, timeout):
+    """(exit or None, timed_out, stdout lines, stderr lines); the whole process group dies on a timeout, an interrupt or exit.
+    shortcut: a descendant that calls setsid escapes the group; if it also holds the output pipes the drain gives up after
+    10 s (its later output is not counted) and the thread stays until it exits."""
+    (r_out, w_out), (r_err, w_err), counts = os.pipe(), os.pipe(), [0, 0]
+    try:
+        try:
+            p = subprocess.Popen(["/bin/sh", "-c", command], cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=w_out,
+                                 stderr=w_err, start_new_session=True)
+        finally:
+            os.close(w_out)
+            os.close(w_err)
+    except BaseException:
+        os.close(r_out)
+        os.close(r_err)
+        raise
+    readers = [threading.Thread(target=_count_lines, args=(fd, counts, i), daemon=True) for i, fd in enumerate((r_out, r_err))]
+    for t in readers:
+        t.start()
+    timed_out = False
+    with p:
+        try:
+            p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_group(p)
+            p.wait()
+        except BaseException:
+            _kill_group(p)
+            raise
+        _kill_group(p)  # background processes the command left behind
+    end = time.monotonic() + 10
+    for t in readers:
+        t.join(max(0.0, end - time.monotonic()))
+    return (None if timed_out else p.returncode), timed_out, counts[0], counts[1]
+
+
+def _rmtree(path):
+    """Remove a tree including read-only and mode-000 directories (Go's module cache is 555)."""
+    try:
+        os.chmod(path, 0o700)
+        with os.scandir(path) as it:
+            entries = list(it)
+    except OSError:
+        entries = []
+    for e in entries:
+        try:
+            if e.is_dir(follow_symlinks=False):
+                _rmtree(e.path)
+            else:
+                os.unlink(e.path)
+        except OSError:
+            pass
+    try:
+        os.rmdir(path)
+    except OSError:
+        pass
+
+
+def run_at(repo, sha, command, timeout):
+    """Run `command` (a shell string from the project's config, never built from anything else) at commit `sha` in a
+    throwaway clone (`git clone --shared --no-checkout`, origin removed, never fetched) that shares no config, hooks or index
+    with the user's repo. Every git call and the command get a scrubbed environment. Returns `{"sha", "exit", "timed_out",
+    "seconds", "stdout_lines", "stderr_lines"}`; the output itself is dropped so test output cannot leak a secret. Raises
+    ValueError (fixed text) when `sha` is not 7-40 hex characters naming a commit here, or the checkout fails. The temp dir
+    is always removed."""
+    if not (isinstance(sha, str) and re.fullmatch(_HEX, sha)):
+        raise ValueError("sha must be 7 to 40 hex characters")
+    if not (isinstance(command, str) and command.strip()) or isinstance(timeout, bool) or not isinstance(timeout, int) or timeout < 1:
+        raise ValueError("a command and a timeout of at least 1 second are required")
+    genv = _git_env(os.environ)
+    full = _commit(repo, sha, env=genv)
+    top = _out(repo, "rev-parse", "--show-toplevel", env=genv)
+    if full is None or top is None:
+        raise ValueError("the sha is not a commit in this repository (a shallow clone may lack it, or git could not be run)")
+    top = os.path.realpath(top.decode("utf-8", "replace").strip())
+    tmp = tempfile.mkdtemp(prefix="ado-strict-")
+    wt, home = os.path.join(tmp, "wt"), os.path.join(tmp, "home")
+    try:
+        if os.path.commonpath([os.path.realpath(tmp), top]) == top:
+            raise ValueError("the temporary directory must be outside the repository")
+        os.mkdir(home)
+        no_hooks = ["-c", f"core.hooksPath={os.devnull}"]  # a post-checkout hook would run with the environment
+        steps = [(top, "clone", "--shared", "--no-checkout", "--quiet", "--end-of-options", top, wt),
+                 (wt, "remote", "remove", "origin"),
+                 (wt, "checkout", "--quiet", "--detach", "--end-of-options", f"{full}^{{commit}}")]
+        for where, *args in steps:
+            r = _git(where, *no_hooks, *args, env=genv, timeout=120)
+            if r is None or r.returncode != 0:
+                raise ValueError("could not create a temporary checkout of the commit")
+        t0 = time.monotonic()
+        code, timed_out, n_out, n_err = _run_group(command, wt, _git_env(os.environ, home), timeout)
+        return {"sha": full, "exit": code, "timed_out": timed_out, "seconds": round(time.monotonic() - t0, 2),
+                "stdout_lines": n_out, "stderr_lines": n_err}
+    finally:
+        try:
+            _rmtree(tmp)
+        except RecursionError:  # an absurdly deep tree
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_configured(cfg, repo, sha):
+    """run_at with `strict.test_command` and `strict.test_timeout` from the (already validated) config."""
+    return run_at(repo, sha, cfg.strict.get("test_command"), cfg.strict.get("test_timeout"))

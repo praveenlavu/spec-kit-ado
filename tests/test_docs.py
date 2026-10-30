@@ -644,6 +644,16 @@ def test_configuration_documents_mode_and_strict_keys():
     assert "## 0.3.0 — unreleased" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
+def test_strict_test_command_security_note_documented():
+    readme, conf, log = _flat("README.md"), _flat("docs/configuration.md"), _flat("CHANGELOG.md")
+    assert "the test command is code from your project" in readme.lower() and "temporary checkout" in readme
+    assert "hygiene, not a sandbox" in readme.lower() and "persist-credentials: false" in readme and "no step holds secrets" in readme
+    assert "`setsid`" in readme and "its own checkout's `.git`" in readme and "persist-credentials: false" in conf
+    assert "scrubbed environment" in readme and "**CI must run it without secrets**" in readme
+    assert "`strict.test_command` is code from your project" in conf and "CI must run it without secrets" in conf
+    assert "L2 test runner" in log and "CI must run it without secrets" in log
+
+
 def test_decisions_verb_documented_read_only():
     row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `decisions <id>` |"))
     assert "Read-only, local" in row and "`<dod_path>/Decisions_<id>.md` (not the ledger)" in row and "`unparsed`" in row
