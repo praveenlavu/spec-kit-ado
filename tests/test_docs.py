@@ -812,3 +812,38 @@ def test_strict_verify_and_record_documented():
     for doc in ("README.md", "docs/configuration.md", "CHANGELOG.md"):
         assert "Git LFS filters do not run" in _flat(doc) and "pointer files" in _flat(doc), doc
     assert "stop when the command exits, not when its output pipes close" in _flat("README.md")
+
+
+def test_strict_override_and_pr_done_rules_documented():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    row = next(x for x in readme.splitlines() if x.startswith("| `strict override <id> <rule>"))
+    assert "Refuses (exit 2) unless stdin is a terminal" in row and "**not a security boundary**" in row
+    assert "20 to 300 characters" in row and "before `pr` is allowed" in row and "local decisions file" in row
+    for rule in ("test-command", "l2", "open-question", "placeholder"):
+        assert f"`{rule}`" in row, rule
+    check_row = next(x for x in readme.splitlines() if x.startswith("| `strict check <id>"))
+    for rule in ("decision-rejected", "override-unposted", "decisions-invalid", "review-missing", "review-blocks", "decision-open"):
+        assert f"`{rule}`" in check_row, rule
+        for doc in ("README.md", "CHANGELOG.md"):
+            assert f"`{rule}`" in _flat(doc), (doc, rule)
+    assert "`overrides_used" in check_row and "survives a squash merge" in check_row
+    flat = _flat("README.md")
+    assert "**What `pr` and `done` add.**" in flat and "**`done` after a squash merge:**" in flat and "**Emergency override**" in flat
+    assert "can never be overridden" in flat and "a guard against accidents, not a security boundary" in flat
+    assert "`ado strict override <id> <rule> --reason" in _flat("AGENTS.md") and "not a security boundary" in _flat("AGENTS.md")
+    hitl = next(x for x in (ROOT / "rules" / "hitl.md").read_text(encoding="utf-8").splitlines() if "`ado strict override" in x)
+    assert "Human only" in hitl and "without a terminal" in hitl and "**posted**" in hitl and "not a security boundary" in hitl
+    assert "`ado strict check <id> --phase pr`" in _flat("commands/pr.md") and "`ado strict check <id> --phase done`" in _flat("commands/done.md")
+    assert "`ado strict override <id> <rule> --reason" in _flat("CHANGELOG.md") and "`decisions.stamp_used`" in _flat("CHANGELOG.md")
+    assert "`ado strict override <id> <rule>" in _flat("docs/configuration.md")
+
+
+def test_strict_override_fix_round_documented():
+    flat = _flat("README.md")
+    assert "The checks still need the red and green commits" not in flat
+    assert "after the branch is deleted and its commits are garbage-collected" in flat and "from L1 it keeps only `evidence-missing`" in flat
+    assert "**no verb calls it yet**" in flat and "**never checked against ADO**" in flat
+    assert "optional, written by the agent, and can only add a refusal" in flat and "a detached `HEAD`" in flat
+    assert "repeats an id" in flat and "every validated `kind: override` line" in flat and "e-mail address or an `@mention` (exit 2)" in flat
+    assert "validated override lines" in _flat("rules/hitl.md") and "validated override line" in _flat("AGENTS.md")
+    assert "git-free `evidence-missing`" in _flat("CHANGELOG.md") and "`decisions-invalid`" in _flat("CHANGELOG.md")

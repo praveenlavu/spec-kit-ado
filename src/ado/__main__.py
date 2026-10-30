@@ -324,6 +324,26 @@ def _resolve_decision(args):
     return {"id": args.id, "resolved": args.resolve, "status": args.verdict, "by": by.strip(), "note": note.strip()}
 
 
+def _override(args):
+    """`strict override`: a human records a `kind: override` decision that lets one strict rule pass. Tested before anything is
+    read or written (no config, no file), with or without --apply."""
+    if not (sys.stdin and sys.stdin.isatty()):
+        raise ValueError("an override waives a strict rule, which only a human may do: run it in your own terminal "
+                         "(this shell has no terminal on stdin; a guard against accidents, not a security boundary)")
+    path = decisions.decisions_file(Config.load().dod_path, args.id)
+    if args.apply:
+        d_id = decisions.apply_override(path, args.id, args.rule, args.reason)
+    else:
+        try:
+            md = decisions._read(path) if path.exists() else decisions.render_file(args.id)
+        except (OSError, UnicodeError) as e:
+            raise ValueError(f"cannot read the decisions file {path} ({e.__class__.__name__})")
+        d_id = decisions.add_override(md, args.rule, args.reason)[1]
+    return {"ok": True, "applied": bool(args.apply), "id": d_id, "rule": args.rule, "file": str(path),
+            "line": decisions.render_line({"id": d_id, "kind": "override", "text": f"skip {args.rule}", "why": args.reason.strip(),
+                                           "status": "open", "by": "", "note": "", "posted": None, "used": ""})}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ado", description="Azure DevOps work-item CLI")
     parser.add_argument("--version", action="version", version=__version__)
@@ -462,6 +482,13 @@ def main(argv=None):
     q = ssub.add_parser("check", help="Check the strict-mode rules of a phase (read-only; exit 2 lists the findings as JSON)")
     q.add_argument("id", type=int, help="story id")
     q.add_argument("--phase", required=True, choices=sorted(strict.PHASES), help="implement, pr or done")
+    q = ssub.add_parser("override", help="A human, in their own terminal, records a `kind: override` decision that lets ONE strict rule pass for "
+                        "this story (a local write of Decisions_<id>.md; refuses without a terminal; not a security boundary; the entry must be posted "
+                        "before `pr`); without --apply prints the line it would record")
+    q.add_argument("id", type=int, help="story id")
+    q.add_argument("rule", choices=decisions.OVERRIDE_RULES, help="the rule to skip: test-command, l2 (the record and test-run rules), open-question or placeholder")
+    q.add_argument("--reason", required=True, metavar="TEXT", help="why, 20 to 300 characters (no control characters, `<!--`, `-->` or code fences)")
+    q.add_argument("--apply", action="store_true", help="write the line (default: print it)")
     q = ssub.add_parser("verify", help="Run L1, then strict.test_command at each AC's red (must fail) and green (must pass) commit; "
                         "records the result in ledger section 4 (exit 2 lists the findings as JSON)")
     q.add_argument("id", type=int, help="story id")
@@ -509,6 +536,8 @@ def main(argv=None):
             out = _add_decision(args)
         elif args.command == "decisions" and args.resolve:  # local only: no token, no request
             out = _resolve_decision(args)
+        elif args.command == "strict" and args.strict_command == "override":  # local only: no token, no request
+            out = _override(args)
         elif args.command == "branch" and args.id_from is not None:  # local only: no token, no request
             out = prs.story_from_branch(args.id_from, Config.load().branch_prefix)
         else:

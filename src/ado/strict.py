@@ -33,12 +33,17 @@ def _finding(rule, detail, fix):
 
 
 class _Ctx:
-    def __init__(self, client, story_id, repo):
-        self.client, self.id, self.repo, self.cfg = client, story_id, repo, client.config
+    def __init__(self, client, story_id, repo, phase=None, head="HEAD"):
+        self.client, self.id, self.repo, self.cfg, self.phase, self.head = client, story_id, repo, client.config, phase, head
         self.ledger = gate._read(Path(repo) / dod.dod_file(self.cfg.dod_path, story_id), repo, set())
         spec_dir = dod.ledger_spec_dir(self.ledger) if self.ledger is not None else None
         self.spec_dir = spec_dir.strip() or None if spec_dir else None  # a CRLF ledger leaves `\r` on the header value
         self._files = {}
+        path = Path(repo) / decisions.decisions_file(self.cfg.dod_path, story_id)
+        md = gate._read(path, repo, set()) if os.path.lexists(path) else None  # confined like the ledger: no symlink, <= 1 MiB
+        self.decisions_md = md or ""
+        self.decisions = decisions.parse_decisions(self.decisions_md)
+        self.decisions_ok = md is not None or not os.path.lexists(path)  # a missing file is no decisions; an unreadable one is a finding
 
     def file(self, name):
         """Text of <spec dir>/<name>, or None (no spec dir, missing, symlink, outside the repo, too big, not UTF-8)."""
@@ -154,17 +159,14 @@ def parse_evidence(status_cell):
     return {"red": m[1], "green": m[2]} if m and len(_TAGGED.findall(text)) == 2 else None
 
 
-# replace refs and old-style grafts rewrite history as git reports it: never let them hide a change
-_GIT_ENV = {"GIT_NO_REPLACE_OBJECTS": "1", "GIT_GRAFT_FILE": os.devnull, "GIT_TERMINAL_PROMPT": "0",
-            "GIT_PAGER": "cat", "GIT_OPTIONAL_LOCKS": "0"}
-
-
 def _git(repo, *args, env=None, timeout=30):
-    """A finished git run (bytes), or None when git is missing, cannot start or runs past `timeout` s (30): a failure, never a pass."""
+    """A finished git run (bytes), or None when git is missing, cannot start or runs past `timeout` s (30): a failure, never a pass.
+    The default environment is prs.git_env's (no inherited GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE or other selector, no replace
+    refs, grafts, pager or prompt), as for every `prs` git call."""
     try:
         return subprocess.run(["git", "--no-pager", "--no-replace-objects", "-c", "core.fsmonitor=false", "-C", str(repo), *args],
                               check=False, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout,
-                              env={**os.environ, **_GIT_ENV} if env is None else env)
+                              env={**prs.git_env(), "GIT_OPTIONAL_LOCKS": "0"} if env is None else env)
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -277,10 +279,13 @@ def check_l1(rows, repo, head, tests, dod_path, spec_dir, story_id, ac_count=0):
         if not (head_full and _is_ancestor(repo, green, head_full)):
             out.append(_l1_finding("green-not-on-branch", ac, "the green commit is not an ancestor of HEAD" if head_full
                                    else "HEAD does not resolve to a commit", "record a green commit that is on this branch"))
+    return out + _rows_missing(rows, ac_count)
+
+
+def _rows_missing(rows, ac_count):
     have = {r["ac"] for r in rows}
-    out += [_l1_finding("evidence-missing", f"AC-{n}", "no section 3 row", _EVIDENCE_FIX)
+    return [_l1_finding("evidence-missing", f"AC-{n}", "no section 3 row", _EVIDENCE_FIX)
             for n in range(1, ac_count + 1) if f"AC-{n}" not in have]
-    return out
 
 
 def _l1(c):
@@ -291,12 +296,23 @@ def _l1(c):
                     c.id, len(dod.ac_lines(c.ledger)))
 
 
+def _evidence(c):
+    """The git-free part of L1, for `done` (after a squash merge the red and green commits may be gone): every AC has a row
+    whose status cell is a `red <sha> → green <sha>` pair. The record check validates those SHAs against the record."""
+    if c.ledger is None:
+        return []  # reported by _ledger
+    rows = gate.parse_section3(c.ledger)
+    return [_l1_finding("evidence-missing", r["ac"], "the status cell has no `red <sha> → green <sha>` pair", _EVIDENCE_FIX)
+            for r in rows if parse_evidence(r["status"]) is None] + _rows_missing(rows, len(dod.ac_lines(c.ledger)))
+
+
 # ---- verification record (D§5): written by `verify`, only validated by `check` ----
 _V_HEADING = re.compile(r"^### Verification\b[^\r\n]*", re.M)
 _V_HEAD = re.compile(r"### Verification — (\d{4}-\d{2}-\d{2}) @ ([0-9a-f]{7,40})")
 _V_AC = re.compile(r"- (AC-\d+): red ([0-9a-f]{12}) exit (\d{1,3}) · green ([0-9a-f]{12}) exit (\d{1,3}) · L1 ok")
 _V_HEADLINE = re.compile(r"- head: ([0-9a-f]{12}) exit (\d{1,3})")
 _SUPERSEDED = " (superseded)"
+_PR_HEAD = re.compile(rf"(?<![0-9A-Za-z])PR head[\s:]+({_HEX})(?![0-9A-Za-z])", re.I)
 
 
 def _range_findings(rows, repo, base):
@@ -368,6 +384,11 @@ def validate_record(ledger_md, rows, repo, head, dod_path, spec_dir, story_id, b
             return [_finding("record-stale", f"the verification record is stale: {why}", redo)]
         if base is not None:
             out += _range_findings(rows, repo, base)
+    if squash_ok:  # a `PR head <sha>` in a section 3 commit/PR cell names the commit the PR was made at: the record must be for it
+        pr_heads = [h for row in rows for h in _PR_HEAD.findall(re.sub(r"[`*_]", "", row["evidence"]))]
+        if any(not _same_sha(h, head_m[2][:12]) for h in pr_heads):
+            out.append(_finding("record-incomplete", "the verification record is for a different commit than the PR head recorded in "
+                                "ledger section 3", redo))
     if len(heads) != 1 or not _same_sha(head_m[2], heads[0][0]):
         out.append(_finding("record-incomplete", "the verification record has no single `- head:` line naming the recorded head", redo))
     elif int(heads[0][1]) != 0:
@@ -398,22 +419,122 @@ def _record_done(c):
     return validate_record(c.ledger, gate.parse_section3(c.ledger), c.repo, "HEAD", c.cfg.dod_path, c.spec_dir, c.id, squash_ok=True)
 
 
+# ---- decisions and review (D§6, §7): the rules `pr` and `done` add ----
+_D_TOKEN = re.compile(r"\bD\d+\b")
+_STATUS_ARROW = re.compile(r"(?:→|->)\s*(?:_\(open\)_|validated|rejected)")  # both searches are linear, whatever the line
+
+
+def _hidden_lines(md, story_id):
+    """True when a decision line could be read differently by a person than by `parse_decisions`: a duplicate `D` id (the first
+    wins, so a `validated` copy can hide a `rejected` one) or a visible `D<n> … → status` line that is not a decision line
+    (`1. `, `> ` or other prefix). The format note `render_file` writes is exempt."""
+    note = set(decisions.render_file(story_id).splitlines())
+    lines, ids, odd = dod._visible(md)[0].splitlines(), [], False
+    for ln in lines:
+        m = decisions._CAND.match(ln)
+        if m:
+            ids.append(m.group(2))
+        elif ln not in note and ("→" in ln or "->" in ln):
+            d = _D_TOKEN.search(ln)
+            odd = odd or (d is not None and _STATUS_ARROW.search(ln, d.end()) is not None)
+    return odd or len(ids) != len(set(ids))
+
+
+def _decisions_ok(c):
+    if c.decisions_ok and not c.decisions["unparsed"] and not _hidden_lines(c.decisions_md, c.id):
+        return []
+    return [_finding("decisions-invalid", "the decisions file is unreadable (a symlink, outside the repository, over 1 MiB or not UTF-8), "
+                     "a D line breaks the grammar or repeats an id, a line that looks like a decision is not one, or a code fence or "
+                     "comment is left open in it, so its lines cannot all be judged",
+                     f"repair `{decisions.decisions_file(c.cfg.dod_path, c.id)}` (`ado decisions {c.id}` shows what parses)")]
+
+
+def _ids_detail(ds):
+    return ", ".join(d["id"] for d in ds)
+
+
+def _decisions_pr(c):
+    """`decision-rejected` (any rejected line) and `override-unposted` (an override line without a `posted:` marker that
+    still matches its text: the PO must have seen it). Ids only, never decision text."""
+    out = _decisions_ok(c)
+    rejected = c.decisions["rejected"]
+    if rejected:
+        out.append(_finding("decision-rejected", f"the PO rejected: {_ids_detail(rejected)}",
+                            "change the work to match the PO's answer, or record a new decision; never re-word or delete a rejected line"))
+    unposted = [d for d in decisions.unposted(c.decisions) if d["kind"] == "override"]  # the predicate `--post` uses
+    if unposted:
+        out.append(_finding("override-unposted", f"override(s) not posted to the story: {_ids_detail(unposted)}",
+                            f"post them with `ado decisions {c.id} --post` (preview, yes, then --apply)"))
+    return out
+
+
+def _decisions_done(c):
+    still = c.decisions["open"]
+    if not still:
+        return []
+    return [_finding("decision-open", f"decision(s) the PO has not validated or rejected yet: {_ids_detail(still)}",
+                     "wait for the PO's reply (`ado comments`); a human records it with `ado decisions "
+                     f"{c.id} --resolve D<n> --validated|--rejected`")]
+
+
+_REVIEW_FIX = "run speckit.ado.review, fix what it blocks on, commit the ledger"
+
+
+def _review(c):
+    """`review-missing` / `review-blocks` from prs.review_blocks with the strict review list (the project's plus `blocker`). The
+    reason it returns can quote PR text, so the finding carries a fixed text: re-run the PR preview for the exact one."""
+    if c.ledger is None:
+        return []  # reported by _ledger
+    why = prs.review_blocks(c.id, c.cfg.effective_review_block_on(), c.head, c.cfg.dod_path, c.repo, squash=c.phase == "done")
+    if why is None:
+        return []
+    if why.startswith("no review logged"):
+        return [_finding("review-missing", "no review is logged in ledger section 4 of the head commit", _REVIEW_FIX)]
+    return [_finding("review-blocks", "the latest review blocks the PR, is stale, or could not be checked (git or ledger problem)", _REVIEW_FIX)]
+
+
 PHASES = {
     "implement": [_ledger, _spec_files, _placeholders, _open_questions, _board, _test_command],
-    "pr": [_ledger, _l1, _record],
-    "done": [_ledger, _l1, _record_done],
+    "pr": [_ledger, _l1, _record, _decisions_pr, _review],
+    "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _review],
 }
 
+# ---- override (D§7): `skip <rule>` lines of kind override; only these findings, never L1 or a missing spec/plan/tasks ----
+_COVERS = {"test-command": ("test-command",),
+           "l2": ("record-missing", "record-stale", "record-incomplete", "record-failed", "head-fails", "green-fails", "red-passes",
+                  "timeout", "runner-error"),
+           "open-question": ("open-question",),
+           "placeholder": ("placeholder",)}
 
-def check(client, story_id, phase, repo="."):
+
+def overrides(c):
+    """{finding rule: id} of the override lines in force: kind override, text exactly `skip <rule>` for an overridable rule, any
+    status but rejected; the lowest id wins per rule. Covers every check of the story until it is done."""
+    out = {}
+    for d in sorted(c.decisions["open"] + c.decisions["validated"], key=lambda d: int(d["id"][1:]), reverse=True):
+        rule = d["text"][5:] if d["text"].startswith("skip ") else None
+        if d["kind"] == "override" and rule in _COVERS:
+            out.update({f: d["id"] for f in _COVERS[rule]})
+    return out
+
+
+def check(client, story_id, phase, repo=".", head="HEAD"):
+    """Read-only. `overrides_used`: the ids of the override lines that let a finding through (the apply paths stamp them used)."""
     if phase not in PHASES:
         raise ValueError(f"unknown phase (valid: {', '.join(PHASES)})")
     mode = client.config.mode
     if mode != "strict":
         return {"phase": phase, "mode": mode, "ok": True, "findings": [], "note": "mode is advisory"}
-    ctx = _Ctx(client, story_id, repo)
-    findings = [f for rule in PHASES[phase] for f in rule(ctx)]
-    return {"phase": phase, "mode": mode, "ok": not findings, "findings": findings}
+    ctx = _Ctx(client, story_id, repo, phase, head)
+    cover = overrides(ctx)
+    findings, used = [], set()
+    for f in (f for rule in PHASES[phase] for f in rule(ctx)):
+        if f["rule"] in cover:
+            used.add(cover[f["rule"]])
+        else:
+            findings.append(f)
+    return {"phase": phase, "mode": mode, "ok": not findings, "findings": findings,
+            "overrides_used": sorted(used, key=lambda i: int(i[1:]))}
 
 
 # ---- L2 test runner (D§5): the project's test command at one commit, in a throwaway checkout ----

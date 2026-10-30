@@ -40,6 +40,20 @@ def line_hash(text):
     return hashlib.sha256(" ".join(text.split()).encode("utf-8")).hexdigest()[:8]
 
 
+def marker_hash(d):
+    """The hash a `posted:` marker carries for the parsed decision `d`: the text alone, but for an override the id, the text
+    and the reason (what the PO read): an edited reason or a marker copied from another line no longer matches."""
+    return line_hash(f"{d['id']}|{d['text']}|{d['why']}" if d["kind"] == "override" else d["text"])
+
+
+def unposted(parsed):
+    """The lines the PO has not seen as they now read: the open lines, then the override lines that are open or validated
+    (a validated override still has to reach the thread), each without a `posted:` marker or with one that no longer matches.
+    One predicate for `plan_post` and the strict `override-unposted` rule."""
+    lines = parsed["open"] + [d for d in parsed["validated"] if d["kind"] == "override"]
+    return [d for d in lines if not d["posted"] or d["posted"]["hash"] != marker_hash(d)]
+
+
 def _line(raw):
     """One file line -> the decision dict, or None when it is a `D` line that breaks the grammar."""
     m = _CAND.match(raw)
@@ -141,13 +155,13 @@ def _comment_line(d):
 def plan_post(client, work_item_id, parsed):
     """Read-only, no request: {'action': none|add, 'html', 'lines': [ids], 'cut': [ids], 'hashes': {id: hash8}}.
     Always a NEW comment (never an edit). Lists every open line that is unposted or whose text no longer
-    matches its `posted:` hash; resolved lines are never posted. `client` is unused (kept for the verb signature)."""
-    todo = [d for d in parsed["open"] if not d["posted"] or d["posted"]["hash"] != line_hash(d["text"])]
+    matches its `posted:` hash (`unposted`); other resolved lines are never posted. `client` is unused (kept for the verb signature)."""
+    todo = unposted(parsed)
     shown = [_comment_line(d) for d in todo]
     body = "<br>".join([MARKER, _HEAD] + [html.escape(t) for t, _ in shown]) if todo else ""
     return {"action": "add" if todo else "none", "html": body, "lines": [d["id"] for d in todo],
             "cut": [d["id"] for d, (_, cut) in zip(todo, shown) if cut],
-            "hashes": {d["id"]: line_hash(d["text"]) for d in todo}}
+            "hashes": {d["id"]: marker_hash(d) for d in todo}}
 
 
 def render_plan(work_item_id, plan, unparsed=False):
@@ -174,13 +188,13 @@ def _marked(md, hashes, comment_id):
         eol = raw[len(text):]
         d = _line(v) if _CAND.match(v) and len(v) <= MAX_LINE else None
         if d and d["id"] in todo:
-            if line_hash(d["text"]) != todo[d["id"]]:
+            if marker_hash(d) != todo[d["id"]]:
                 break  # edited since the plan: left in `todo`, so the check below refuses
             del todo[d["id"]]
             if d["posted"]:  # only a parsed marker is replaced; marker-like text inside the decision stays
                 last = list(_MARK.finditer(text))[-1]  # the real one is in the tail, after the status arrow
                 text = (text[:last.start()] + text[last.end():]).rstrip()
-            raw = f"{text} · posted: {comment_id}:{line_hash(d['text'])}{eol}"
+            raw = f"{text} · posted: {comment_id}:{marker_hash(d)}{eol}"
         out.append(raw)
     if todo:
         raise ValueError(f"the decisions file changed since the plan ({', '.join(sorted(todo))}); nothing posted")
@@ -295,25 +309,28 @@ def apply_resolve(file_path, d_id, status, by, note, force=False):
 
 
 MAX_TEXT = 1500
-_ADD_KINDS = ("decision", "assumption")  # `override` is only created by the strict override command
+_ADD_KINDS = ("decision", "assumption")  # `override` is only created by `add_override` (the strict override command)
 
 
-def add(md, kind, text, why=""):
+def add(md, kind, text, why="", _kinds=_ADD_KINDS, _min_why=0):
     """(the file text with one new open `D<n>` line appended, "D<n>"). n = highest id in the file + 1 (a malformed or
     duplicate line still counts), grammar-exact. @mentions and addresses are replaced as in a posted comment.
     ValueError (never echoing the text) for a bad kind, a text of 0 or over MAX_TEXT characters, a why over MAX_NOTE,
     control characters, line breaks, `<!--`, `-->`, code fences, or a line that would not read back (so a file with an
     unclosed fence or comment, which would hide the new line, is refused too)."""
-    if kind not in _ADD_KINDS:
+    if kind not in _kinds:
         raise ValueError("--kind must be decision or assumption")
     for name, v in (("the text", text), ("--why", why)):  # before strip(), which would drop a trailing line break
         if _CTRL.search(v) or _MARKUP.search(v):
             raise ValueError(f"{name} must not contain control characters, line breaks, `<!--`, `-->` or code fences")
-    text, why = _scrub(text.strip()), _scrub(why.strip()) or "unspecified"
+    text, why = text.strip(), why.strip()
+    if kind != "override":  # an override reason is refused for markup, never rewritten
+        text, why = _scrub(text), _scrub(why)
+    why = why or "unspecified"
     if not 1 <= len(text) <= MAX_TEXT:
         raise ValueError(f"the text must be 1 to {MAX_TEXT} characters")
-    if len(why) > MAX_NOTE:
-        raise ValueError(f"--why must be at most {MAX_NOTE} characters")
+    if not _min_why <= len(why) <= MAX_NOTE:
+        raise ValueError(f"--why must be {f'{_min_why} to ' if _min_why else 'at most '}{MAX_NOTE} characters")
     nums = [int(n) for n in re.findall(r"(?m)^[ \t]*(?:<!--[ \t]*)?(?:[-*+][ \t]+)?\[[ xX]\][ \t]*D(\d+)", md)]  # raw text: an id inside a comment or fence is taken too
     d_id = f"D{max(nums, default=0) + 1}"
     new = {"id": d_id, "kind": kind, "text": text, "why": why, "status": "open", "by": "", "note": "",
@@ -329,18 +346,81 @@ def add(md, kind, text, why=""):
     return new_md, d_id
 
 
-def apply_add(file_path, story_id, kind, text, why=""):
-    # shortcut: two concurrent --add runs can lose a line (no lock); fine for a local human/agent command, add a lock if parallel agents write
-    """Append one `D<n>` line, creating the file from `render_file` when it is missing (unique temp file + os.replace).
-    Refuses when the file changed or appeared between the read and the write. Returns the new id."""
+def _apply(file_path, story_id, build):
+    # shortcut: two concurrent writers can lose a line (no lock); fine for a local human/agent command, add a lock if parallel agents write
+    """Append the line `build(md) -> (new md, id)` makes, creating the file from `render_file` when it is missing (unique
+    temp file + os.replace). Refuses when the file changed or appeared between the read and the write, and when the file
+    on disk does not read back as exactly the new text (the old text is then put back). Returns the new id."""
     path = Path(file_path)
     try:
         exists = path.exists()
         md = _read(path) if exists else render_file(story_id)
-        new, d_id = add(md, kind, text, why)
+        new, d_id = build(md)
         if path.exists() != exists or (exists and _read(path) != md):
             raise ValueError("the decisions file changed while adding; nothing written, run it again")
         _atomic_write(path, new)
+        if _read(path) != new:
+            if exists:
+                _atomic_write(path, md)
+            raise ValueError("the decisions file did not read back as written; nothing recorded")
     except (OSError, UnicodeError) as e:
         raise ValueError(f"cannot update the decisions file {path} ({e.__class__.__name__}: {e}); nothing written")
     return d_id
+
+
+def apply_add(file_path, story_id, kind, text, why=""):
+    return _apply(file_path, story_id, lambda md: add(md, kind, text, why))
+
+
+OVERRIDE_RULES = ("test-command", "l2", "open-question", "placeholder")  # the strict rules an override may skip
+MIN_REASON = 20
+
+
+def add_override(md, rule, reason):
+    """(the file text with one new open `kind: override` line `skip <rule>` whose why is `reason`, "D<n>"), as `add`
+    (same grammar, read-back and refusals) but the reason (MIN_REASON..MAX_NOTE characters once stripped) is stored as
+    typed: markup is refused, nothing is scrubbed (the posted comment scrubs it like any line)."""
+    if rule not in OVERRIDE_RULES:
+        raise ValueError(f"the rule must be one of: {', '.join(OVERRIDE_RULES)}")
+    if not isinstance(reason, str):
+        raise ValueError("--reason is required")
+    if _scrub(reason) != reason:
+        raise ValueError("--reason must not contain an e-mail address or an @mention (a posted decision replaces them): describe it without")
+    parsed = parse_decisions(md)
+    live = [d for d in parsed["open"] + parsed["validated"] if d["kind"] == "override" and d["text"] == f"skip {rule}"]
+    if live:
+        raise ValueError(f"an override of {rule} is already in force ({live[0]['id']}); reject it first to record a new one")
+    try:
+        return add(md, "override", f"skip {rule}", reason, ("override",), MIN_REASON)
+    except ValueError as e:
+        raise ValueError(str(e).replace("--why", "--reason")) from None
+
+
+def apply_override(file_path, story_id, rule, reason):
+    return _apply(file_path, story_id, lambda md: add_override(md, rule, reason))
+
+
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def stamp_used(md, ids, date):
+    """The file text with ` · used: <date>` appended to the lines of the decisions in `ids`, once: a line that already
+    has `used` keeps its date. Pure: the caller writes it (`_atomic_write`). Every other byte, line endings included,
+    is unchanged. ValueError (nothing returned) for a bad date, an id that is not a line of the file, or a line holding
+    an inline comment or fence that a rewrite would drop."""
+    if not isinstance(date, str) or not _DATE.fullmatch(date):
+        raise ValueError("the date must be YYYY-MM-DD")
+    out, todo = [], set(ids)
+    for raw, v in zip(md.splitlines(keepends=True), _visible(md)[0].split("\n")):
+        text = raw.splitlines()[0]  # the terminator may be U+2028 etc.: keep it as it is
+        d = _line(v) if _CAND.match(v) and len(v) <= MAX_LINE else None
+        if d and d["id"] in todo:
+            todo.discard(d["id"])
+            if v != text:
+                raise ValueError(f"{d['id']} holds an inline <!-- --> comment or fence that a rewrite would drop; edit it by hand")
+            if not d["used"]:
+                raw = f"{text} · used: {date}{raw[len(text):]}"
+        out.append(raw)
+    if todo:
+        raise ValueError(f"no such decision in the decisions file: {', '.join(sorted(todo))}")
+    return "".join(out)

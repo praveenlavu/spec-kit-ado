@@ -13,6 +13,8 @@ review results, then opens the PR through `ado pr create` — via `gh` when `rep
 - Follow `rules/hitl.md`.
 - A ledger `<dod_path>/DoD_<id>.md`; `speckit.ado.gate` and `speckit.ado.review` have
   logged results in section 4.
+- In strict mode run `ado strict check <id> --phase pr` first and stop on exit 2: besides the TDD evidence it refuses a `rejected` decision, an
+  unposted override (`ado decisions <id> --post`) and a missing or blocking review. Never run `ado strict override` yourself (human, own terminal; `rules/hitl.md`).
 - `repo_host: github` needs `gh` installed and signed in; `repo_host: azure` needs
   `repository` set in `ado.config.json`.
 

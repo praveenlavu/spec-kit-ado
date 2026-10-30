@@ -13,6 +13,8 @@ checklist is incomplete, and never sets the state if the attachment failed.
 
 - Follow `rules/hitl.md`.
 - A ledger `<dod_path>/DoD_<id>.md` exists. The PR is merged (or the team's equivalent).
+- In strict mode run `ado strict check <id> --phase done` first and stop on exit 2: it adds `decision-open` (every decision line needs the PO's
+  validated or rejected verdict) and, for a squash-merged PR, needs no red or green commit in git: it validates the verification record instead.
 - `<dod_path>/Decisions_<id>.md` is attached next to the ledger when it exists (`ado decisions <id> --add` creates it);
   without it nothing changes.
 

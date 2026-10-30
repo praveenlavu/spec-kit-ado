@@ -135,11 +135,18 @@ _GIT_SELECTORS = {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRE
 GIT_TIMEOUT = 30  # seconds per git call
 
 
+def git_env(base=None):
+    """`base` (default: this process's environment) for a git run: no inherited repository selector or config injection,
+    replace refs and grafts off, no pager, no prompt. Shared with strict._git."""
+    env = {k: v for k, v in (os.environ if base is None else base).items()
+           if k not in _GIT_SELECTORS and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
+    return {**env, **_GIT_ENV}
+
+
 def _git(repo, *args):
-    env = {k: v for k, v in os.environ.items() if k not in _GIT_SELECTORS and not k.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"))}
     try:  # bytes: file names need not be UTF-8
         return subprocess.run(["git", "--no-pager", "--no-replace-objects", "-C", repo, *args], check=False, capture_output=True,
-                              stdin=subprocess.DEVNULL, timeout=GIT_TIMEOUT, env={**env, **_GIT_ENV})
+                              stdin=subprocess.DEVNULL, timeout=GIT_TIMEOUT, env=git_env())
     except FileNotFoundError:
         raise _Refuse("cannot check the review: `git` is not installed or not on PATH")
     except subprocess.TimeoutExpired:
@@ -199,28 +206,35 @@ _SEVERITY = re.compile(r"^- \*\*Confirmed by severity:\*\*(.*)$", re.M)
 _RERUN = " — re-run speckit.ado.review"
 
 
-def review_blocks(work_item_id, block_on, head, dod_path, repo=".", push=False):
+def review_blocks(work_item_id, block_on, head, dod_path, repo=".", push=False, squash=False):
     """Why `ado pr create` must refuse under `review_block_on`, or None. Empty block_on → None
     (advisory). Blocking is opted into, so missing info (no review, no git, unknown head) refuses.
-    The ledger is read from the head commit, never the working tree."""
+    The ledger is read from the head commit, never the working tree. `squash` (`ado strict check --phase done`): the
+    reviewed commit is no ancestor of a squash-merged head, so only the verdict and counts are checked, not the staleness;
+    a detached HEAD is read as the commit it is, without the origin comparison."""
     if not block_on:
         return None
     try:
-        _check_review(work_item_id, block_on, head, dod_path, repo, push)
+        _check_review(work_item_id, block_on, head, dod_path, repo, push, squash)
     except _Refuse as e:
         return str(e)
     return None
 
 
-def _check_review(work_item_id, block_on, head, dod_path, repo, push):
+def _check_review(work_item_id, block_on, head, dod_path, repo, push, squash=False):
+    detached = False
     if head == "HEAD":  # full ref, not --short: a tag named like the branch makes --short say heads/<name>
-        ref = _text(_git(repo, "symbolic-ref", "--quiet", "HEAD"), "HEAD is detached; pass a branch").strip()
-        if not ref.startswith("refs/heads/"):
-            raise _Refuse(f"cannot check the review: HEAD points at {ref!r}, not a branch")
-        head = ref[len("refs/heads/"):]
+        sym = _git(repo, "symbolic-ref", "--quiet", "HEAD")
+        detached = squash and sym.returncode == 1  # a CI checkout of the merged commit: there is no branch to compare
+        if not detached:
+            ref = _text(sym, "HEAD is detached; pass a branch").strip()
+            if not ref.startswith("refs/heads/"):
+                raise _Refuse(f"cannot check the review: HEAD points at {ref!r}, not a branch")
+            head = ref[len("refs/heads/"):]
     # explicit refs/heads: a tag named like the branch never shadows it
-    head_sha = _text(_git(repo, "rev-parse", "--verify", f"refs/heads/{head}^{{commit}}"), f"unknown head {head!r}").strip()
-    if not push:  # without --push the PR opens from the remote branch, so it must be what we check
+    head_sha = _text(_git(repo, "rev-parse", "--verify", "HEAD^{commit}" if detached else f"refs/heads/{head}^{{commit}}"),
+                     f"unknown head {head!r}").strip()
+    if not push and not detached:  # without --push the PR opens from the remote branch, so it must be what we check
         r = _git(repo, "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{head}^{{commit}}")
         if r.returncode == 0 and r.stdout.decode("ascii", "replace").strip() != head_sha:
             raise _Refuse(f"remote branch origin/{head} differs from the reviewed local branch; push or re-review")
@@ -268,6 +282,8 @@ def _check_review(work_item_id, block_on, head, dod_path, repo, push):
         if counts[s.lower()]:
             raise _Refuse(f"latest review has {counts[s.lower()]} confirmed `{s}` finding(s) and "
                           f"review_block_on includes `{s}` — fix them and re-run speckit.ado.review")
+    if squash:
+        return
     sha_m = _HEADING_SHA.search(heading.group(0))
     if not sha_m:
         raise _Refuse("latest review records no commit SHA" + _RERUN)

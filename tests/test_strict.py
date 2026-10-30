@@ -10,7 +10,7 @@ from ado.__main__ import main
 from ado.client import AdoError
 from ado.config import Config
 from ado.dod import SECTION2
-from tests.conftest import FakeClient, commit, git, write_files
+from tests.conftest import FakeClient, commit, git, review_md, write_files
 
 SPEC = "specs/001-members"
 TASKS = "- [ ] T001 Count members\n- [ ] T002 List members\n"
@@ -66,7 +66,7 @@ def _rules(res):
 
 def test_all_present_is_ok(tmp_path):
     res, client = _check(tmp_path)
-    assert res == {"phase": "implement", "mode": "strict", "ok": True, "findings": []}
+    assert res == {"phase": "implement", "mode": "strict", "ok": True, "findings": [], "overrides_used": []}
     assert all(c["method"] != "PATCH" and c["path"].count("comments") == 0 for c in client.calls)
 
 
@@ -207,7 +207,7 @@ def test_advisory_is_a_noop(tmp_path):
 def test_pr_and_done_register_the_l1_rule(tmp_path, phase):
     res, _ = _check(tmp_path, phase=phase, ledger=False, files={})
     assert _rules(res) == ["ledger-missing"]  # nothing else can be judged without the ledger
-    assert strict._l1 in strict.PHASES["pr"] and strict._l1 in strict.PHASES["done"]
+    assert strict._l1 in strict.PHASES["pr"] and strict._l1 not in strict.PHASES["done"] and strict._evidence in strict.PHASES["done"]
     assert strict._l1 not in strict.PHASES["implement"]
 
 
@@ -518,7 +518,7 @@ def test_repo_below_the_git_toplevel_reads_paths_from_the_toplevel(tmp_path, git
 
 # ---- L1 through `strict.check` ----
 def _l1_rules(res):
-    return [r for r in _rules(res) if not r.startswith("record-")]  # the verification record has its own tests below
+    return [r for r in _rules(res) if not r.startswith(("record-", "review-"))]  # the record and the review have their own tests
 
 
 def _ledger_rows(*rows):
@@ -547,7 +547,7 @@ def test_check_uses_the_config_test_globs_and_dod_path(tmp_path, git_env, monkey
     assert _l1_rules(res) == ["red-touches-code", "red-no-test"]
     client = _project(tmp_path, ledger=ledger)
     client.config.gate["tests"] = {"**/*.check.lua": "assert"}
-    assert _rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == ["record-missing"]  # L1 passes
+    assert _l1_rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == []  # L1 passes
 
 
 def test_check_with_ac_lines_but_no_rows_is_evidence_missing(tmp_path, git_env, monkeypatch):
@@ -600,7 +600,7 @@ def test_verify_records_pass_for_good_pair(tmp_path, git_env):
     secs = re.search(r"- seconds: \d+(\.\d+)?\n", after).group(0)
     assert block + secs + "\n## 5." in after and after.index("## 4.") < after.index(block)
     assert after.replace(block + secs + "\n", "") == before  # nothing else changed
-    assert strict.check(client, 1001, "pr", repo=str(tmp_path))["ok"] is True  # the record validates
+    assert _l1_rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == []  # the record validates (no record-* finding)
 
 
 def test_red_that_passes_is_refused_and_named(tmp_path, git_env):
@@ -726,7 +726,7 @@ def test_record_goes_in_section_4_and_crlf_is_kept(tmp_path, git_env):
     raw = LEDGER(tmp_path).read_bytes().decode()
     assert "\n" not in raw.replace("\r\n", "") and raw.endswith("## 5. DoD\r\n- [ ] done\r\n")
     assert raw.index("## 4.") < raw.index("### Verification") < raw.index("## 5.")
-    assert strict.check(client, 1001, "pr", repo=str(tmp_path))["ok"] is True
+    assert _rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == ["review-missing"]  # the record validates
 
 
 def test_record_write_is_atomic_and_keeps_the_mode(tmp_path, git_env, monkeypatch):
@@ -845,7 +845,7 @@ def test_validate_record_missing(tmp_path, git_env):
     assert _vr(f) == ["record-missing"] and "ado strict verify 1001" in f[0]["fix"]
     fenced = ledger.replace("## 4. Log\n", "## 4. Log\n\n```\n### Verification — 2026-10-30 @ abcdef123456\n```\n")
     assert _vr(_validate(tmp_path, fenced)) == ["record-missing"]  # an example in a fence is no record
-    assert _vr(strict.check(client, 1001, "pr", repo=str(tmp_path))["findings"]) == ["record-missing"]
+    assert _vr(strict.check(client, 1001, "pr", repo=str(tmp_path))["findings"]) == ["record-missing", "review-missing"]
 
 
 def test_validate_record_stale_after_code_change_but_fresh_after_ledger_only_commit(tmp_path, git_env):
@@ -954,7 +954,7 @@ def test_squash_safe_record_validation_uses_recorded_shas_not_ancestry_for_done(
 def test_check_pr_reports_a_stale_record(tmp_path, git_env):
     client, s, ledger = _recorded(tmp_path, git_env)
     commit(tmp_path, "code", {"src/app.py": "x = 2\n# more\n"})
-    assert _rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == ["record-stale"]
+    assert _rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == ["record-stale", "review-missing"]
 
 
 # ---- CLI ----
@@ -991,3 +991,423 @@ def test_cli_record_flags_exclude_each_other(capsys):
         main(["strict", "verify", "1001", "--record", "--no-record"])
     assert e.value.code == 2
     capsys.readouterr()
+
+
+# ---- override (TTY-only) and the pr / done phase rules (V3-10) ----
+import sys
+
+from ado import decisions
+
+DEC = lambda tmp: tmp / "dod" / "Decisions_1001.md"
+REASON = "the CI runner cannot run the suite"
+
+
+def _d(n, text, status="open", kind="decision", posted=False, used=""):
+    """One decisions-file line in the exact grammar."""
+    d = {"id": f"D{n}", "kind": kind, "text": text, "why": "because", "status": status, "by": "" if status == "open" else "PO",
+         "note": "", "posted": None, "used": used}
+    if posted:
+        d["posted"] = {"comment_id": 7, "hash": decisions.marker_hash(d)}
+    return decisions.render_line(d) + "\n"
+
+
+def _story(tmp_path, git_env, dec=None, review="no", record=True):
+    """A repo with a spec commit, a red and a green commit, a committed ledger with a verification record and a review
+    (and `dec` as Decisions_1001.md); returns (client, SimpleNamespace(base, red, green))."""
+    repo = _repo(tmp_path, git_env)
+    base = git(repo, "rev-parse", "--short", "HEAD")
+    _project(tmp_path, ledger=False)
+    commit(repo, "spec")
+    red, green = _pair(repo)
+    client = _project(tmp_path, ledger=_ledger_rows(("AC-1", RED_NOTE.format(red, green))), test_command=CMD)
+    if record:
+        assert _verify(tmp_path, client)["ok"] is True
+    text = LEDGER(tmp_path).read_text()
+    if review:
+        text = text.replace("## 5. DoD", review_md(git(repo, "rev-parse", "HEAD"), blocks=review) + "## 5. DoD")
+    LEDGER(tmp_path).write_text(text)
+    if dec is not None:
+        DEC(tmp_path).write_text(dec)
+    commit(repo, "ledger")
+    return client, SimpleNamespace(base=base, red=red, green=green)
+
+
+def _pr(tmp_path, client, phase="pr"):
+    return strict.check(client, 1001, phase, repo=str(tmp_path))
+
+
+def test_story_fixture_is_ok_for_pr_and_done(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env)
+    for phase in ("pr", "done"):
+        assert _pr(tmp_path, client, phase) == {"phase": phase, "mode": "strict", "ok": True, "findings": [], "overrides_used": []}
+
+
+# -- the override verb --
+def _cli_override(tmp_path, monkeypatch, tty=True):
+    from ado import __main__ as m
+    (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam", "mode": "strict"}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: tty)
+
+    def no_client(cfg):
+        raise AssertionError("override is local: no client")
+    monkeypatch.setattr(m, "AdoClient", no_client)
+    return m
+
+
+def _override(m, rule="l2", reason=REASON, *extra):
+    return m.main(["strict", "override", "1001", rule, "--reason", reason, *extra])
+
+
+def test_override_refuses_without_tty(tmp_path, monkeypatch, capsys):
+    m = _cli_override(tmp_path, monkeypatch, tty=False)
+
+    def boom(*a, **k):
+        raise AssertionError("must refuse before reading the config or any file")
+    monkeypatch.setattr(m.Config, "load", boom)
+    for extra in ((), ("--apply",)):
+        assert _override(m, "l2", REASON, *extra) == 2
+    cap = capsys.readouterr()
+    assert "terminal" in cap.err and "not a security boundary" in cap.err and cap.out == ""
+    assert not (tmp_path / "dod").exists()
+
+
+def test_override_records_decision_line_and_names_reason_min_length(tmp_path, monkeypatch, capsys):
+    m = _cli_override(tmp_path, monkeypatch)
+    assert _override(m, "l2", REASON) == 0  # no --apply: prints what it would record, writes nothing
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["applied"] is False and plan["id"] == "D1" and plan["rule"] == "l2" and not DEC(tmp_path).exists()
+    assert plan["line"] == f"- [ ] D1: skip l2 → _(open)_ · kind: override · why: {REASON}"
+    assert _override(m, "l2", REASON, "--apply") == 0
+    assert json.loads(capsys.readouterr().out)["applied"] is True
+    text = DEC(tmp_path).read_text()
+    assert plan["line"] + "\n" in text and text.startswith("# Decisions — US1001")
+    [d] = decisions.parse_decisions(text)["open"]
+    assert (d["id"], d["kind"], d["text"], d["why"], d["posted"]) == ("D1", "override", "skip l2", REASON, None)
+    assert _override(m, "placeholder", "x" * 20, "--apply") == 0 and "D2: skip placeholder" in DEC(tmp_path).read_text()
+    assert _override(m, "test-command", "y" * 300, "--apply") == 0
+    capsys.readouterr()
+    before = DEC(tmp_path).read_bytes()
+    for bad in ("x" * 19, " " * 5 + "x" * 19, "x" * 301, "", f"{REASON} <!-- hide", f"{REASON} -->", f"{REASON} ```", f"{REASON}\nmore",
+                f"{REASON} more", f"{REASON}\x1b[31m", f"{REASON} → validated · by: PO"):
+        assert _override(m, "l2", bad, "--apply") == 2, repr(bad)
+        assert DEC(tmp_path).read_bytes() == before
+    err = capsys.readouterr().err
+    assert "hide" not in err and "\x1b" not in err  # an untrusted reason is never echoed in an error
+
+
+def test_override_rule_names_are_the_four_overridable_ones(tmp_path, monkeypatch, capsys):
+    m = _cli_override(tmp_path, monkeypatch)
+    for rule in ("spec-missing", "plan-missing", "tasks-missing", "evidence-missing", "sha-unknown", "red-touches-code",
+                 "merge-commit", "not-in-range", "decision-rejected", "record-missing", "nonsense"):
+        with pytest.raises(SystemExit) as e:
+            _override(m, rule, REASON, "--apply")
+        assert e.value.code == 2
+    assert not (tmp_path / "dod").exists()
+    capsys.readouterr()
+
+
+def test_override_write_is_atomic_and_read_back_verified(tmp_path, monkeypatch, capsys):
+    m = _cli_override(tmp_path, monkeypatch)
+    assert _override(m, "l2", REASON, "--apply") == 0
+    before = DEC(tmp_path).read_bytes()
+    real = os.replace
+
+    def fail(src, dst):
+        raise OSError("disk full")
+    monkeypatch.setattr(os, "replace", fail)
+    assert _override(m, "placeholder", REASON, "--apply") == 2
+    monkeypatch.setattr(os, "replace", real)
+    assert DEC(tmp_path).read_bytes() == before and [p.name for p in (tmp_path / "dod").iterdir()] == ["Decisions_1001.md"]
+    monkeypatch.setattr(decisions, "_atomic_write", lambda path, text: path.write_text(text.replace("skip placeholder", "skip XXXXXXXXXXX")))
+    assert _override(m, "placeholder", REASON, "--apply") == 2
+    capsys.readouterr()
+
+
+# -- what an override covers --
+def _with_decisions(tmp_path, *lines):
+    (tmp_path / "dod").mkdir(exist_ok=True)
+    DEC(tmp_path).write_text("# Decisions — US1001\n\n" + "".join(lines))
+
+
+def test_override_lets_only_that_rule_pass(tmp_path):
+    _with_decisions(tmp_path, _d(1, "skip placeholder", kind="override"))
+    res, _ = _check(tmp_path, ledger=_ledger(approach="_(fill in)_"), test_command=None)
+    assert _rules(res) == ["test-command"] and res["overrides_used"] == ["D1"]
+    _with_decisions(tmp_path, _d(1, "skip placeholder", kind="override"), _d(2, "skip test-command", kind="override", status="validated"))
+    res, _ = _check(tmp_path, ledger=_ledger(approach="_(fill in)_"), test_command=None)
+    assert res["ok"] is True and res["overrides_used"] == ["D1", "D2"]
+    _with_decisions(tmp_path, _d(1, "skip open-question", kind="override"))
+    res, _ = _check(tmp_path, ledger=_ledger(approach="_(fill in)_", questions="- [ ] Q1: Page size? → _(open)_"), test_command=None)
+    assert _rules(res) == ["placeholder", "test-command"] and res["overrides_used"] == ["D1"]  # only the named rule passes
+    _with_decisions(tmp_path, _d(1, "skip placeholder", kind="override", status="rejected"))
+    res, _ = _check(tmp_path, ledger=_ledger(approach="_(fill in)_"))
+    assert _rules(res) == ["placeholder"] and res["overrides_used"] == []  # a rejected override covers nothing
+    _with_decisions(tmp_path, _d(1, "skip placeholder", kind="decision"), _d(2, "Skip Placeholder", kind="override"))
+    res, _ = _check(tmp_path, ledger=_ledger(approach="_(fill in)_"))
+    assert _rules(res) == ["placeholder"]  # only `kind: override` with exactly `skip <rule>` counts
+
+
+def test_l2_override_covers_the_record_rules_and_nothing_else(tmp_path, git_env):
+    client, s = _story(tmp_path, git_env, dec=_d(1, "skip l2", kind="override", posted=True), record=False)
+    res = _pr(tmp_path, client)
+    assert res["ok"] is True and res["overrides_used"] == ["D1"]  # record-missing is covered
+    DEC(tmp_path).write_text(_d(1, "skip placeholder", kind="override", posted=True))
+    assert _rules(_pr(tmp_path, client)) == ["record-missing"]
+    for rule in ("record-stale", "record-incomplete", "record-failed", "head-fails", "green-fails", "red-passes", "timeout", "runner-error"):
+        assert strict._COVERS["l2"].count(rule) == 1, rule
+    assert not {"not-in-range", "sha-unknown", "evidence-missing", "red-touches-code", "red-no-test", "red-not-ancestor", "merge-commit",
+                "green-not-on-branch", "spec-missing", "plan-missing", "tasks-missing", "decision-rejected"} & {r for v in strict._COVERS.values() for r in v}
+
+
+def test_override_cannot_cover_red_touches_code_or_missing_plan(tmp_path, git_env):
+    lines = [_d(n + 1, f"skip {r}", kind="override") for n, r in enumerate(
+        ["spec-missing", "plan-missing", "tasks-missing", "red-touches-code", "red-no-test", "evidence-missing", "sha-unknown"])]
+    _with_decisions(tmp_path, *lines)
+    res, _ = _check(tmp_path, files={k: v for k, v in FILES.items() if k != "plan.md"})
+    assert _rules(res) == ["plan-missing"] and res["overrides_used"] == []
+    repo = _repo(tmp_path, git_env)
+    red, green = _pair(repo, {"tests/test_a.py": "assert 0\n", "src/app.py": "x = 5\n"})  # the red commit also changes code
+    _with_decisions(tmp_path, *lines, _d(8, "skip l2", kind="override", posted=True))
+    client = _project(tmp_path, ledger=_ledger_rows(("AC-1", RED_NOTE.format(red, green)), ("AC-2", "green")))
+    res = _pr(tmp_path, client)
+    assert {"red-touches-code", "evidence-missing"} <= set(_l1_rules(res)) and res["overrides_used"] == ["D8"]  # only `l2` covered record-missing
+
+
+def test_check_reports_overrides_used_and_writes_nothing(tmp_path, git_env):
+    client, s = _story(tmp_path, git_env, dec=_d(1, "skip l2", kind="override", posted=True) + _d(2, "skip l2", kind="override", posted=True),
+                       record=False)
+    snap = lambda: {str(p): p.read_bytes() for p in tmp_path.rglob("*") if p.is_file() and ".git" not in p.parts}
+    before, calls = snap(), len(client.calls)
+    res = _pr(tmp_path, client)
+    assert res["ok"] is True and res["overrides_used"] == ["D1"]  # the first entry that let a finding through; used is stamped only by apply paths
+    assert snap() == before and len(client.calls) == calls and "used:" not in DEC(tmp_path).read_text()
+
+
+# -- decisions.stamp_used --
+def test_stamp_used_once_and_atomic():
+    md = "# Decisions\n\n" + _d(1, "skip l2", kind="override", posted=True) + _d(2, "other") + _d(3, "skip placeholder", kind="override", status="validated")
+    new = decisions.stamp_used(md, ["D1", "D3"], "2026-10-30")
+    lines = new.splitlines()
+    assert lines[2].endswith(" · used: 2026-10-30") and lines[4].endswith(" · used: 2026-10-30") and lines[3] == md.splitlines()[3]
+    parsed = decisions.parse_decisions(new)
+    assert [d["used"] for d in parsed["open"] + parsed["validated"]] == ["2026-10-30", "", "2026-10-30"] and parsed["unparsed"] is False
+    assert decisions.stamp_used(new, ["D1", "D3"], "2027-01-01") == new  # once: a stamped entry keeps its first date
+    assert decisions.stamp_used(md, [], "2026-10-30") == md
+    crlf = md.replace("\n", "\r\n")
+    assert decisions.stamp_used(crlf, ["D1"], "2026-10-30").replace("\r\n", "\n") == decisions.stamp_used(md, ["D1"], "2026-10-30")
+    assert decisions.stamp_used(crlf, ["D1"], "2026-10-30").count("\r\n") == crlf.count("\r\n")
+    for ids, date_ in ((["D9"], "2026-10-30"), (["D1"], "yesterday"), (["D1"], "2026-10-30 · by: PO")):
+        with pytest.raises(ValueError):
+            decisions.stamp_used(md, ids, date_)  # an unknown id or a bad date raises and returns nothing
+    hidden = "<!-- note --> " + _d(1, "skip l2", kind="override")
+    with pytest.raises(ValueError):
+        decisions.stamp_used(hidden, ["D1"], "2026-10-30")
+
+
+# -- the pr and done rules --
+def test_unposted_override_blocks_pr(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env, dec=_d(1, "skip l2", kind="override"))
+    res = _pr(tmp_path, client)
+    assert _rules(res) == ["override-unposted"] and "D1" in res["findings"][0]["detail"] and "decisions" in res["findings"][0]["fix"]
+    DEC(tmp_path).write_text(_d(1, "skip l2", kind="override", posted=True))
+    assert _pr(tmp_path, client)["ok"] is True
+    stale = decisions.render_line({**decisions.parse_decisions(_d(1, "skip l2", kind="override"))["open"][0],
+                                   "posted": {"comment_id": 7, "hash": decisions.line_hash("skip another")}})
+    DEC(tmp_path).write_text(stale + "\n")  # an edited line no longer matches its posted marker
+    assert _rules(_pr(tmp_path, client)) == ["override-unposted"]
+    DEC(tmp_path).write_text(_d(1, "plain decision"))  # unposted ordinary decisions never block pr
+    assert _pr(tmp_path, client)["ok"] is True
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_rejected_decision_blocks_pr_and_done(tmp_path, git_env, phase):
+    client, _ = _story(tmp_path, git_env, dec=_d(1, "use paging", status="validated") + _d(2, "drop the cache", status="rejected"))
+    res = _pr(tmp_path, client, phase)
+    assert _rules(res) == ["decision-rejected"] and "D2" in res["findings"][0]["detail"] and "D1" not in res["findings"][0]["detail"]
+    assert "drop the cache" not in json.dumps(res)  # ids only, never decision text
+
+
+def test_open_decision_blocks_done_not_pr(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env, dec=_d(1, "use paging") + _d(2, "later", kind="assumption"))
+    assert _pr(tmp_path, client)["ok"] is True
+    res = _pr(tmp_path, client, "done")
+    assert _rules(res) == ["decision-open"] and "D1" in res["findings"][0]["detail"] and "D2" in res["findings"][0]["detail"]
+    assert "use paging" not in json.dumps(res)
+    assert strict.PHASES["implement"].count(strict._decisions_pr) == 0  # implement does not look at decisions
+
+
+def test_unreadable_or_unparsed_decisions_file_blocks_pr_and_done(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env, dec=_d(1, "ok") + "- [ ] D2: broken line without a status\n")
+    for phase in ("pr", "done"):
+        assert "decisions-invalid" in _rules(_pr(tmp_path, client, phase))
+    DEC(tmp_path).write_text(_d(1, "ok") + "<!-- open comment hides a rejected line\n" + _d(2, "x", status="rejected"))
+    assert "decisions-invalid" in _rules(_pr(tmp_path, client))
+    DEC(tmp_path).unlink()
+    os.symlink(tmp_path / "ado.config.json", DEC(tmp_path))
+    assert "decisions-invalid" in _rules(_pr(tmp_path, client))
+
+
+def test_review_blocks_rule_uses_the_strict_list_and_never_echoes_review_text(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env, review="yes")
+    res = _pr(tmp_path, client)
+    assert _rules(res) == ["review-blocks"] and "yes" not in res["findings"][0]["detail"]
+
+
+def test_review_missing_and_the_strict_floor_applies_with_an_empty_project_list(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env)
+    assert client.config.review_block_on == [] and _pr(tmp_path, client)["ok"] is True
+    LEDGER(tmp_path).write_text(re.sub(r"### Review.*?## 5\.", "## 5.", LEDGER(tmp_path).read_text(), flags=re.S))
+    commit(tmp_path, "no review")
+    res = _pr(tmp_path, client)
+    assert _rules(res) == ["review-missing"] and "speckit.ado.review" in res["findings"][0]["fix"]
+    assert "review-missing" in _rules(_pr(tmp_path, client, "done"))  # no review at all is still missing after a squash
+
+
+def _squash(tmp_path, s):
+    git(tmp_path, "checkout", "-q", "-b", "squashed", s.base)  # one commit, no red or green in its history
+    git(tmp_path, "checkout", "-q", "main", "--", ".")
+    git(tmp_path, "commit", "-q", "-m", "squash")
+
+
+def test_done_after_squash_merge_passes_with_valid_record_and_no_ancestry(tmp_path, git_env):
+    client, s = _story(tmp_path, git_env)
+    _squash(tmp_path, s)
+    green = git(tmp_path, "rev-parse", s.green)
+    assert subprocess.run(["git", "-C", str(tmp_path), "merge-base", "--is-ancestor", green, "HEAD"]).returncode == 1
+    assert _pr(tmp_path, client, "done") == {"phase": "done", "mode": "strict", "ok": True, "findings": [], "overrides_used": []}
+    assert {"green-not-on-branch", "record-stale"} <= set(_rules(_pr(tmp_path, client, "pr")))  # the PR phase still needs ancestry
+    # everything else is identical: a made-up SHA, a changed status cell, an open decision, a failing record
+    LEDGER(tmp_path).write_text(LEDGER(tmp_path).read_text().replace(RED_NOTE.format(s.red, s.green), RED_NOTE.format(s.red, "0123456789ab")))
+    assert _rules(_pr(tmp_path, client, "done")) == ["record-incomplete"]  # git-free: the status cell no longer matches the record
+    LEDGER(tmp_path).write_text(LEDGER(tmp_path).read_text().replace("0123456789ab", s.green).replace("exit 1 · green", "exit 0 · green"))
+    assert _rules(_pr(tmp_path, client, "done")) == ["record-failed"]
+    LEDGER(tmp_path).write_text(re.sub(r"### Verification.*?(### Review)", r"\1", LEDGER(tmp_path).read_text(), flags=re.S))
+    assert _rules(_pr(tmp_path, client, "done")) == ["record-missing"]
+
+
+def test_squash_record_head_must_match_the_pr_head_in_the_section_3_evidence(tmp_path, git_env):
+    client, s = _story(tmp_path, git_env)
+    _squash(tmp_path, s)
+    text = LEDGER(tmp_path).read_text()
+    head = re.search(r"@ ([0-9a-f]{12})", text)[1]
+    ok = text.replace("| c |", f"| c, PR head {head} |", 1)
+    assert _vr(strict.validate_record(ok, gate.parse_section3(ok), str(tmp_path), "HEAD", "dod", SPEC, 1001, squash_ok=True)) == []
+    bad = text.replace("| c |", "| c, PR head 0123456789ab |", 1)
+    f = strict.validate_record(bad, gate.parse_section3(bad), str(tmp_path), "HEAD", "dod", SPEC, 1001, squash_ok=True)
+    assert _vr(f) == ["record-incomplete"] and "section 3" in f[0]["detail"]
+    assert strict.validate_record(text, gate.parse_section3(text), str(tmp_path), "HEAD", "dod", SPEC, 1001, squash_ok=True) == []  # none recorded: just present
+
+
+def test_strict_git_ignores_inherited_selectors_like_prs_git(tmp_path, git_env, monkeypatch):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    repo, other = _repo(tmp_path / "a", git_env), tmp_path / "b"
+    git(other, "init", "-q", "-b", "main")
+    commit(other, "other", {"o.txt": "o\n"})
+    want = git(repo, "rev-parse", "HEAD")
+    for k, v in (("GIT_DIR", str(other / ".git")), ("GIT_WORK_TREE", str(other)), ("GIT_INDEX_FILE", str(other / "idx")),
+                 ("GIT_OBJECT_DIRECTORY", str(other / ".git" / "objects"))):
+        monkeypatch.setenv(k, v)
+    assert strict._out(repo, "rev-parse", "HEAD").decode().strip() == want
+    assert strict._git(repo, "rev-parse", "HEAD").returncode == 0
+
+
+# ---- fix round 1 ----
+def test_done_after_squash_needs_no_git_objects_for_red_and_green(tmp_path, git_env):
+    client, s = _story(tmp_path, git_env)
+    _squash(tmp_path, s)
+    git(tmp_path, "branch", "-D", "main")
+    git(tmp_path, "reflog", "expire", "--expire=now", "--all")
+    git(tmp_path, "gc", "-q", "--prune=now")
+    assert subprocess.run(["git", "-C", str(tmp_path), "cat-file", "-e", s.green], capture_output=True).returncode != 0  # really gone
+    assert _pr(tmp_path, client, "done") == {"phase": "done", "mode": "strict", "ok": True, "findings": [], "overrides_used": []}
+    text = LEDGER(tmp_path).read_text()
+    LEDGER(tmp_path).write_text(text.replace(RED_NOTE.format(s.red, s.green), "green"))
+    res = _pr(tmp_path, client, "done")
+    assert "evidence-missing" in _rules(res) and "sha-unknown" not in _rules(res)  # the one git-free L1 rule still runs
+    LEDGER(tmp_path).write_text(text.replace("| AC-1 |", "| AC-2 | crit | t | c | " + RED_NOTE.format(s.red, s.green) + " |\n| AC-1 |", 1)
+                                .replace("## 1. Seeded\n", "## 1. Seeded\n\n### Acceptance Criteria\nFirst\nSecond\nThird\n"))
+    assert "evidence-missing" in _rules(_pr(tmp_path, client, "done"))  # AC-3 has no row
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+@pytest.mark.parametrize("trick", ["duplicate", "ordered-list", "quote", "stray-arrow"])
+def test_a_rejected_line_cannot_be_hidden(tmp_path, git_env, phase, trick):
+    rejected = _d(1, "use the v2 api", status="rejected")
+    dec = {"duplicate": _d(1, "use the v2 api", status="validated") + rejected, "ordered-list": "1. " + rejected,
+           "quote": "> " + rejected, "stray-arrow": "- [x] D1 → see below\n" + "1. " + rejected}[trick]
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + dec)
+    res = _pr(tmp_path, client, phase)
+    assert "decisions-invalid" in _rules(res) and res["ok"] is False
+    assert "v2 api" not in json.dumps(res)
+
+
+def test_a_fresh_decisions_file_and_normal_lines_are_valid(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + _d(1, "a") + _d(2, "b", status="validated"))
+    assert _pr(tmp_path, client)["ok"] is True
+    DEC(tmp_path).write_text(decisions.render_file(1001) + _d(1, "a") + "Prose that mentions D3 but no status arrow.\n" + "x" * 5000 + "\n")
+    assert _pr(tmp_path, client)["ok"] is True
+
+
+def test_unposted_is_one_predicate_for_the_post_plan_and_the_pr_rule(tmp_path, git_env):
+    md = (decisions.render_file(1001) + _d(1, "plain") + _d(2, "skip l2", kind="override", status="validated") + _d(3, "skip placeholder", kind="override")
+          + _d(4, "plain validated", status="validated") + _d(5, "skip test-command", kind="override", status="rejected") + _d(6, "posted", posted=True))
+    parsed = decisions.parse_decisions(md)
+    assert [d["id"] for d in decisions.unposted(parsed)] == ["D1", "D3", "D2"]  # open lines, then validated overrides
+    assert decisions.plan_post(None, 1001, parsed)["lines"] == ["D1", "D3", "D2"]
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + _d(1, "skip l2", kind="override", status="validated"))
+    res = _pr(tmp_path, client)
+    assert _rules(res) == ["override-unposted"] and "D1" in res["findings"][0]["detail"]
+    plan = decisions.plan_post(None, 1001, decisions.parse_decisions(DEC(tmp_path).read_text()))
+    assert plan["lines"] == ["D1"]  # a validated override reaches the PO's thread
+    md = decisions._marked(DEC(tmp_path).read_text(), plan["hashes"], 9)
+    DEC(tmp_path).write_text(md)
+    assert _pr(tmp_path, client)["ok"] is True and decisions.plan_post(None, 1001, decisions.parse_decisions(md))["action"] == "none"
+
+
+def test_an_override_marker_covers_id_text_and_reason(tmp_path, git_env):
+    a = _d(1, "skip l2", kind="override", posted=True)
+    b = _d(2, "skip l2", kind="override").rstrip("\n").replace("· why: because", "· why: another reason") + " · posted: 7:" + \
+        decisions.parse_decisions(a)["open"][0]["posted"]["hash"] + "\n"  # D1's marker copied onto D2 with a new reason
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + a + b, record=False)
+    res = _pr(tmp_path, client)
+    assert _rules(res) == ["override-unposted"] and "D2" in res["findings"][0]["detail"] and "D1" not in res["findings"][0]["detail"]
+    edited = a.replace("· why: because", "· why: edited after posting")  # the reason changed after posting
+    DEC(tmp_path).write_text(decisions.render_file(1001) + edited)
+    assert "override-unposted" in _rules(_pr(tmp_path, client))
+    plain = decisions.parse_decisions(_d(1, "plain", posted=True))["open"][0]
+    assert plain["posted"]["hash"] == decisions.line_hash("plain")  # ordinary lines keep the v0.3 text-only hash
+
+
+def test_done_works_on_a_detached_head_and_pr_keeps_its_finding(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env)
+    git(tmp_path, "checkout", "-q", "--detach")
+    assert _pr(tmp_path, client, "done")["ok"] is True
+    res = _pr(tmp_path, client, "pr")
+    assert _rules(res) == ["review-blocks"]  # V3-12: CI passes the head SHA
+
+
+def test_override_reason_refuses_an_address_or_mention_and_a_second_override_of_a_rule_in_force(tmp_path, monkeypatch, capsys):
+    m = _cli_override(tmp_path, monkeypatch)
+    for bad in ("ask dana.fictional@contoso.example about it", "agreed with @dana in the hallway meeting",
+                'see <a href="#" data-vss-mention="x">Dana</a> for the details'):
+        assert _override(m, "l2", bad, "--apply") == 2
+    cap = capsys.readouterr()
+    assert "dana" not in cap.err.lower() and "contoso" not in cap.err and not DEC(tmp_path).exists()
+    assert _override(m, "l2", REASON, "--apply") == 0
+    assert _override(m, "l2", REASON + " again", "--apply") == 2 and "D1" in capsys.readouterr().err
+    assert _override(m, "placeholder", REASON, "--apply") == 0
+    DEC(tmp_path).write_text(DEC(tmp_path).read_text().replace("skip l2 → _(open)_", "skip l2 → _(open)_").replace(
+        "- [ ] D1: skip l2 → _(open)_ · kind: override · why: " + REASON, _d(1, "skip l2", kind="override", status="rejected").rstrip("\n")))
+    assert _override(m, "l2", REASON + " again", "--apply") == 0  # a rejected override is not in force
+
+
+def test_override_refuses_without_a_terminal_in_a_real_subprocess(tmp_path):
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run([sys.executable, "-m", "ado", "strict", "override", "1001", "l2", "--reason", REASON, "--apply"], cwd=tmp_path,
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=60,
+                       env={**os.environ, "PYTHONPATH": os.path.join(root, "src"), "ADO_CONFIG": ""})
+    assert r.returncode == 2 and "terminal" in r.stderr and "not a security boundary" in r.stderr and r.stdout == ""
+    assert list(tmp_path.iterdir()) == []  # no config was needed, nothing was created

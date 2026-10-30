@@ -128,9 +128,9 @@ characters, `<!--`, `-->` and code fences are refused (exit 2). `override` is cr
 breaks that grammar (it is left out) or a fence or comment is left open in the file. `ado done` attaches the file to the story
 next to the ledger when it exists (covered by the existing done gate: preview, yes, apply).
 `ado decisions <id> --post --plan-out .ado/plan-decisions.md` previews ONE new comment (`[spec-kit-ado:decisions]`, never an
-edit) with every open line that is unposted or edited since it was posted; after a yes, `--post --apply --expect-plan
+edit) with every open line, and every validated override line, that is unposted or edited since it was posted; after a yes, `--post --apply --expect-plan
 .ado/plan-decisions.md` posts it and appends ` · posted: <comment id>:<hash8>` to exactly those lines of the decisions file (atomic write).
-Resolved lines are not posted. Lines are cut at 500 characters. An `@mention` or e-mail address typed in a decision is
+Other resolved lines are not posted. Lines are cut at 500 characters. An `@mention` or e-mail address typed in a decision is
 replaced by `@user` or `[email]`, never refused; names typed as plain words are not detected, so read the preview.
 A human records the PO's verdict; never the agent:
 `ado decisions <id> --resolve D<n> --validated|--rejected [--by ROLE] [--note TEXT] [--force]` rewrites that one line of the decisions file and
@@ -149,6 +149,7 @@ and record `red <sha> → green <sha>` in the AC's ledger section 3 `status` cel
 a missing pair, a red commit that touches code, or a green commit not on this branch is refused (`evidence-missing`, `sha-unknown`,
 `merge-commit`, `red-not-ancestor`, `red-touches-code`, `red-no-test`, `green-not-on-branch`).
 After the green commits, run `ado strict verify <id>` (it executes `strict.test_command`, code from the project, at each red and green commit, and by default appends a `### Verification` record to ledger section 4: a local write, no gate; commit the ledger afterwards). Red tests that pass, green tests that fail, a timeout or an unset `strict.test_command` are refused (`red-passes`, `green-fails`, `head-fails` (the tests must also pass at HEAD), `timeout`, `test-command`, `runner-error`). `ado strict check --phase pr|done` only validates that record (`record-missing`, `record-stale`, `record-incomplete`, `record-failed`): after a code change run `verify` again, never edit the record by hand.
+`pr` and `done` also check the decisions and the review: `decision-rejected`, `override-unposted` (post every override with `ado decisions <id> --post`), `decisions-invalid`, `review-missing`, `review-blocks`, and for `done` `decision-open` (the PO must validate or reject every line). Never run `ado strict override <id> <rule> --reason "<text>"` yourself: it records a `kind: override` decision that lets one rule (`test-command`, `l2`, `open-question` or `placeholder`; never L1, spec, plan, tasks or a rejected decision) pass for the whole story, it refuses (exit 2) without a terminal so an agent shell cannot do it by accident, and that is not a security boundary. When a rule blocks and you think it should be waived, say so, show the finding and ask the human to run it in their own terminal; the entry must then be posted before the PR.
 
 ### Open questions
 
