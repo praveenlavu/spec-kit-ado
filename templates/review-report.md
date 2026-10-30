@@ -5,7 +5,7 @@
 
 - **Planes run:** correctness, security & sensitive data, AC coverage & test integrity,
   simplicity & maintainability, human-review load, fresh eyes, story & business context
-  (<parallel sub-agents | sequential>)
+  (+ AC fidelity in strict mode, see the block below) (<parallel sub-agents | sequential>)
 - **Findings:** <n raised> raised → <n confirmed> confirmed after verification
   (<n dropped> dropped as unconfirmed)
 - **Confirmed by severity:** blocker <n> · major <n> · minor <n>
@@ -22,3 +22,9 @@
 - <area, why it is risky, how to roll back>
 
 **Dropped in verification:** <R-number + one-line reason each, or "none">
+
+<!-- Strict mode only (plane 8, AC fidelity): write this second block directly after the review block, above `## 5.`, with the same reviewed SHA. Edit only the heading of every earlier `### AC fidelity — …` block not already ending in ` (superseded)` to append ` (superseded)`. One line per AC, exactly this form, em dash, reason 1 to 200 characters on one line, no names, @mentions or emails, no quoted AC or test text, and nothing else in the block. A model reading, not proof. -->
+
+### AC fidelity — <YYYY-MM-DD> @ <short SHA>
+
+- AC-<n>: <asserts | partial | does not assert> — <reason>

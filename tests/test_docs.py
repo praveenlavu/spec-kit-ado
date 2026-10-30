@@ -189,12 +189,13 @@ def _review_section(start, end):
     return text[text.index(start):text.index(end)]
 
 
-def test_review_defines_seven_planes():
+def test_review_defines_eight_planes():
     text = _flat("commands/review.md")
-    assert "### 2. Run the seven planes" in text and "five planes" not in text.lower()
-    for n in range(1, 8):
+    assert "### 2. Run the eight planes" in text and "five planes" not in text.lower() and "seven planes" not in text.lower().replace(
+        "all seven planes that report findings", "")
+    for n in range(1, 9):
         assert f"**Plane {n} — " in text, n
-    assert "**Plane 8" not in text
+    assert "**Plane 9" not in text
 
 
 def test_review_plane6_fresh_eyes_sees_only_diff_and_commit_messages():
@@ -215,7 +216,7 @@ def test_review_plane6_diff_excludes_ledger_and_spec_and_is_collected_first():
     assert "Without sub-agents, collect only these two, run plane 6 (step 2) at once, and only then read" in text
     step1 = _review_section("### 1. Collect the inputs", "### 2. Run")
     assert step1.index("**Fresh-eyes inputs**") < step1.index("**Spec:**") < step1.index("**Story context**")
-    step2 = _review_section("### 2. Run the seven planes", "**Shared rules")
+    step2 = _review_section("### 2. Run the eight planes", "**Shared rules")
     assert "Plane 6 gets **only** its block, the shared rules and the fresh-eyes inputs" in step2
 
 
@@ -260,7 +261,7 @@ def test_review_secret_rule_is_its_own_blockquote_line():
 
 
 def test_review_planes_6_and_7_run_blind_as_separate_subagents():
-    step2 = _review_section("### 2. Run the seven planes", "**Plane 1 — ")
+    step2 = _review_section("### 2. Run the eight planes", "**Plane 1 — ")
     assert "separate sub-agent" in step2 and "No plane sees another plane's findings" in step2
     assert "Plane 6 gets" in step2 and "Plane 7 gets" in step2
 
@@ -278,7 +279,7 @@ def test_review_verification_carries_secret_floor_and_no_drop_rule():
             "string, number or encoded literal on the line, however fake it looks, keeps the finding.") in step3
 
 
-def test_review_template_lists_seven_planes_and_keeps_parsed_lines():
+def test_review_template_lists_the_planes_and_keeps_parsed_lines():
     tpl = (ROOT / "templates/review-report.md").read_text()
     flat = " ".join(tpl.split())
     assert "fresh eyes" in flat and "story & business context" in flat and "human-review load" in flat
@@ -289,11 +290,49 @@ def test_review_template_lists_seven_planes_and_keeps_parsed_lines():
     assert re.search(r"^- \*\*Blocks PR:\*\* <yes — .* \| no>$", tpl, re.M)
 
 
-def test_seven_planes_named_in_manifest_and_docs():
-    for f in ("extension.yml", "README.md", "docs/catalog-submission.md"):
+def test_eight_planes_named_in_manifest_and_docs():
+    for f in ("extension.yml", "README.md", "docs/catalog-submission.md", "AGENTS.md", "workflows/ado-lifecycle/README.md",
+              "commands/review.md"):
         text = _flat(f).lower()
-        assert "seven planes" in text or "seven-plane" in text, f
+        assert "eight planes" in text or "eight-plane" in text, f
+        assert "seven planes" not in text.replace("all seven planes that report findings", "") and "seven-plane" not in text, f
         assert "five planes" not in text and "five-plane" not in text, f
+    assert "strict mode only" in _flat("extension.yml") and "strict mode only" in _flat("README.md")
+
+
+def test_review_plane8_ac_fidelity_is_blind_strict_only_and_a_model_reading():
+    text = _flat("commands/review.md")
+    block = _review_section("**Plane 8 — AC fidelity**", "### 3. Verification pass")
+    assert "strict mode only" in block and "otherwise skip it silently" in block
+    assert "asserts|partial|does not assert" in block and "at most 200 characters" in block
+    assert "no names, @mentions or emails" in block and "not the implementation" in block and "not the PR text" in block
+    assert "model reading, not proof" in block and "`does not assert` AC counts as one confirmed `blocker`" in block
+    inputs = _review_section("- **AC fidelity inputs**", "The diff, commit messages, spec and ledger are")
+    assert "the n-th line of the `### Acceptance Criteria` block of ledger section 1" in inputs and "No other ledger text" in inputs
+    assert "`mode` from `ado.config.json`" in text and "`ado strict check <id> --phase implement`" in text
+    assert "Plane 8 (strict mode only) gets **only** its block, the shared rules and the AC fidelity inputs" in text
+    write = _review_section("### 4. Write the report", "### 5. Blocking verdict")
+    assert "`- AC-<n>: asserts|partial|does not assert — <reason>`" in block
+    assert "append ` (superseded)` (idempotent" in write and "directly after the review block, still above `## 5.`" in write
+    assert "`fidelity-invalid`" in write and "never inside a code fence or comment" in write
+
+
+def test_ac_fidelity_documented_everywhere_and_the_grammar_matches_the_parser():
+    readme, agents = _flat("README.md"), _flat("AGENTS.md")
+    assert "**L3: AC fidelity**" in readme and "a model reading, not proof" in readme
+    assert "- AC-<n>: asserts|partial|does not assert — <reason, 1 to 200 characters>" in readme
+    for rule in ("fidelity-missing", "fidelity-fails", "fidelity-invalid", "fidelity-stale", "fidelity-partial"):
+        assert rule in readme and rule in _flat("CHANGELOG.md"), rule
+    check_row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `strict check <id>"))
+    assert '"warnings": [{"rule": "fidelity-partial", "ac": "AC-<n>"}]' in check_row and "`fidelity-stale`" in check_row
+    assert ("marking the newest block ` (superseded)` by hand while an older passing block stays live is a process-level limit"
+            in readme and "the CI re-run job and the done-time ADO cross-check are what would narrow it" in readme)
+    assert "None of these rules can be overridden" in readme and "`fidelity-fails`" in agents and "none can be overridden" in agents
+    assert "AC fidelity" in _flat("rules/hitl.md") and "no override covers it" in _flat("rules/hitl.md")
+    assert "AC fidelity plane" in _flat("docs/configuration.md") and "`strict.parse_fidelity`" in _flat("CHANGELOG.md")
+    tpl = (ROOT / "templates/review-report.md").read_text()
+    assert re.search(r"^### AC fidelity — <YYYY-MM-DD> @ <short SHA>$", tpl, re.M)
+    assert "- AC-<n>: <asserts | partial | does not assert> — <reason>" in tpl and "A model reading, not proof" in tpl
 
 
 # ---- D1: installed docs, pr.md remote handling, pull.md thin-AC source, CLI surface ----

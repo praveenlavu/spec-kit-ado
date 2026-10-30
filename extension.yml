@@ -49,7 +49,7 @@ provides:
       description: "Run the DoD gate (traceability, assertions, AC drift, evidence) and log the result in the ledger."
     - name: "speckit.ado.review"
       file: "commands/review.md"
-      description: "Review the branch diff on seven planes against spec, ledger and story, verify findings, log them in the ledger."
+      description: "Review the branch diff on eight planes (the AC fidelity plane in strict mode only) against spec, ledger and story, verify findings, log them in the ledger."
     - name: "speckit.ado.pr"
       file: "commands/pr.md"
       description: "Build the PR body from ledger, gate and review results, then open the PR after an explicit yes."

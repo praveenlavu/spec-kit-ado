@@ -39,7 +39,7 @@ rejecting any gate aborts the run.
 | `sync-loop` | Preview, then sync Task states | `approve-sync` |
 | `gate`, `gate-check` | DoD gate; a blocking result stops the run | |
 | `refresh-context` | Re-reads the story discussion so the review sees comments posted after pull | |
-| `review` | Seven-plane review of the branch diff | `review-review` |
+| `review` | Eight-plane review of the branch diff (AC fidelity in strict mode only) | `review-review` |
 | `pr-prepare`, `pr-loop` | Build the PR body, preview, then open the PR | `approve-pr` |
 
 The run does not wait for the product owner by itself: the `wait-po-answers` gate stays open until you approve it, so

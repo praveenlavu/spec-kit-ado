@@ -493,10 +493,102 @@ def _review(c):
     return [_finding("review-blocks", "the latest review blocks the PR, is stale, or could not be checked (git or ledger problem)", _REVIEW_FIX)]
 
 
+# ---- L3 fidelity verdicts (D§5): written by the review plane `AC fidelity`, only read by `check` ----
+_F_HEADING = re.compile(r"^### AC fidelity\b[^\r\n]*", re.M)
+_F_HEAD = re.compile(r"### AC fidelity — (\d{4}-\d{2}-\d{2}) @ ([0-9a-f]{7,40})")
+_F_LINE = re.compile(r"- (AC-[0-9]{1,6}): (asserts|partial|does not assert) — (\S(?:.{0,198}\S)?)")  # reason: 1 to 200 characters
+_FIDELITY_FIX = "run speckit.ado.review (its AC fidelity plane writes the block) and commit the ledger"
+
+
+def parse_fidelity(ledger_md):
+    """The latest live `### AC fidelity — <date> @ <sha>` block of ledger section 4 (older ones end in ` (superseded)`; a block in
+    a fence, comment, quote or list is not one). Returns `{"block": {"date","sha"} or None, "verdicts": {"AC-1": {"verdict",
+    "reason"}}, "duplicates": [ids repeated], "unparsed": bool}`. `unparsed` (fail closed): an unclosed fence or comment, a live
+    heading that is not exactly the form above, or any block line that is not exactly `- AC-<n>: asserts|partial|does not
+    assert — <reason, 1 to 200 characters>` (a list or quote prefix, another dash, other prose, a fence or comment inside it)."""
+    out = {"block": None, "verdicts": {}, "duplicates": [], "unparsed": False}
+    sec = dod.section(ledger_md, 4)
+    if dod.unclosed(ledger_md):
+        out["unparsed"] = True
+    if out["unparsed"] or sec is None:
+        return out
+    raw, log = sec.splitlines(), dod._visible(sec)[0].splitlines()  # 1:1 lines; a fence or comment is blank in `log`
+    live = [i for i, line in enumerate(log) if _F_HEADING.match(line) and not line.rstrip().endswith(_SUPERSEDED.strip())]
+    if not live:
+        return out
+    head = _F_HEAD.fullmatch(log[live[-1]].rstrip())
+    if head is None:
+        out["unparsed"] = True
+        return out
+    out["block"] = {"date": head[1], "sha": head[2]}
+    seen = {}
+    for i in range(live[-1] + 1, len(log)):
+        if re.match(r"#{1,3} ", log[i]):
+            break
+        if raw[i].strip() != log[i].strip():  # something in the block is hidden by a fence or comment
+            out["unparsed"] = True
+        m = _F_LINE.fullmatch(log[i].rstrip())
+        if m:
+            seen[m[1]] = seen.get(m[1], 0) + 1
+            out["verdicts"].setdefault(m[1], {"verdict": m[2], "reason": m[3]})
+        elif log[i].strip():
+            out["unparsed"] = True
+    out["duplicates"] = sorted((k for k, n in seen.items() if n > 1), key=lambda k: int(k[3:]))
+    return out
+
+
+def _fidelity_acs(c):
+    """The ACs that need a verdict: every section 3 row and AC-1..AC-<n> for the n AC lines of section 1."""
+    rows = {r["ac"] for r in gate.parse_section3(c.ledger)} | {f"AC-{n}" for n in range(1, len(dod.ac_lines(c.ledger)) + 1)}
+    return sorted(rows, key=lambda a: (len(a), a))  # section 3 ids come from gate (any length): no int(), shown cut below
+
+
+def _fidelity(c, stale):
+    if c.ledger is None:
+        return []  # reported by _ledger
+    f = parse_fidelity(c.ledger)
+    if f["unparsed"] or f["duplicates"]:  # never overridable and never read as "first wins"
+        return [_finding("fidelity-invalid", "the AC fidelity block in ledger section 4 is malformed, repeats an AC "
+                         f"({len(f['duplicates'])}), or hides lines in a code fence or comment", "re-run speckit.ado.review: it rewrites "
+                         "the block (one `- AC-<n>: asserts|partial|does not assert — <reason>` line per AC, nothing else)")]
+    if f["block"] is None:
+        return [_finding("fidelity-missing", "ledger section 4 has no AC fidelity block (a `### AC fidelity — <date> @ <sha>` block)",
+                         _FIDELITY_FIX)]
+    out = []
+    missing = [a for a in _fidelity_acs(c) if a not in f["verdicts"]]
+    if missing:
+        out.append(_finding("fidelity-missing", f"{len(missing)} AC(s) have no fidelity verdict: {', '.join(a[:12] for a in missing[:20])}", _FIDELITY_FIX))
+    fails = [a for a, v in f["verdicts"].items() if v["verdict"] == "does not assert"]
+    if fails:
+        out.append(_finding("fidelity-fails", f"{len(fails)} AC(s) whose test does not assert the stated behaviour: "
+                            f"{', '.join(sorted(fails, key=lambda a: int(a[3:])))}",
+                            "make the test assert the AC's stated behaviour (a new red then green), then " + _FIDELITY_FIX))
+    if stale and (why := _record_stale(c.repo, c.head, f["block"]["sha"], c.cfg.dod_path, c.spec_dir, c.id)):
+        out.append(_finding("fidelity-stale", f"the AC fidelity verdicts are stale: {why}", _FIDELITY_FIX))
+    return out
+
+
+def _fidelity_pr(c):
+    return _fidelity(c, True)
+
+
+def _fidelity_done(c):  # after a squash merge the reviewed commit is no ancestor of HEAD: no staleness, no git
+    return _fidelity(c, False)
+
+
+def _fidelity_warnings(c):
+    """`partial` is allowed: one warning per such AC, not a finding."""
+    f = parse_fidelity(c.ledger) if c.ledger is not None else None
+    if f is None or f["unparsed"] or f["duplicates"]:
+        return []
+    return [{"rule": "fidelity-partial", "ac": a} for a, v in sorted(f["verdicts"].items(), key=lambda kv: int(kv[0][3:]))
+            if v["verdict"] == "partial"]
+
+
 PHASES = {
     "implement": [_ledger, _spec_files, _placeholders, _open_questions, _board, _test_command],
-    "pr": [_ledger, _l1, _record, _decisions_pr, _review],
-    "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _review],
+    "pr": [_ledger, _l1, _record, _decisions_pr, _review, _fidelity_pr],
+    "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _review, _fidelity_done],
 }
 
 # ---- override (D§7): `skip <rule>` lines of kind override; only these findings, never L1 or a missing spec/plan/tasks ----
@@ -533,8 +625,10 @@ def check(client, story_id, phase, repo=".", head="HEAD"):
             used.add(cover[f["rule"]])
         else:
             findings.append(f)
-    return {"phase": phase, "mode": mode, "ok": not findings, "findings": findings,
-            "overrides_used": sorted(used, key=lambda i: int(i[1:]))}
+    out = {"phase": phase, "mode": mode, "ok": not findings, "findings": findings,
+           "overrides_used": sorted(used, key=lambda i: int(i[1:]))}
+    warnings = _fidelity_warnings(ctx) if phase in ("pr", "done") else []
+    return {**out, "warnings": warnings} if warnings else out
 
 
 # ---- L2 test runner (D§5): the project's test command at one commit, in a throwaway checkout ----

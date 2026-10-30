@@ -518,7 +518,7 @@ def test_repo_below_the_git_toplevel_reads_paths_from_the_toplevel(tmp_path, git
 
 # ---- L1 through `strict.check` ----
 def _l1_rules(res):
-    return [r for r in _rules(res) if not r.startswith(("record-", "review-"))]  # the record and the review have their own tests
+    return [r for r in _rules(res) if not r.startswith(("record-", "review-", "fidelity-"))]  # the record, review and fidelity have their own tests
 
 
 def _ledger_rows(*rows):
@@ -726,7 +726,7 @@ def test_record_goes_in_section_4_and_crlf_is_kept(tmp_path, git_env):
     raw = LEDGER(tmp_path).read_bytes().decode()
     assert "\n" not in raw.replace("\r\n", "") and raw.endswith("## 5. DoD\r\n- [ ] done\r\n")
     assert raw.index("## 4.") < raw.index("### Verification") < raw.index("## 5.")
-    assert _rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == ["review-missing"]  # the record validates
+    assert _rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == ["review-missing", "fidelity-missing"]  # the record validates
 
 
 def test_record_write_is_atomic_and_keeps_the_mode(tmp_path, git_env, monkeypatch):
@@ -845,7 +845,7 @@ def test_validate_record_missing(tmp_path, git_env):
     assert _vr(f) == ["record-missing"] and "ado strict verify 1001" in f[0]["fix"]
     fenced = ledger.replace("## 4. Log\n", "## 4. Log\n\n```\n### Verification — 2026-10-30 @ abcdef123456\n```\n")
     assert _vr(_validate(tmp_path, fenced)) == ["record-missing"]  # an example in a fence is no record
-    assert _vr(strict.check(client, 1001, "pr", repo=str(tmp_path))["findings"]) == ["record-missing", "review-missing"]
+    assert _vr(strict.check(client, 1001, "pr", repo=str(tmp_path))["findings"]) == ["record-missing", "review-missing", "fidelity-missing"]
 
 
 def test_validate_record_stale_after_code_change_but_fresh_after_ledger_only_commit(tmp_path, git_env):
@@ -954,7 +954,7 @@ def test_squash_safe_record_validation_uses_recorded_shas_not_ancestry_for_done(
 def test_check_pr_reports_a_stale_record(tmp_path, git_env):
     client, s, ledger = _recorded(tmp_path, git_env)
     commit(tmp_path, "code", {"src/app.py": "x = 2\n# more\n"})
-    assert _rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == ["record-stale", "review-missing"]
+    assert _rules(strict.check(client, 1001, "pr", repo=str(tmp_path))) == ["record-stale", "review-missing", "fidelity-missing"]
 
 
 # ---- CLI ----
@@ -1011,9 +1011,17 @@ def _d(n, text, status="open", kind="decision", posted=False, used=""):
     return decisions.render_line(d) + "\n"
 
 
-def _story(tmp_path, git_env, dec=None, review="no", record=True):
-    """A repo with a spec commit, a red and a green commit, a committed ledger with a verification record and a review
-    (and `dec` as Decisions_1001.md); returns (client, SimpleNamespace(base, red, green))."""
+FID_OK = "- AC-1: asserts — the test checks the stated behaviour\n"
+
+
+def _fid(*lines, sha="abcdef123456", day="2026-10-30", sup=False):
+    return f"### AC fidelity — {day} @ {sha}{' (superseded)' if sup else ''}\n\n" + "".join(lines) + "\n"
+
+
+def _story(tmp_path, git_env, dec=None, review="no", record=True, fidelity=True):
+    """A repo with a spec commit, a red and a green commit, a committed ledger with a verification record, a review and an AC
+    fidelity block (`fidelity`: True = a passing one, False = none, a str = that text with `{sha}` the code head; and `dec` as
+    Decisions_1001.md); returns (client, SimpleNamespace(base, red, green))."""
     repo = _repo(tmp_path, git_env)
     base = git(repo, "rev-parse", "--short", "HEAD")
     _project(tmp_path, ledger=False)
@@ -1025,6 +1033,9 @@ def _story(tmp_path, git_env, dec=None, review="no", record=True):
     text = LEDGER(tmp_path).read_text()
     if review:
         text = text.replace("## 5. DoD", review_md(git(repo, "rev-parse", "HEAD"), blocks=review) + "## 5. DoD")
+    if fidelity:
+        block = _fid(FID_OK, sha="{sha}") if fidelity is True else fidelity
+        text = text.replace("## 5. DoD", block.replace("{sha}", git(repo, "rev-parse", "HEAD")[:12]) + "## 5. DoD")
     LEDGER(tmp_path).write_text(text)
     if dec is not None:
         DEC(tmp_path).write_text(dec)
@@ -1258,7 +1269,7 @@ def test_review_blocks_rule_uses_the_strict_list_and_never_echoes_review_text(tm
 def test_review_missing_and_the_strict_floor_applies_with_an_empty_project_list(tmp_path, git_env):
     client, _ = _story(tmp_path, git_env)
     assert client.config.review_block_on == [] and _pr(tmp_path, client)["ok"] is True
-    LEDGER(tmp_path).write_text(re.sub(r"### Review.*?## 5\.", "## 5.", LEDGER(tmp_path).read_text(), flags=re.S))
+    LEDGER(tmp_path).write_text(re.sub(r"### Review.*?(### AC fidelity)", r"\1", LEDGER(tmp_path).read_text(), flags=re.S))
     commit(tmp_path, "no review")
     res = _pr(tmp_path, client)
     assert _rules(res) == ["review-missing"] and "speckit.ado.review" in res["findings"][0]["fix"]
@@ -1411,3 +1422,218 @@ def test_override_refuses_without_a_terminal_in_a_real_subprocess(tmp_path):
                        env={**os.environ, "PYTHONPATH": os.path.join(root, "src"), "ADO_CONFIG": ""})
     assert r.returncode == 2 and "terminal" in r.stderr and "not a security boundary" in r.stderr and r.stdout == ""
     assert list(tmp_path.iterdir()) == []  # no config was needed, nothing was created
+
+
+# ---- L3 fidelity verdicts (D§5): parse_fidelity and the fidelity-* rules of pr and done ----
+def _pf(*blocks, ledger=None):
+    return strict.parse_fidelity((ledger or _ledger()).replace("## 5. DoD", "".join(blocks) + "## 5. DoD"))
+
+
+def test_parse_fidelity_latest_block_only():
+    old = _fid("- AC-1: does not assert — the old test only checks a status code\n", sha="1111111", sup=True)
+    new = _fid(FID_OK, "- AC-2: partial — covers the empty list but not paging\n", sha="2222222")
+    f = _pf(old, new)
+    assert f["block"] == {"date": "2026-10-30", "sha": "2222222"} and f["duplicates"] == [] and f["unparsed"] is False
+    assert f["verdicts"] == {"AC-1": {"verdict": "asserts", "reason": "the test checks the stated behaviour"},
+                             "AC-2": {"verdict": "partial", "reason": "covers the empty list but not paging"}}
+    assert _pf(old)["block"] is None and _pf()["block"] is None and _pf()["verdicts"] == {}  # superseded or none: no block
+    assert strict.parse_fidelity(_ledger().replace("\n", "\r\n").replace("## 5. DoD", new.replace("\n", "\r\n") + "## 5. DoD"))["verdicts"] == f["verdicts"]
+    assert _pf(_fid("- AC-1: does not assert — x\n", sha="3333333"), ledger=_ledger().replace("## 4. Log", "## 4. Log\n\n" + new))["block"]["sha"] == "3333333"
+    fenced = "```\n" + new + "```\n"
+    assert _pf(fenced)["block"] is None and _pf(fenced)["unparsed"] is False  # an example in a fence is no block
+
+
+@pytest.mark.parametrize("lines", [
+    ("- AC-1: asserts — a\n", "- AC-1: partial — b\n"),  # a duplicate is invalid, not first-wins
+    ("- AC-1: asserts — a\n", "- AC-1: asserts — a\n"),
+])
+def test_parse_fidelity_duplicates_are_reported(lines):
+    f = _pf(_fid(*lines))
+    assert f["duplicates"] == ["AC-1"] and f["unparsed"] is False
+
+
+@pytest.mark.parametrize("line", [
+    "- AC-1: asserts - the ascii dash is not the canonical form\n", "- AC-1: asserts -- nope\n", "- AC-1: maybe — unsure\n",
+    "- AC-1: asserts — \n", "- AC-1 asserts — no colon\n", "- AC-1: ASSERTS — case\n", "AC-1: asserts — no bullet\n",
+    "1. AC-1: does not assert — a list prefix\n", "> - AC-1: does not assert — a quote prefix\n", "* AC-1: does not assert — star\n",
+    "  - AC-1: does not assert — indented\n", "- AC-1: does not assert — " + "x" * 201 + "\n", "stray prose\n",
+    "- AC-1: asserts — a <!-- c --> b\n",
+])
+def test_parse_fidelity_any_other_line_in_the_block_is_unparsed(line):
+    assert _pf(_fid(FID_OK, line))["unparsed"] is True
+    assert _pf(_fid("- AC-2: asserts — " + "x" * 200 + "\n"))["unparsed"] is False  # 200 is the limit
+
+
+def test_parse_fidelity_unparsable_heading_unclosed_fence_and_hidden_lines_fail_closed():
+    assert _pf("### AC fidelity — yesterday @ abc\n\n" + FID_OK + "\n")["unparsed"] is True
+    assert _pf("### AC fidelity — 2026-10-30 @ nothex1\n\n" + FID_OK + "\n")["unparsed"] is True
+    assert _pf(_fid(FID_OK) + "```\n- AC-2: does not assert — hidden\n")["unparsed"] is True  # unclosed fence
+    assert _pf(_fid(FID_OK) + "<!--\n- AC-2: does not assert — hidden\n")["unparsed"] is True
+    assert _pf(_fid(FID_OK, "```\n- AC-2: does not assert — hidden\n```\n"))["unparsed"] is True  # a closed fence inside the block
+    assert _pf(_fid(FID_OK, "<!-- - AC-2: does not assert — hidden -->\n"))["unparsed"] is True
+
+
+def _fid_check(tmp_path, git_env, phase="pr", **kw):
+    client, s = _story(tmp_path, git_env, **kw)
+    return strict.check(client, 1001, phase, repo=str(tmp_path)), client
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_missing_verdict_is_a_finding(tmp_path, git_env, phase):
+    res, _ = _fid_check(tmp_path, git_env, phase, fidelity=False)
+    assert _rules(res) == ["fidelity-missing"] and "speckit.ado.review" in res["findings"][0]["fix"]
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_ac_without_a_verdict_is_missing_even_when_other_acs_have_one(tmp_path, git_env, phase):
+    client, _ = _story(tmp_path, git_env)
+    ledger = LEDGER(tmp_path).read_text().replace("| AC-1 |", "| AC-2 | crit | t | c | " + RED_NOTE.format(*re.findall(r"red ([0-9a-f]{12}) exit \d+ · green ([0-9a-f]{12})", LEDGER(tmp_path).read_text())[0]) + " |\n| AC-1 |", 1)
+    LEDGER(tmp_path).write_text(ledger)
+    commit(tmp_path, "second ac row")
+    res = _pr(tmp_path, client, phase)
+    f = [f for f in res["findings"] if f["rule"] == "fidelity-missing"]
+    assert len(f) == 1 and "AC-2" in f[0]["detail"] and "AC-1" not in f[0]["detail"]
+
+
+def test_ac_line_in_section_1_without_a_section_3_row_needs_a_verdict(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env)
+    LEDGER(tmp_path).write_text(LEDGER(tmp_path).read_text().replace("## 1. Seeded\n", "## 1. Seeded\n\n### Acceptance Criteria\nFirst\nSecond\n"))
+    commit(tmp_path, "acs")
+    f = [f for f in _pr(tmp_path, client)["findings"] if f["rule"] == "fidelity-missing"]
+    assert len(f) == 1 and "AC-2" in f[0]["detail"]
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_does_not_assert_blocks(tmp_path, git_env, phase):
+    reason = "the test only checks that no exception is raised"
+    res, _ = _fid_check(tmp_path, git_env, phase, fidelity=_fid(f"- AC-1: does not assert — {reason}\n", sha="{sha}"))
+    assert _rules(res) == ["fidelity-fails"] and "AC-1" in res["findings"][0]["detail"] and "1" in res["findings"][0]["detail"]
+    assert reason not in json.dumps(res) and "warnings" not in res  # ids and counts only, never the reason
+
+
+def test_partial_allowed_with_warning(tmp_path, git_env):
+    for phase in ("pr", "done"):
+        (tmp_path / phase).mkdir()
+        res, _ = _fid_check(tmp_path / phase, git_env, phase, fidelity=_fid("- AC-1: partial — covers one of two cases\n", sha="{sha}"))
+        assert res["ok"] is True and res["findings"] == []
+        assert res["warnings"] == [{"rule": "fidelity-partial", "ac": "AC-1"}] and "covers one" not in json.dumps(res)
+
+
+def test_a_passing_fidelity_block_adds_no_warnings_key(tmp_path, git_env):
+    res, _ = _fid_check(tmp_path, git_env)
+    assert res == {"phase": "pr", "mode": "strict", "ok": True, "findings": [], "overrides_used": []}
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+@pytest.mark.parametrize("fid", [
+    _fid(FID_OK, "- AC-1: does not assert — dup\n", sha="{sha}"),
+    _fid(FID_OK, "1. AC-2: does not assert — hidden by a list prefix\n", sha="{sha}"),
+    _fid(FID_OK, "> AC-2: does not assert — hidden by a quote\n", sha="{sha}"),
+    _fid(FID_OK, "- AC-2: does not assert - wrong dash\n", sha="{sha}"),
+    "### AC fidelity — soon @ {sha}\n\n" + FID_OK + "\n",
+])
+def test_invalid_fidelity_block_fails_closed_without_echoing_the_ledger(tmp_path, git_env, phase, fid):
+    res, _ = _fid_check(tmp_path, git_env, phase, fidelity=fid)
+    assert _rules(res) == ["fidelity-invalid"] and "hidden" not in json.dumps(res) and "dup" not in json.dumps(res)
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_unclosed_fence_after_the_fidelity_block_fails_closed(tmp_path, git_env, phase):
+    res, _ = _fid_check(tmp_path, git_env, phase, fidelity=_fid(FID_OK, sha="{sha}") + "```\n- AC-1: asserts — x\n")
+    assert "fidelity-invalid" in _rules(res)
+
+
+def test_stale_fidelity_is_a_pr_rule_only(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env)
+    assert _pr(tmp_path, client)["ok"] is True
+    commit(tmp_path, "more code", {"src/app.py": "x = 2\n# later\n"})
+    res = _pr(tmp_path, client)
+    assert "fidelity-stale" in _rules(res) and "record-stale" in _rules(res)
+    f = [f for f in res["findings"] if f["rule"] == "fidelity-stale"][0]
+    assert "speckit.ado.review" in f["fix"]
+    assert "fidelity-stale" not in _rules(_pr(tmp_path, client, "done"))  # a squash merge: no ancestry, no staleness
+    commit(tmp_path, "ledger only", {"dod/DoD_1001.md": LEDGER(tmp_path).read_text() + "\n"})  # ledger-only later commits stay current
+    LEDGER(tmp_path).write_text(re.sub(r"(### AC fidelity — \S+ @ )[0-9a-f]+", r"\g<1>0123456789ab", LEDGER(tmp_path).read_text()))
+    commit(tmp_path, "fidelity at an unknown commit")
+    assert "fidelity-stale" in _rules(_pr(tmp_path, client))
+
+
+def test_done_after_squash_needs_no_git_objects_for_the_fidelity_rules(tmp_path, git_env):
+    client, s = _story(tmp_path, git_env)
+    _squash(tmp_path, s)
+    git(tmp_path, "branch", "-D", "main")
+    git(tmp_path, "reflog", "expire", "--expire=now", "--all")
+    git(tmp_path, "gc", "-q", "--prune=now")
+    assert _pr(tmp_path, client, "done")["ok"] is True
+
+
+_BAD_ID = "9" * 4300  # int() of this raises on Python 3.11+ (the digit limit)
+
+
+@pytest.mark.parametrize("ac", [_BAD_ID, "1234567", "\u0663", "\uff11", "\u00b2"], ids=["4300-digits", "7-digits", "arabic-indic", "fullwidth", "superscript"])
+def test_parse_fidelity_bounds_the_ac_id_to_one_to_six_ascii_digits(ac):
+    assert _pf(_fid(f"- AC-{ac}: asserts — x\n"))["unparsed"] is True
+    assert _pf(_fid("- AC-123456: partial — x\n"))["verdicts"] == {"AC-123456": {"verdict": "partial", "reason": "x"}}
+
+
+def test_a_huge_ac_id_in_section_3_neither_crashes_check_nor_is_echoed(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env)
+    text = LEDGER(tmp_path).read_text()
+    LEDGER(tmp_path).write_text(text.replace("| AC-1 |", f"| AC-{_BAD_ID} | crit | t | c | green |\n| AC-1 |", 1))
+    commit(tmp_path, "huge id row")
+    for phase in ("pr", "done"):
+        res = _pr(tmp_path, client, phase)
+        fid = [f for f in res["findings"] if f["rule"] == "fidelity-missing"]  # (the L1 finding for this row is V3-7 code)
+        assert len(fid) == 1 and len(json.dumps(fid)) < 500
+
+
+def test_crlf_ledger_with_a_does_not_assert_line_still_fails(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env, fidelity=_fid("- AC-1: does not assert — x\n", sha="{sha}"))
+    LEDGER(tmp_path).write_bytes(LEDGER(tmp_path).read_bytes().replace(b"\n", b"\r\n"))
+    commit(tmp_path, "crlf")
+    for phase in ("pr", "done"):
+        rules = _rules(_pr(tmp_path, client, phase))
+        assert "fidelity-fails" in rules and "fidelity-invalid" not in rules
+
+
+@pytest.mark.parametrize("dash", ["\u2013", "\u2212", "\u2015", "\u2012", "-", "--"])
+def test_other_dashes_are_fidelity_invalid(tmp_path, git_env, dash):
+    line = f"- AC-1: does not assert {dash} x\n"
+    assert _pf(_fid(line))["unparsed"] is True
+    res, _ = _fid_check(tmp_path, git_env, fidelity=_fid(line, sha="{sha}"))
+    assert _rules(res) == ["fidelity-invalid"]
+
+
+def _stale(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env)
+    commit(tmp_path, "more code", {"src/app.py": "x = 2\n# later\n"})
+    return client
+
+
+@pytest.mark.parametrize("rule,fid", [
+    ("fidelity-fails", _fid("- AC-1: does not assert — x\n", sha="{sha}")),
+    ("fidelity-missing", False),
+    ("fidelity-invalid", _fid("- AC-1: asserts - x\n", sha="{sha}")),
+    ("fidelity-stale", True),
+])
+def test_fidelity_rules_are_not_overridable(tmp_path, git_env, rule, fid):
+    assert rule not in strict._COVERS and not any(f.startswith("fidelity") for fs in strict._COVERS.values() for f in fs)
+    dec = _d(1, f"skip {rule}", kind="override", posted=True) + _d(2, "skip l2", kind="override", posted=True)
+    client, _ = _story(tmp_path, git_env, dec=dec, fidelity=fid)
+    if rule == "fidelity-stale":
+        commit(tmp_path, "more code", {"src/app.py": "x = 2\n# later\n"})
+    res = _pr(tmp_path, client)
+    assert rule in _rules(res) and "D1" not in res["overrides_used"]
+
+
+def test_fidelity_partial_stays_a_warning_whatever_an_override_says(tmp_path, git_env):
+    dec = _d(1, "skip fidelity-partial", kind="override", posted=True)
+    res, _ = _fid_check(tmp_path, git_env, dec=dec, fidelity=_fid("- AC-1: partial — x\n", sha="{sha}"))
+    assert res["ok"] is True and res["warnings"] == [{"rule": "fidelity-partial", "ac": "AC-1"}] and res["overrides_used"] == []
+
+
+def test_fidelity_rules_are_registered_in_pr_and_done_only_and_advisory_is_unchanged(tmp_path, git_env):
+    assert strict._fidelity_pr in strict.PHASES["pr"] and strict._fidelity_done in strict.PHASES["done"]
+    assert not any(r.__name__.startswith("_fidelity") for r in strict.PHASES["implement"])
+    res, _ = _check(tmp_path, phase="pr", ledger=_ledger(), mode="advisory")
+    assert res == {"phase": "pr", "mode": "advisory", "ok": True, "findings": [], "note": "mode is advisory"}

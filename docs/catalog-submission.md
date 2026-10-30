@@ -56,7 +56,7 @@ components from them. The release therefore carries two install-allowed catalogs
 - Pulls an Azure DevOps story into a per-story DoD ledger with the acceptance criteria copied as verbatim text (ADO HTML converted to plain text), then routes specify/plan/tasks/implement to the installed stack kit or core Spec Kit
 - Mirrors tasks.md into child Tasks on the story; idempotent, dry run by default, applied only after an explicit yes
 - Gate: acceptance criterion to named test traceability, assertion-free tests, AC drift, missing evidence; advisory unless a check is opted in to blocking
-- Seven-plane review of the branch diff with a verification pass, logged in the ledger
+- Eight-plane review of the branch diff (the AC fidelity plane in strict mode only) with a verification pass, logged in the ledger
 - Opens the PR with AB#<id> on GitHub (gh) or Azure Repos, and closes the story with the ledger attached, each after an explicit yes
 - Human-in-the-loop contract (rules/hitl.md) linked from every command; optional ado-lifecycle workflow with preview -> gate -> apply for every board change
 - Reusable GitHub Actions workflows and Azure Pipelines templates: gate on PR, branch guard, link on merge

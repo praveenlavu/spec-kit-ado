@@ -87,13 +87,23 @@ def test_worktree_removed_on_success_failure_and_timeout(repo, made, command, ti
 
 def test_checkout_removed_and_group_killed_on_a_real_sigint(repo, made, tmp_path):
     head, pidfile = git(repo, "rev-parse", "HEAD"), tmp_path / "pid"
-    timer = threading.Timer(1.0, os.kill, (os.getpid(), signal.SIGINT))
-    timer.start()
+    stop = threading.Event()
+
+    def interrupt_when_running():  # SIGINT only once the shell has written its pid, however slow the checkout is
+        deadline = time.monotonic() + 10
+        while not stop.is_set() and time.monotonic() < deadline:
+            if pidfile.exists() and pidfile.read_text().strip():
+                os.kill(os.getpid(), signal.SIGINT)
+                return
+            time.sleep(0.05)
+    poller = threading.Thread(target=interrupt_when_running, daemon=True)
+    poller.start()
     try:
         with pytest.raises(KeyboardInterrupt):
             strict.run_at(str(repo), head, f"echo $$ > {shlex.quote(str(pidfile))}; sleep 60 & wait", 30)
     finally:
-        timer.cancel()
+        stop.set()
+        poller.join()
     _gone(repo, made)
     _dead(int(pidfile.read_text()))
 
