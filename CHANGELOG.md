@@ -11,6 +11,10 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   project's lists plus the strict floor. Invalid values are a config error.
 - `ado decisions <id>` (read-only, local): the ledger's open, validated and rejected `D<n>` decision lines as
   JSON; the ledger template seeds the `### Decisions & assumptions (development)` heading in section 2.
+- `ado decisions <id> --post` (dry run; `--plan-out`, `--apply`, `--expect-plan` as for `questions --post`): one new
+  `[spec-kit-ado:decisions]` comment with every open `D<n>` line not yet posted or edited since; apply writes
+  `posted: <comment id>:<hash8>` into exactly those ledger lines (atomic). Typed `@mention`s and e-mail addresses are
+  replaced by `@user` / `[email]`; lines are cut at 500 characters.
 
 ## 0.2.0 — 2026-10-29
 

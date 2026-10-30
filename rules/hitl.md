@@ -12,11 +12,12 @@ request) is a no — revise the preview and ask again.
 
 | Action class | Rule |
 |---|---|
-| Read ADO (`ado get`, `ado comments`, `ado attachments` (`--download` writes only under `.ado/`), `ado questions` without `--post` (local ledger read), `ado decisions` (local ledger read), `ado dod`, `ado gate`, any dry-run, `speckit.ado.status`) | Free. No approval needed. |
+| Read ADO (`ado get`, `ado comments`, `ado attachments` (`--download` writes only under `.ado/`), `ado questions` without `--post` (local ledger read), `ado decisions` without `--post` (local ledger read), `ado dod`, `ado gate`, any dry-run, `speckit.ado.status`) | Free. No approval needed. |
 | Write local files for the story (spec dir, `tasks.md`, ledger `dod/DoD_<id>.md`) | Free. They reach the team through PR review. |
 | Name the local feature branch (`ado branch <id> --apply`: create, rename the Spec Kit branch made for this spec, or switch; `ado branch --id-from` is a read) | Free. Local only: it never pushes and never renames the default branch. Pushing the branch is the ⛔ row below. |
 | Any ADO mutation — create, update, state change, comment, link (`--to`, `--parent`, `--url`), attach | ⛔ Preview the exact change, get an explicit yes, then apply. One yes covers one previewed batch, nothing more. |
 | Post the open questions to the story (`ado questions <id> --post`): one comment, or an edit of the existing `[spec-kit-ado:questions]` comment | ⛔ Same as any ADO write: `--post --plan-out .ado/plan-questions.md`, show it, explicit yes, then `--post --apply --expect-plan .ado/plan-questions.md`. The plan says ADD, EDIT (showing the text it replaces) or nothing to post. Only your own marked comment is ever edited. |
+| Post the development decisions to the story (`ado decisions <id> --post`): decisions comment: preview → yes → apply. Always one NEW `[spec-kit-ado:decisions]` comment, never an edit | ⛔ Same as any ADO write: `--post --plan-out .ado/plan-decisions.md`, show it, explicit yes, then `--post --apply --expect-plan .ado/plan-decisions.md`. The plan lists the unposted or edited open `D<n>` lines; apply also writes `posted: <comment id>:<hash8>` into those local ledger lines. Typed `@mention`s and e-mail addresses are replaced, but a name written as plain words is not detected: read the comment text in the preview for names before saying yes. |
 | Link the pushed branch to the story's Development section (Azure Repos: `ado branch <id> --link`) | ⛔ A board write: `--link --plan-out .ado/plan-branch-link.md`, show it, explicit yes, then `--link --apply --expect-plan .ado/plan-branch-link.md`. Already linked → nothing to apply. |
 | Open a PR, push a branch, post a PR comment | ⛔ Explicit yes first (on Azure the same yes covers adding the story's Pull Request link when Azure dropped it). A PR with unticked tasks is refused; `--allow-incomplete` opens it as a draft, still behind the same yes. With `review_block_on` set, a PR with no review, a blocking review or a stale review is refused too. |
 | Tokens (PAT, OAuth, any secret) | Never ask for, accept, echo, log, or store one. If a token is pasted into chat, do not use it — tell the user to revoke it now and create a new one via `ado setup` in their own terminal. |
@@ -24,7 +25,7 @@ request) is a no — revise the preview and ask again.
 
 ## How to preview
 
-- **Batch verbs** (`ado push`, `ado done`, `ado pr create`, `ado questions <id> --post`, `ado branch <id> --link`) are dry-run by default. Run
+- **Batch verbs** (`ado push`, `ado done`, `ado pr create`, `ado questions <id> --post`, `ado decisions <id> --post`, `ado branch <id> --link`) are dry-run by default. Run
   them with `--plan-out .ado/plan-<verb>.md`, show the file's content to the user, and
   only after a yes re-run the same command with `--plan-out` swapped for
   `--expect-plan .ado/plan-<verb>.md` and `--apply` added. Do not change other arguments

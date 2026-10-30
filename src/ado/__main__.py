@@ -241,12 +241,19 @@ def dispatch(client, args):
         if args.apply:
             questions.apply_post(client, args.id, plan)
         return {"id": args.id, "applied": args.apply, "action": plan["action"], "comment_id": plan["comment_id"]}
-    if args.command == "decisions":  # read-only: the ledger is never written
+    if args.command == "decisions":  # read-only unless --post/--plan-out; only --apply writes (comment, then the ledger)
         path = dod.dod_file(client.config.dod_path, args.id)
         try:
-            return decisions.parse_decisions(path.read_text(encoding="utf-8"))
+            parsed = decisions.parse_decisions(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError) as e:
             raise ValueError(f"cannot read ledger {path} ({e.__class__.__name__}); run `ado dod {args.id}` first")
+        if not (args.post or args.plan_out):
+            return parsed
+        plan = decisions.plan_post(client, args.id, parsed)
+        _plan(args, decisions.render_plan(args.id, plan, parsed["unparsed"]))
+        res = decisions.apply_post(client, args.id, plan, path) if args.apply else {}
+        return {"id": args.id, "applied": args.apply, "action": plan["action"], "lines": plan["lines"],
+                "comment_id": res.get("comment_id")}
     if args.command == "gate":
         path = dod.dod_file(client.config.dod_path, args.id)
         if not path.exists():
@@ -339,8 +346,14 @@ def main(argv=None):
     p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
     p.add_argument("--expect-plan", metavar="PATH",
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
-    p = sub.add_parser("decisions", help="List the ledger's open, validated and rejected D<n> decision lines (read-only)")
+    p = sub.add_parser("decisions", help="List the ledger's open, validated and rejected D<n> decision lines; --post "
+                       "sends the unposted open ones as one new comment (dry run unless --apply)")
     p.add_argument("id", type=int)
+    p.add_argument("--post", action="store_true", help="plan posting the unposted decisions as one new comment")
+    p.add_argument("--apply", action="store_true", help="with --post: post, then mark the ledger lines (default: plan only)")
+    p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
+    p.add_argument("--expect-plan", metavar="PATH",
+                   help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
     p = sub.add_parser("gate",
                        help="Advisory DoD gate: AC<->test traceability, assertions, AC drift, evidence")
     p.add_argument("id", type=int)
@@ -391,7 +404,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if getattr(args, "expect_plan", None) and not args.apply:
         parser.error("--expect-plan needs --apply")
-    if args.command == "questions" and args.apply and not args.post:
+    if args.command in ("questions", "decisions") and args.apply and not args.post:
         parser.error("--apply needs --post")
     if getattr(args, "dir", None) and args.command == "attachments" and not args.download:
         parser.error("--dir needs --download")

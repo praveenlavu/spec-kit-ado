@@ -648,4 +648,16 @@ def test_decisions_verb_documented_read_only():
     row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `decisions <id>` |"))
     assert "Read-only, local" in row and "`### Decisions & assumptions (development)`" in row and "`unparsed`" in row
     assert "`ado decisions`, `ado dod`" in _flat("AGENTS.md") and "`ado decisions <id>` (read-only, local)" in _flat("AGENTS.md")
-    assert "`ado decisions` (local ledger read)" in _flat("rules/hitl.md")
+    assert "`ado decisions` without `--post` (local ledger read)" in _flat("rules/hitl.md")
+
+
+def test_decisions_post_documented_as_preview_yes_apply():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `decisions <id> --post` |"))
+    assert "NEW comment" in row and "`[spec-kit-ado:decisions]`" in row and "` · posted: <comment id>:<hash8>`" in row
+    assert "`@user` or `[email]`" in row and "never refused" in row
+    assert "decisions comment: preview → yes → apply" in _flat("rules/hitl.md")
+    assert "a name written as plain words is not detected" in _flat("rules/hitl.md")
+    assert "`decisions --post` and `branch --link` are dry runs" in _flat("README.md")
+    assert "`ado decisions <id> --post --plan-out .ado/plan-decisions.md`" in _flat("AGENTS.md")
+    assert "`ado decisions <id> --post`" in _flat("CHANGELOG.md")
+    assert "`decisions --post`" in _flat("AGENTS.md")
