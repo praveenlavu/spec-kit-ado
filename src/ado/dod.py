@@ -5,6 +5,8 @@ import re
 import urllib.parse
 from pathlib import Path
 
+from .stack import CAP_TEXT, _clean  # stack imports only config at module level: no cycle
+
 
 def _list_item(stack):
     """re.sub callback for <ol>/<ul>/<li> tags: `n. ` inside an <ol>, `- ` otherwise.
@@ -230,7 +232,25 @@ def ledger_spec_dir(ledger_md):
     return None if not v or v == SPEC_DIR_UNSET else v
 
 
-def render_dod(work_item, organization, project, synced="", spec_dir=""):
+MAX_EXTRA_DOD = 20
+
+
+def stack_dod_items(profile):
+    """`(stack id, item, source)` for every DoD item of an approved profile, in stack order (`stack.load_profile` returns only approved ones)."""
+    return [(st.get("id"), i.get("item"), i.get("source")) for st in (profile or {}).get("stacks", []) for i in st.get("dod", [])]
+
+
+def _extra_dod_lines(extra_dod):
+    """Section 5 lines for stack DoD items: cleaned (control, separator and invisible characters, `<!--`, `-->`, fences), escaped, at most
+    MAX_EXTRA_DOD; more than that adds one fixed line instead of dropping items silently."""
+    extra = list(extra_dod)
+    lines = [f"- [ ] {_esc(_clean(item))} (stack {_clean(sid, 40)}, {_clean(src, 12)})" for sid, item, src in extra[:MAX_EXTRA_DOD]]
+    if len(extra) > MAX_EXTRA_DOD:
+        lines.append(f"- [ ] {len(extra) - MAX_EXTRA_DOD} more stack DoD items were not seeded: run `ado stack show --md`")
+    return lines
+
+
+def render_dod(work_item, organization, project, synced="", spec_dir="", extra_dod=()):
     if "\n" in spec_dir or "\r" in spec_dir:
         raise ValueError("spec dir must be a single line (it is written into the ledger header)")
     wid = work_item["id"]
@@ -299,6 +319,7 @@ def render_dod(work_item, organization, project, synced="", spec_dir=""):
         "- [ ] no assertion-free tests",
         "- [ ] all assumptions / questions / edge cases resolved",
         "- [ ] gates green",
+        *_extra_dod_lines(extra_dod),
         "",
     ]
     return "\n".join(parts)
@@ -313,14 +334,15 @@ def dod_file(dod_dir, work_item_id):
 
 
 def write_dod(work_item, dod_dir, organization, project, synced="",
-              force=False, refresh=False, spec_dir=""):
+              force=False, refresh=False, spec_dir="", extra_dod=()):
     path = dod_file(dod_dir, work_item["id"])
     if path.exists() and not force and not refresh:
         raise DodExists(f"{path} exists — pass --force to overwrite or --refresh to re-pull section 1.")
     old = path.read_text(encoding="utf-8") if refresh and path.exists() else None
     if old is not None:
         spec_dir = spec_dir or ledger_spec_dir(old) or ""
-    fresh = render_dod(work_item, organization, project, synced, spec_dir)
+    # stack DoD items seed a fresh ledger only: a refresh keeps everything after section 1, section 5 included
+    fresh = render_dod(work_item, organization, project, synced, spec_dir, () if old is not None else extra_dod)
     if old is not None:
         idx = _repair_at(old) if unclosed(old) else _section2_at(old)
         if unclosed(old) and idx == -1:

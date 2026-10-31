@@ -1355,3 +1355,13 @@ def test_fix_round_docs_family_upgrade_note_and_gate_wording():
     readme = _flat("README.md")
     assert "in that PR's own run; once merged the edit is in force with no note" in readme and "review edits to these files as code" in readme
     assert "neither the command that runs nor the verdict" not in readme + kits
+
+
+# ---- P2-6: stack DoD items in fresh ledgers ----
+def test_stack_dod_items_documented():
+    for doc in ("README.md", "AGENTS.md", "docs/stack-kits.md", "CHANGELOG.md"):
+        text = _flat(doc)
+        assert "(stack <id>, S<n>)" in text and "--refresh" in text, doc
+    assert "## Definition-of-done items" in (ROOT / "docs/stack-kits.md").read_text(encoding="utf-8")
+    assert "tick them only with evidence" in _flat("commands/pull.md") and "tick one only with evidence" in _flat("AGENTS.md")
+    assert "`ado done` counts them" in _flat("README.md") and "byte-identical" in _flat("docs/stack-kits.md")

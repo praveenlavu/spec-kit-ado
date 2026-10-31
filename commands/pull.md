@@ -125,6 +125,7 @@ Run `ado dod <id> --spec-dir <spec dir>`.
   `--refresh` (re-pulls section 1, keeps the authored sections) or leave it. With
   `--workflow`: leave it, and add `- [ ] Ledger already existed: refresh
   it (ado dod <id> --refresh) or keep it` under `### Needs human decision`.
+- Section 5 may carry unticked boxes `(stack <id>, S<n>)` from an approved stack profile: tick them only with evidence, like the fixed five.
 - Section 1 escapes markdown control lines from ADO (a leading `\` before a line starting with a code fence or `#`,
   and `<!--` written as `&lt;!--`), so story text cannot hide or forge later sections; `AC hash` is unaffected.
 - The output carries the same `ac_chars` / `ac_thin` as step 2. If the user chose to proceed on thin AC in step 2, the ledger shows a thin-AC banner;

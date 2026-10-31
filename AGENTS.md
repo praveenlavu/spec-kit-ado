@@ -71,7 +71,7 @@ By hand, one command at a time (the primary path):
 3. `speckit.ado.pull <id>` — reads the story, its discussion (`ado comments`) and allowed
    attachments (`ado attachments --download`), seeds `dod/DoD_<id>.md` from the story, routes
    the specify phase, then names the story branch with `ado branch <id> --apply`. Section 1 of the ledger is the story's acceptance criteria as verbatim text (ADO HTML converted to plain text):
-   never invent, split or reword them. Ask the user to read section 1 for sensitive data
+   never invent, split or reword them. A fresh ledger also gets the DoD items of an approved `ado.stack.json` in section 5 as unticked boxes `(stack <id>, S<n>)`; tick one only with evidence (`ado done` counts them); `--refresh` never changes section 5. Ask the user to read section 1 for sensitive data
    before it is committed; the seeder does not scan.
 4. `speckit.ado.plan` — routes the plan phase. Fill ledger section 2 (approach and why,
    assumptions, open questions with answers, use cases and edge cases, each mapped to a

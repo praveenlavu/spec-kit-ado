@@ -15,6 +15,9 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   and `pega` are domain hints, and Pega and Appian projects are otherwise `unknown`. Paths are untrusted: printed only when they match
   `A-Za-z0-9._/-` (1 to 200 characters), else as `<path #n>`. Nested roots of the same stack (npm workspaces, Maven/Gradle modules, Cargo workspaces) fold into their nearest ancestor root as evidence (one stack); roots of different stacks stay separate. `note: "hints incomplete"` when a manifest could not be read as asked (read budget of 32, a `package.json` that is not a JSON object or repeats a key); SHA-1 repositories only. No commit is `unknown` with `note: "commit first"`; git failures are exit 2
   with fixed texts; no verb acts on it yet and advisory behaviour is unchanged. See `docs/stack-kits.md` "Detection".
+- `ado dod` seeds the `dod` items of an approved `ado.stack.json` into section 5 of a fresh ledger (first run or `--force`) as unticked
+  `- [ ] <item> (stack <id>, S<n>)` lines after the five fixed ones: cleaned, escaped, at most 20 (a fixed overflow line beyond that). `--refresh`
+  never touches section 5; no approved profile, no change (byte-identical ledger). `ado done` counts them. See `docs/stack-kits.md` "Definition-of-done items".
 - `ado stack show [--json|--md] [--check]`: read-only, local view of the stack profile `ado.stack.json`. `stack.read_profile` (a confined
   working-tree read, or bytes of a git blob), `stack.load_profile` (the profile only when approved), `stack.profile_hash` (sha256 of the
   profile without `approval`, sorted keys), `stack.compose_test_command` (one stack at `.`: its `run`; otherwise

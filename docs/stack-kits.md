@@ -206,6 +206,18 @@ The terminal check stops accidents; it is not a security boundary (a pseudo-term
 approval is a record, not proof: trust comes from reviewing the commit, and in strict CI from the target branch's copy. This is process
 enforcement, not a security boundary.
 
+## Definition-of-done items
+
+When `ado dod <id>` creates a **fresh** ledger (first run or `--force`) and `ado.stack.json` is **approved**, each stack's `dod` items are
+appended to section 5 after the five fixed lines as unticked boxes, `- [ ] <item> (stack <id>, S<n>)` (`unverified` in place of `S<n>` for an
+unsourced item). They are plain checkbox lines, so `ado done` and the strict `done` check count them: a stack item left unticked means the
+story is not ready. Tick one only with evidence. A draft, invalid or changed-since-approval profile, or none, adds nothing, and the ledger
+is byte-identical to one made without this feature. `ado dod --refresh` never touches section 5, so approving a profile later or editing its
+items does not change an existing ledger (add a line by hand, or use `--force` on a ledger you have not yet worked on). Item text is
+cleaned like the rest of the profile text (control, line-separator and invisible characters, `<!--`, `-->` and code fences removed, 300
+characters) and at most 20 items are seeded; more adds one line `N more stack DoD items were not seeded: run ado stack show --md`.
+This is process enforcement, not a security boundary.
+
 ## Strict rules and CI
 
 In strict mode `ado strict check` runs two stack rules in the `implement`, `pr` and `done` phases. Neither can be overridden (they are not

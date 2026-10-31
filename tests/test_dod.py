@@ -511,3 +511,113 @@ def test_refresh_refuses_an_opener_in_section_4_with_a_marker_copy(tmp_path, ope
 @pytest.mark.parametrize("o1,o2", [("```", "~~~"), ("~~~", "```"), ("<!--", "```"), ("```", "<!--")])
 def test_refresh_refuses_when_the_suffix_from_the_marker_is_still_unclosed(tmp_path, o1, o2):
     _refused(tmp_path, _s1(o1) + f"{o2}\ntrailing\n")  # §3-§5 headings are visible, but §5 is left open
+
+
+# ---- P2-6: stack DoD items seed fresh ledgers only ----
+import copy
+
+from ado import done, stack
+from ado.dod import stack_dod_items
+from tests.conftest import FakeClient
+from tests.test_stack_show import approve, profile, put
+
+_FIVE = ["- [ ] every AC mapped to a passing real test", "- [ ] coverage meets the project's bar", "- [ ] no assertion-free tests",
+         "- [ ] all assumptions / questions / edge cases resolved", "- [ ] gates green"]
+
+
+def _s5(md):
+    return md[md.index("## 5. Definition of Done"):]
+
+
+def test_new_ledger_gets_items(tmp_path):
+    items = [("python", "No new lint findings", "S1"), ("web", "Bundle stays small", "unverified")]
+    p = write_dod(_wi(), str(tmp_path), "o", "p", synced="2026-07-14", extra_dod=items)
+    lines = _s5(p.read_text()).splitlines()
+    assert lines[1:] == _FIVE + ["- [ ] No new lint findings (stack python, S1)", "- [ ] Bundle stays small (stack web, unverified)"]
+    forced = write_dod(_wi(), str(tmp_path), "o", "p", synced="2026-07-14", force=True, extra_dod=items[:1])
+    assert _s5(forced.read_text()).splitlines()[6:] == ["- [ ] No new lint findings (stack python, S1)"]
+
+
+def test_refresh_leaves_section5_byte_identical(tmp_path):
+    items = [("python", "No new lint findings", "S1")]
+    p = write_dod(_wi(), str(tmp_path), "o", "p", synced="2026-07-14", extra_dod=items)
+    p.write_text(p.read_text().replace("- [ ] gates green", "- [x] gates green").replace("(stack python, S1)", "(stack python, S1) MINE"))
+    before = _s5(p.read_text())
+    write_dod(_wi(**{"System.Title": "new"}), str(tmp_path), "o", "p", synced="2026-08-01", refresh=True,
+              extra_dod=[("python", "A different item", "S2")])
+    assert "US1001: new" in p.read_text() and _s5(p.read_text()) == before
+    write_dod(_wi(), str(tmp_path), "o", "p", synced="2026-08-02", refresh=True)
+    assert _s5(p.read_text()) == before
+
+
+def test_item_text_escaped():
+    evil = "a\n- [x] forged\n## 5. Definition of Done b\x85c​d <!-- hide ```fence``` --> \x1b[31m" + "z" * 400
+    md = render_dod(_wi(), "o", "p", extra_dod=[("python", evil, "S1"), ("py\nthon", "ok", "S1\n- [x] x"), ("python", "# head", "S1")])
+    tail = _s5(md).splitlines()[6:]
+    assert len(tail) == 3 and all(t.startswith("- [ ] ") for t in tail)  # a mid-line "[x]" is text, not a box
+    assert "\x85" not in md and " " not in md and "​" not in md and "\x1b" not in md and "<!--" not in md and "```" not in md
+    assert tail[0].startswith("- [ ] a - [x] forged ## 5. Definition of Done b c")
+    assert len(tail[0]) < 6 + 300 + 30 and done.check(md)["unticked"][5:] == [t[6:] for t in tail]
+
+
+def test_cap_of_items_adds_a_fixed_overflow_line():
+    items = [("python", f"item {i}", "S1") for i in range(25)]
+    tail = _s5(render_dod(_wi(), "o", "p", extra_dod=items)).splitlines()[6:]
+    assert tail[:20] == [f"- [ ] item {i} (stack python, S1)" for i in range(20)]
+    assert tail[20:] == ["- [ ] 5 more stack DoD items were not seeded: run `ado stack show --md`"]
+
+
+def test_no_profile_ledger_byte_identical_to_baseline(tmp_path):
+    wi = _wi(**{"Microsoft.VSTS.Common.AcceptanceCriteria": "<div>AC one</div>"})
+    assert render_dod(wi, "o", "p", "2026-07-14", "specs/1") == render_dod(wi, "o", "p", "2026-07-14", "specs/1", extra_dod=())
+    assert render_dod(wi, "o", "p").endswith("\n".join(_FIVE) + "\n")
+
+
+def test_unticked_stack_item_makes_done_say_not_ready(cfg):
+    md = render_dod(_wi(), "o", "p", extra_dod=[("python", "No new lint findings", "S1")])
+    ticked = md.replace("- [ ] every", "- [x] every").replace("- [ ] coverage", "- [x] coverage").replace("- [ ] no assertion", "- [x] no assertion") \
+        .replace("- [ ] all assumptions", "- [x] all assumptions").replace("- [ ] gates", "- [x] gates")
+    chk = done.check(ticked)
+    assert chk == {"ready": False, "unticked": ["No new lint findings (stack python, S1)"]}
+    assert "No new lint findings (stack python, S1)" in done.render_plan(1001, chk, cfg) and "Not ready" in done.render_plan(1001, chk, cfg)
+    assert done.check(ticked.replace("- [ ] No new", "- [x] No new"))["ready"] is True
+
+
+def test_stack_dod_items_reads_the_profile_in_stack_order():
+    p = profile()
+    p["stacks"].append({"id": "web", "root": "web", "dod": [{"item": "Docs updated", "source": "unverified"}]})
+    assert stack_dod_items(p) == [("python", "No new lint findings", "S1"), ("web", "Docs updated", "unverified")]
+    assert stack_dod_items(None) == []
+
+
+def _cli(cfg, tmp_path, monkeypatch, refresh=False, force=False):
+    from ado.__main__ import dispatch
+    monkeypatch.chdir(tmp_path)
+    client = FakeClient(cfg, responses=[{"id": 1001, "fields": {"System.Title": "T"}}])
+    client.config.dod_path = str(tmp_path / "dod")
+
+    class Args:
+        command, id, dir = "dod", 1001, None
+    Args.force, Args.refresh = force, refresh
+    dispatch(client, Args())
+    return (tmp_path / "dod" / "DoD_1001.md").read_text()
+
+
+def test_ado_dod_seeds_only_an_approved_profile(cfg, tmp_path, monkeypatch):
+    ok = approve(profile())
+    changed = copy.deepcopy(ok)
+    changed["stacks"][0]["dod"][0]["item"] = "Changed after approval"
+    for n, (state, expect) in enumerate([(None, False), ("{bad", False), (profile(), False), (changed, False), (ok, True)]):
+        root = tmp_path / str(n)
+        root.mkdir()
+        if state is not None:
+            put(root, state)
+        md = _cli(cfg, root, monkeypatch)
+        assert ("(stack python, S1)" in md) is expect, n
+        assert "Changed after approval" not in md
+        if not expect:
+            assert md == render_dod({"id": 1001, "fields": {"System.Title": "T"}}, cfg.organization, cfg.project, md.split("Last synced:** ")[1].splitlines()[0])
+    put(tmp_path, ok)
+    (tmp_path / "dod").mkdir(exist_ok=True)
+    first = _cli(cfg, tmp_path, monkeypatch)
+    assert _cli(cfg, tmp_path, monkeypatch, refresh=True) == first

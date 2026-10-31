@@ -264,6 +264,7 @@ def dispatch(client, args):
             wi, dod_dir, client.config.organization, client.config.project,
             synced=date.today().isoformat(), force=args.force, refresh=args.refresh,
             spec_dir=getattr(args, "spec_dir", None) or "",
+            extra_dod=dod.stack_dod_items(stack.load_profile()),  # approved profile only; write_dod ignores it on --refresh
         )
         action = "refreshed" if (args.refresh and existed) else ("overwritten" if existed else "created")
         return {"path": str(path), "action": action, **dod.ac_stats(wi)}
