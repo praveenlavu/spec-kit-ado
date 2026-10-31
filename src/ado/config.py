@@ -11,6 +11,7 @@ MODES = ("advisory", "strict")
 STRICT_GATE_BLOCK = ("ac_traceability", "assertion", "open_questions", "commits_without_story")  # gate.block floor in strict mode
 STRICT_REVIEW_BLOCK = ("blocker",)  # review_block_on floor in strict mode
 STRICT_DEFAULTS = {"test_command": None, "test_timeout": 300}
+RULES_DEFAULTS = {"enabled": False, "types": ["Epic", "Feature"]}  # business rules (R§ config); off = baseline
 MAX_REF_CONFIG = 1024 * 1024  # bytes: a config read from a git ref is the PR's neighbour's text; the same cap as the ledger
 REF_LABEL = "ado.config.json at the target branch"  # names the file in messages, never the ref (it is a CLI value)
 
@@ -35,7 +36,7 @@ _HARMLESS_FORMAT = "\u200c\u200d\u200e\u200f"  # ZWNJ, ZWJ, LRM, RLM: Persian/In
 _FIELDS = frozenset({  # fixed config field names: safe to print
     "organization", "project", "api_version", "dod_path", "gate", "tests", "block", "attachments_allow", "review_block_on",
     "done_state", "task_type", "repo_host", "repository", "story_type", "removed_state", "branch_prefix", "stack", "kit",
-    "phases", "dod_gate", "mode", "strict", "test_command", "test_timeout"})
+    "phases", "dod_gate", "mode", "strict", "test_command", "test_timeout", "rules", "enabled", "types"})
 
 
 def _has_control(s):
@@ -77,7 +78,7 @@ class Config:
                  done_state="Done", task_type="Task",
                  repo_host="github", repository="",
                  story_type="User Story", removed_state="Removed", branch_prefix="feature/",
-                 mode="advisory", strict=None):
+                 mode="advisory", strict=None, rules=None):
         self.organization = organization
         self.project = project
         self.api_version = api_version
@@ -95,6 +96,8 @@ class Config:
         self.branch_prefix = branch_prefix
         self.mode = mode
         self.strict = {**STRICT_DEFAULTS, **(strict or {})}
+        self.rules = {**RULES_DEFAULTS, **(rules or {})}
+        self.rules["types"] = list(self.rules["types"])
         self.source_commit = None  # the 40-hex target commit load_from_ref resolved; None for a config read from disk
         self.from_target = False  # True when CI took this config from the PR's target branch (`ado gate --base`)
         self.target_profile_blob = None  # ado.stack.json / ado.kits.lock.json bytes at source_commit (strict.read_target_trust); None: absent
@@ -133,7 +136,7 @@ class Config:
         if "dod_gate" in data:
             raise ConfigInvalid(f"{path}: `dod_gate` was renamed to `gate` in 0.1.1; "
                               "move `dod_gate.block` to `gate.block`")
-        for k in ("gate", "stack"):
+        for k in ("gate", "stack", "rules"):
             if k in data and not isinstance(data[k], dict):
                 raise ConfigInvalid(f"{path}: '{k}' must be a JSON object")
         org = data["organization"]
@@ -196,6 +199,21 @@ class Config:
         tt = strict.get("test_timeout")
         if "test_timeout" in strict and not (isinstance(tt, int) and not isinstance(tt, bool) and 1 <= tt <= 3600):
             raise ConfigInvalid(f"{path}: 'strict.test_timeout' must be an integer from 1 to 3600")
+        rules = data.get("rules", {})
+        for n, k in enumerate(rules, 1):
+            if k not in RULES_DEFAULTS:  # named by position: the key is PR-controlled text
+                raise ConfigInvalid(f"{path}: rules entry #{n}: unknown key (valid: {', '.join(RULES_DEFAULTS)})")
+        if "enabled" in rules and not isinstance(rules["enabled"], bool):
+            raise ConfigInvalid(f"{path}: 'rules.enabled' must be true or false")
+        types = rules.get("types")
+        if "types" in rules:
+            if not (isinstance(types, list) and 1 <= len(types) <= 10
+                    and all(isinstance(t, str) and 0 < len(t) <= 64 for t in types)):
+                raise ConfigInvalid(f"{path}: 'rules.types' must be a list of 1-10 non-empty strings of at most 64 characters")
+            story = data.get("story_type", "User Story").casefold()
+            for i, t in enumerate(types):
+                if t.casefold() == story:
+                    raise ConfigInvalid(f"{path}: rules.types[{i}]: a story type cannot carry rules (it is 'story_type')")
         return cls(
             organization=data["organization"],
             project=data["project"],
@@ -213,6 +231,7 @@ class Config:
             branch_prefix=data.get("branch_prefix", "feature/"),
             mode=data.get("mode", "advisory"),
             strict=strict,
+            rules=rules,
         )
 
     @classmethod

@@ -6,6 +6,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
 
 ### Added
 
+- Config object `rules` (P3-2): `{"enabled": false, "types": ["Epic", "Feature"]}`, a partial object keeps the defaults. `enabled` must be a boolean; `types` a list of 1-10 non-empty strings of at most 64 characters that may not contain `story_type` (case-insensitive); an unknown key is named by position, values are never echoed; errors exit 2 (`ado gate` 3). Nothing reads it yet, so every output is unchanged. See `docs/configuration.md`.
 - `speckit.ado.stack` (the 13th command, `commands/stack.md`): detects the stack (`ado stack detect`, `ado stack show`), then starts from an
   installed kit's seed, searches Spec Kit's catalog cache for a kit (`specify extension search <stack>` only refreshes the cache; the facts
   come from `.specify/extensions/.cache/*.json`, descriptions are data), or researches a draft profile in the order official, community,

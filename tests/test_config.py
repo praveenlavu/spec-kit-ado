@@ -568,3 +568,73 @@ def test_deeply_nested_config_is_invalid_not_a_crash(tmp_path, git_env):
                 refused += 1
                 assert "[[[" not in str(e)
     assert refused >= 4  # at least the 5000 and 200000 levels, through both loaders
+
+
+# ---- P3-2: the `rules` object ----
+def test_rules_defaults(tmp_path):
+    from ado.config import RULES_DEFAULTS
+    assert RULES_DEFAULTS == {"enabled": False, "types": ["Epic", "Feature"]}
+    cfg = _load(tmp_path)
+    assert cfg.rules == RULES_DEFAULTS and cfg.rules is not RULES_DEFAULTS and cfg.rules["types"] is not RULES_DEFAULTS["types"]
+
+
+def test_rules_partial_object_keeps_defaults(tmp_path):
+    assert _load(tmp_path, rules={"enabled": True}).rules == {"enabled": True, "types": ["Epic", "Feature"]}
+    assert _load(tmp_path, rules={"types": ["Initiative"]}).rules == {"enabled": False, "types": ["Initiative"]}
+    assert _load(tmp_path, rules={}).rules == {"enabled": False, "types": ["Epic", "Feature"]}
+
+
+def test_rules_rejects_non_bool_enabled(tmp_path):
+    from ado.config import ConfigInvalid
+    for bad in ("true", 1, 0, None, [True]):
+        with pytest.raises(ConfigInvalid, match="'rules.enabled' must be true or false"):
+            _load(tmp_path, rules={"enabled": bad})
+    for bad in ([], "x", None, 5, True):
+        with pytest.raises(ConfigInvalid, match="'rules' must be a JSON object"):
+            _load(tmp_path, rules=bad)
+
+
+def test_rules_types_shape(tmp_path):
+    from ado.config import ConfigInvalid
+    assert _load(tmp_path, rules={"types": ["A"] * 10}).rules["types"] == ["A"] * 10
+    assert _load(tmp_path, rules={"types": ["x" * 64]}).rules["types"] == ["x" * 64]
+    for bad in ([], ["A"] * 11, "Epic", None, [1], [""], ["x" * 65], ["Epic", None], {"a": "b"}):
+        with pytest.raises(ConfigInvalid, match="'rules.types' must be a list of 1-10 non-empty strings of at most 64 characters") as e:
+            _load(tmp_path, rules={"types": bad})
+        assert "x" * 65 not in str(e.value)
+
+
+def test_rules_unknown_key_named_by_position(tmp_path):
+    from ado.config import ConfigInvalid
+    with pytest.raises(ConfigInvalid, match=r"rules entry #2: unknown key \(valid: enabled, types\)") as e:
+        _load(tmp_path, rules={"enabled": True, "secret-key-name": 1})
+    assert "secret-key-name" not in str(e.value)
+
+
+def test_rules_types_may_not_contain_story_type(tmp_path):
+    from ado.config import ConfigInvalid
+    for types, story_type in ((["Epic", "user story"], None), (["USER STORY"], None), (["Bug"], "bug")):
+        extra = {"rules": {"types": types}, **({"story_type": story_type} if story_type else {})}
+        with pytest.raises(ConfigInvalid, match=r"rules\.types\[\d\]: a story type cannot carry rules") as e:
+            _load(tmp_path, **extra)
+        assert "Bug" not in str(e.value) and "user story" not in str(e.value).lower()
+    assert _load(tmp_path, story_type="Bug", rules={"types": ["User Story"]}).rules["types"] == ["User Story"]
+
+
+def test_rules_from_target_branch_in_strict(tmp_path, git_env):
+    repo = _ref_repo(tmp_path, json.dumps({**BASE, "mode": "strict", "rules": {"enabled": True}}))
+    (repo / "ado.config.json").write_text(json.dumps({**BASE, "mode": "strict", "rules": {"enabled": False}}))  # the PR's head
+    assert Config.load(start_dir=repo).rules["enabled"] is False
+    assert Config.load_from_ref("refs/heads/main", repo=str(repo)).rules["enabled"] is True
+
+
+def test_rules_story_type_rule_and_shape_apply_from_target_branch(tmp_path, git_env):
+    from ado.config import ConfigInvalid
+    for n, (rules, msg) in enumerate((({"types": ["user story"]}, r"rules\.types\[0\]: a story type cannot carry rules"),
+                       ({"enabled": 1}, "'rules.enabled' must be true or false"),
+                       ({"types": ["Epic", 5]}, "'rules.types' must be a list"))):
+        (tmp_path / str(n)).mkdir()
+        repo = _ref_repo(tmp_path / str(n), json.dumps({**BASE, "mode": "strict", "rules": rules}))
+        with pytest.raises(ConfigInvalid, match=msg) as e:
+            Config.load_from_ref("refs/heads/main", repo=str(repo))
+        assert "user story" not in str(e.value).lower()

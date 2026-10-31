@@ -683,6 +683,13 @@ def test_configuration_documents_mode_and_strict_keys():
     assert "## 0.3.0 — unreleased" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
+def test_configuration_documents_rules_object():
+    text = _flat("docs/configuration.md")
+    for needle in ("| `rules` |", "`rules.enabled`", "`rules.types`", "may not contain `story_type`", "`gate`, `stack`, `strict` and `rules` must be objects"):
+        assert needle in text, needle
+    assert "Config object `rules` (P3-2)" in _flat("CHANGELOG.md")
+
+
 def test_strict_test_command_security_note_documented():
     readme, conf, log = _flat("README.md"), _flat("docs/configuration.md"), _flat("CHANGELOG.md")
     assert "the test command is code from your project" in readme.lower() and "temporary checkout" in readme
