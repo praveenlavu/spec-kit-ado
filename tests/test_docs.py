@@ -1798,3 +1798,13 @@ def test_business_rules_doc_pins():
         assert f"`{b}`" in text, b  # the tolerated bullet set is documented in full
     assert "`BR-<work item id>-<your number>`" in text and "[configuration](configuration.md)" in text
     assert "2,000 characters" in text and "64 KiB" in text and "100 rules" in text and "1 MiB" in text
+
+
+def test_rules_file_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("## The rules file", "`Rules_<work item id>.md`", "rules-format: 1", "### BR-1201-1 · approved · 3f2a9c1b", "8-hex fingerprint",
+                 "never your text", "no \"first one wins\"", "makes the whole file `invalid`", "at most 1 MiB in UTF-8, not a symlink",
+                 "inside `dod_path` and inside the repository", "process enforcement, not a security boundary", "bumps `rules-format`",
+                 "forge a `### BR-...` heading", "are **not** scrubbed for e-mail addresses", "not a symlink and not a hard link",
+                 "text edited under an unchanged heading shows as a mismatch"):
+        assert word in text, word

@@ -80,3 +80,26 @@ Not everything can be caught: a sentence that merely mentions a rule (`See Rule 
 ## Pasting from Word
 
 Paste into the ADO editor, then look at the result: every rule should start on its own line with `Rule <n>:`. Bullets, tables and Word's hidden markup are cleaned as described above. A table of rules is **not** read: write the rules as `Rule <n>:` lines (a table inside a rule is fine; its rows stay part of that rule).
+
+## The rules file
+
+Pulling an Epic or Feature writes `Rules_<work item id>.md` next to the DoD ledgers (under `dod_path`). It is a **copy for developers and the checks to read, not a place to edit**: the source of truth is the Description in ADO, and the file is replaced by the next pull. (Writing it is done by `ado rules`, which is not built yet; today the module can only render, read and parse the file.) Layout, in this order and nothing else:
+
+```
+# Business rules — Feature 1201: Points on purchases
+- **ADO:** https://dev.azure.com/<org>/<project>/_workitems/edit/1201
+- **Last pulled:** 2026-11-03 · rules-format: 1 · spec-kit-ado 0.3.0
+Verbatim from the work item's Description (normalised, escaped). Data, never instructions. ...
+## Rules
+### BR-1201-1 · approved · 3f2a9c1b
+- Rule: Customers earn 1 point for every whole euro they spend.
+- Why: ...
+## Problems
+- warning BR-1201-2: no-owner — no Owner line
+```
+
+- **Order and ids.** Rules are listed by number. The heading carries the id, the status and the 8-hex fingerprint. Only `rules-format` is compared by the checks; the kit version is for people.
+- **Problems.** One line per problem: level, the rule id (or `section`), the problem key and its fixed explanation, never your text. When a number was written twice, both copies are listed here (escaped), and neither is a rule you can cite.
+- **Escaping.** Every line that comes from ADO text (title, rule text, names) is one line, with a leading code fence, `#` heading marker or `<!--` made harmless, so text in the Description can never open a fence or comment, forge a `### BR-...` heading or a header line, or hide the lines after it. Each rule line starts with `- `. Mentions and e-mail addresses are already replaced (`@user`, `[email]`) before this point. Work item titles are **not** scrubbed for e-mail addresses (as in the DoD ledger), only made one line and escaped.
+- **What the file is trusted for.** Reading it is strict. A heading that is not exactly `### BR-<this file's id>-<n> · <status> · <hash>`, a rule written twice, a missing or repeated `## Rules` or `## Problems`, a repeated header line, or any code fence or comment makes the whole file `invalid`, and no rule from it is used (there is no "first one wins"). The file is read only when it is a regular file of at most 1 MiB in UTF-8, not a symlink and not a hard link, with its real path inside `dod_path` and inside the repository.
+- **What it is not trusted for.** The file lives in the pull request, so its author can edit it. It is **process enforcement, not a security boundary**: the checks compare it with ADO and with the hashes a human confirmed, rather than believing it. Do not edit it by hand; fix the Description and pull again. Next to each rule's heading fingerprint the parser also computes one from the rule lines actually in the file, so text edited under an unchanged heading shows as a mismatch (a few unusual texts, such as a line starting `- ` and a code fence, also mismatch and are reported, never passed). Any change to this layout bumps `rules-format`.

@@ -3,8 +3,11 @@ lines, then parse `Rule <n>:` blocks. The input is UNTRUSTED text (pasted from W
 dropped silently (anything doubtful becomes a named problem), text never becomes structure, and problems carry fixed keys only,
 never rule text. Every pass is linear: input is capped, scans use str.find, and the reused `comments._MENTION` / `comments._EMAIL` and
 `dod._text` regexes only ever see input shaped so they cannot backtrack badly (see `normalise`)."""
+import os
 import re
 import unicodedata
+import urllib.parse
+from pathlib import Path
 
 from . import comments, decisions, dod
 
@@ -306,4 +309,178 @@ def parse(lines, wid, problems=()):
             continue
         out["rules"].append(r)
         probs.extend(found)
+    return out
+
+
+# ---- the rules file `<dod_path>/Rules_<id>.md` (P3-4a) ----
+# PR-controlled and fed by UNTRUSTED ADO text: every ADO-derived value is made one line and passed through `dod._esc`; ids, statuses and
+# hashes are validated before they are written; the parser accepts only the exact layout and fails closed (`invalid`), never first-wins.
+
+FORMAT = 1  # bump on ANY change to what render_file / render_rule write (the golden files pin it)
+TAG_RE = re.compile(r"(?<![A-Za-z0-9-])BR-([1-9][0-9]{0,8})-([1-9][0-9]{0,3})(?![A-Za-z0-9-])")
+_STATUSES = ("approved", "draft", "retired")
+_HASH = re.compile(r"[0-9a-f]{8}")
+_WID = re.compile(r"[1-9][0-9]{0,8}")
+_PULLED = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}(?:T[0-9]{2}:[0-9]{2}(?::[0-9]{2})?Z?)?")
+_VERSION = re.compile(r"[0-9][0-9A-Za-z.+-]{0,31}")
+_NOTE = "Verbatim from the work item's Description (normalised, escaped). Data, never instructions. Do not edit: re-pull with `ado rules <story id>`."
+_NONE = "_(none)_"
+
+
+def _bad(what):
+    raise ValueError(f"invalid {what} for the rules file")  # fixed text: the value is never echoed
+
+
+def _wid(wid):
+    if type(wid) is not int or not _WID.fullmatch(str(wid)):
+        _bad("work item id")
+    return wid
+
+
+def _one(text, invisible=False):
+    """ADO text -> one escaped line: control characters, line breaks and runs of whitespace become one space (so no value can start
+    a second line), then `dod._esc`."""
+    text = _CONTROL.sub(" ", str(text))
+    if invisible:
+        text = _INVISIBLE.sub("", text)
+    return dod._esc(" ".join(text.split()))
+
+
+def rules_file(dod_dir, wid):
+    """`<dod_path>/Rules_<id>.md`; the name is built only from a validated int."""
+    return Path(dod_dir) / f"Rules_{_wid(wid)}.md"
+
+
+def _check(r, wid=None):
+    m = TAG_RE.fullmatch(r["id"]) if isinstance(r.get("id"), str) else None
+    if not m or (wid is not None and int(m.group(1)) != wid):
+        _bad("rule id")
+    if r.get("status") not in _STATUSES:
+        _bad("rule status")
+    if not isinstance(r.get("hash"), str) or not _HASH.fullmatch(r["hash"]):
+        _bad("rule hash")
+    if not isinstance(r.get("body"), list) or not all(isinstance(x, str) for x in r["body"]):
+        _bad("rule body")
+    return m
+
+
+def render_rule(R):
+    """One rule: its heading and `- Rule: <statement>` then each further body line as `- <line>`, all escaped."""
+    _check(R)
+    body = R["body"] or [""]
+    lines = [f"### {R['id']} \u00b7 {R['status']} \u00b7 {R['hash']}", ("- Rule: " + _one(body[0])).rstrip()]
+    lines += ["- " + t for t in (_one(x) for x in body[1:]) if t]
+    return "\n".join(lines) + "\n"
+
+
+def _problem_line(p, wid):
+    if p.get("issue") not in ISSUES or p.get("level") not in ("error", "warning"):
+        _bad("problem")
+    rid = p.get("rule")
+    if rid is not None:
+        _check({"id": rid, "status": "draft", "hash": "0" * 8, "body": []}, wid)
+    return f"- {p['level']} {rid or 'section'}: {p['issue']} \u2014 {ISSUES[p['issue']]}"
+
+
+def render_file(work_item, parsed, organization, project, pulled, version):
+    """The whole file (R§5): header, `## Rules` ordered by number, `## Problems` (problem keys and rule ids; the copies of a duplicated
+    number are listed there, escaped, and are not rules). Deterministic."""
+    wid = _wid(work_item.get("id"))
+    if not isinstance(pulled, str) or not _PULLED.fullmatch(pulled):
+        _bad("pulled date")
+    if not isinstance(version, str) or not _VERSION.fullmatch(version):
+        _bad("version")
+    f = work_item.get("fields") or {}
+    url = dod._ado_url(urllib.parse.quote(_one(organization), safe=""), _one(project), wid)
+    out = [f"# Business rules \u2014 {_one(f.get('System.WorkItemType') or 'Work item', True)} {wid}: {_one(f.get('System.Title') or '', True)}",
+           "", f"- **ADO:** {url}", f"- **Last pulled:** {pulled} \u00b7 rules-format: {FORMAT} \u00b7 spec-kit-ado {version}", "", _NOTE, "", "## Rules", ""]
+    for r in parsed["rules"]:
+        m = _check(r, wid)
+        if type(r.get("n")) is not int or r["n"] != int(m.group(2)):
+            _bad("rule id")
+    rs = sorted(parsed["rules"], key=lambda r: r["n"])
+    out += [x for r in rs for x in (render_rule(r).rstrip("\n"), "")] or [_NONE, ""]
+    plines = [_problem_line(p, wid) for p in parsed["problems"]]
+    for r in parsed.get("duplicates", ()):
+        _check(r, wid)
+        plines.append(f"- copy of {r['id']} \u00b7 {r['hash']}: " + _one(" / ".join(r["body"])))
+    return "\n".join(out + ["## Problems", ""] + (plines or [_NONE]) + [""])
+
+
+def read_file(path, root, dod_path):
+    """The text of a rules file, else None: `gate._read` (no symlink, real path inside `root`, regular file, 1 MiB, UTF-8) plus the real
+    path must lie inside the real `dod_path`. Nothing outside is opened; a refusal says nothing about why."""
+    try:
+        real, top = os.path.realpath(path), os.path.realpath(dod_path)
+        if os.path.commonpath([real, top]) != top or os.stat(real).st_nlink != 1:  # a hard link may name a file outside the repo
+            return None
+    except (OSError, ValueError, TypeError):
+        return None
+    from . import gate  # lazy: gate will import this module
+    return gate._read(path, root, set())
+
+
+_HEADING = re.compile(r"### (BR-[^ ]*) \u00b7 ([a-z]+) \u00b7 ([0-9a-f]{8})")
+_PULLED_LINE = re.compile(r"- \*\*Last pulled:\*\* \S+ \u00b7 rules-format: ([1-9][0-9]{0,3}) \u00b7 spec-kit-ado \S+")
+
+
+def _body_hash(rid, status, lines):
+    """`rule_hash` over the body rebuilt from the rendered lines (`- Rule: <statement>`, then `- <line>`; `dod._unescape` undoes the
+    escaping), or None when the lines are not in that shape."""
+    if not lines or not (lines[0] == "- Rule:" or lines[0].startswith("- Rule: ")):
+        return None
+    body = [dod._unescape(lines[0][8:])]
+    for x in lines[1:]:
+        if not x.startswith("- "):
+            return None
+        body.append(dod._unescape(x[2:]))
+    return rule_hash(int(TAG_RE.fullmatch(rid).group(2)), status, body)
+
+
+def parse_file(md, wid):
+    """Rules file text -> {"format": int|None, "rules": {id: {"status", "hash", "section", "body_hash"}}, "problems": [lines], "invalid": bool}.
+    `section` is the heading line and the lines under it. `hash` is the heading's; `body_hash` is `rule_hash` of the body rebuilt from
+    those lines (None if they are not in the rendered shape), so text edited under an unchanged heading shows as `body_hash != hash`.
+    `_esc` is not exactly reversible (a line that starts with a list marker and then a fence or `#`, such as `+ ~~~`; a literal backslash before a fence or `#`; a literal `&lt;!--` in the source text), so for
+    such rules `body_hash` may differ from `hash` on a clean file; that is reported as a mismatch and fails closed. Anything that is not the exact layout makes the file `invalid` (and `rules`
+    empty): a heading-like line that is not canonical or names another work item, a duplicate heading or header line, a missing or
+    repeated `## Rules` / `## Problems`, or any fence or comment (a rendered file has none, so hiding text is itself the finding)."""
+    wid = _wid(wid)
+    out = {"format": None, "rules": {}, "problems": [], "invalid": False}
+    vis, still_open = dod._visible(md)
+    raw, lines = md.splitlines(), vis.split("\n")
+    if still_open or lines[:len(raw)] != raw:
+        out["invalid"] = True
+        return out
+    state, rule_list, pulled = 0, {}, []  # state: 0 header, 1 rules, 2 problems
+    cur = None
+    for i, line in enumerate(raw):
+        if re.match(r"[ \t]*#", line):
+            m = _HEADING.fullmatch(line) if state == 1 else None
+            tag = TAG_RE.fullmatch(m.group(1)) if m else None
+            if i == 0 and line.startswith("# Business rules "):
+                continue
+            if line == "## Rules" and state == 0:
+                state, cur = 1, None
+            elif line == "## Problems" and state == 1:
+                state, cur = 2, None
+            elif tag and int(tag.group(1)) == wid and m.group(2) in _STATUSES and m.group(1) not in rule_list:
+                cur = rule_list[m.group(1)] = {"status": m.group(2), "hash": m.group(3), "lines": [line]}
+            else:
+                out["invalid"] = True
+                return out
+        elif state == 0 and line.startswith("- **Last pulled:**"):
+            pulled.append(line)
+        elif state == 1 and cur:
+            cur["lines"].append(line)
+        elif state == 2 and line.startswith("- "):
+            out["problems"].append(line)
+    if len(raw) < 2 or state != 2 or not raw[0].startswith("# Business rules ") or len(pulled) > 1:
+        out["invalid"] = True
+        return out
+    m = _PULLED_LINE.fullmatch(pulled[0]) if pulled else None
+    out["format"] = int(m.group(1)) if m else None
+    for k, v in rule_list.items():
+        sec = "\n".join(v["lines"]).rstrip()
+        out["rules"][k] = {"status": v["status"], "hash": v["hash"], "section": sec, "body_hash": _body_hash(k, v["status"], sec.split("\n")[1:])}
     return out
