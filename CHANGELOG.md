@@ -55,8 +55,14 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   `stack.plan_init` and `stack.apply_init`. The `python-pytest` seed is researched (12 official sources re-fetched on 2026-10-31; test command `PYTHONPATH=src python3 -m pytest -q`, set `strict.test_timeout` >= 900); the `node-typescript` seed is researched too (10 official sources re-fetched on 2026-10-31; test command `npm ci --ignore-scripts && npm test`, set `strict.test_timeout` >= 900; npm only; `--ignore-scripts` also skips the project's own `prepare` and `postinstall`, so such a project must set its own test command); the `salesforce` seed is researched too (13 sources re-fetched on 2026-10-31, none from developer.salesforce.com, which refused automated fetches; test command `npm ci --ignore-scripts && npm run test:unit` for LWC Jest, set `strict.test_timeout` >= 900; `--ignore-scripts` also skips the project's own `prepare` and `postinstall`; Apex tests and deploys are `org_only` and never run by strict).
   See `docs/stack-kits.md` "Creating a profile".
 - `ado stack approve [--story ID] [--by ROLE] [--apply]`: a human approves the profile and sets what strict CI runs. `--apply` refuses
-  (exit 2) unless stdin is a terminal, before any file or the config is read, and when `ADO_CONFIG` is set; a terminal check stops
-  accidents, it is not a security boundary. The preview prints every command verbatim when stdin and stdout are both terminals (stripped of control characters, never
+  (exit 2) unless stdin and stdout are both terminals, before any file or the config is read, and when `ADO_CONFIG` is set. It then prints
+  the full preview and `approval code: <12 hex>` (the first 12 hex of the sha256 over exactly the data that will be written) and approves
+  only when the human types the code back (anything else, end of input or Ctrl-C: nothing written, exit 2, `not confirmed: nothing was
+  approved`); the profile is read again and the code recomputed right before the write, and a change in between is refused (`the profile
+  changed while you were reading it: nothing was approved`). After a successful apply it prints the composed `strict.test_command` it
+  wrote, and the decision line is written last, after the config and the profile, so a failed or killed approval leaves none. The code
+  stops a blind approval and a swap between the prompt and the write; the terminal check and the code are not a security boundary (a
+  program that controls a pseudo-terminal can read and type the code). Input typed before the prompt is discarded (type-ahead is flushed just before the code is printed); that stops only a code typed before the prompt, and a program that can write to the terminal after the prompt, or compute the hash, can still approve. The preview prints every command verbatim when stdin and stdout are both terminals (stripped of control characters, never
   stored, with the current status and a warning when `ADO_CONFIG` is set) and counts only otherwise; a Ctrl-C between writes puts every earlier write back. `--apply` sets `status: approved`, raises `version`, writes `approval {by, date, sha256, decision}` and
   sets or removes `strict.test_command` in `ado.config.json` (parsed values and key order of every other key unchanged, indent, line
   terminator and trailing newline kept, atomic, read back; refused for an invalid, symlinked or non-regular config or a composed command
@@ -80,6 +86,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   `kits.plan_pin`, `kits.apply_pin`, `kits.CHECKLIST`. The preview prints the digests, the scan facts and a fixed five-line checklist, and no
   kit prose (hook and tool names and kit-relative paths are kit-chosen but pattern-limited; the manifest's repository URL is recorded, not
   printed); it says when `--apply` would replace an existing pin. A scan with `unreadable: true` is refused (`incomplete-scan`). `--apply` refuses (exit 2) unless stdin and stdout are both terminals,
+  prints an `approval code: <12 hex>` over the lock entry that will be written and pins only when the human types it back (the kit is read again and the code recomputed right before the write; a program that controls a pseudo-terminal can type it too),
   an unknown id exits 2 with a fixed text, and a `--dev` install whose agent copies are symlinks, a symlink and an empty kit dir cannot be pinned.
   The lock is written atomically (sorted keys, line terminator kept, other kits' entries untouched, an invalid or symlinked existing lock
   refused and left intact); `--by` is validated as for `stack approve --by`. `<id>-config.yml` is not vetted. See `docs/stack-kits.md` "Pinning kits".

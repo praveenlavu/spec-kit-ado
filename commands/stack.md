@@ -86,7 +86,7 @@ Ask: **Search for a kit** / **Build a profile by research** / **Both** / **Stop*
    hint, not a verdict.
 4. **Never install.** Print, for the human to run, the line `specify extension add <id>` and then, after they
    have read the kit, tell them to open their own terminal window and run `ado kits pin <id>` (the preview) and
-   `ado kits pin <id> --apply` (the pin needs a terminal on stdin and stdout). The `!` shell prefix
+   `ado kits pin <id> --apply` (the pin needs a terminal on stdin and stdout; it shows the preview and an `approval code`, which the human types back to pin). The `!` shell prefix
    (`! ado kits pin <id> --apply`) is only a shortcut, not verified to give a terminal. The human runs these (the human runs
    them, not you); never run either yourself. Say when nothing matches.
 
@@ -133,9 +133,10 @@ ado stack approve --apply
 (`--story <id>` records the decision for the product owner). Tell the human that the `unverified` count shown at approval is a lower
 bound: a claim marked unverified only inside a command's `why` is not counted, and the preview prints a `why` only for a command whose `run`
 is `null`, so they should open `ado.stack.json` and read every `why` before approving. The `!` shell prefix (`! ado stack approve`, then
-`! ado stack approve --apply`) is only a shortcut and is not verified to give a terminal: `ado stack approve`
-prints every command in full only when stdin and stdout are both terminals, and `--apply` checks stdin only, so a `!`
-shell with piped output could apply after a counts-only preview. Say
+`! ado stack approve --apply`) is only a shortcut and is not verified to give a terminal: both commands need stdin and
+stdout to be terminals (`--apply` refuses otherwise). Tell the human what `--apply` does: it shows the full preview, then an
+`approval code: <12 hex>`, and approves only when they type that code back (anything else cancels, nothing is written); it then prints
+the `strict.test_command` it wrote. The code is the human's own typing, so never read it out or type it for them. Say
 that approval writes `strict.test_command`, that this is the human's decision, and that you never run either
 command: never run either yourself. Do not offer to, and do not hand-edit `ado.stack.json`,
 `ado.config.json` or `strict.test_command`.

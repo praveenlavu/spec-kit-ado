@@ -431,24 +431,31 @@ def _kits_verify(args):
 
 def _kits_pin(args):
     """`ado kits pin ID [--by ROLE] [--apply]`: a human's approval record of one installed kit in `ado.kits.lock.json`. The preview prints the
-    digests, the scan facts and the fixed checklist only (never kit text, so any output is safe); `--apply` needs a terminal on BOTH stdin
-    and stdout, tested before any file is read (a guard against accidents, not a security boundary: a pseudo-terminal gives a tty)."""
+    digests, the scan facts and the fixed checklist only (never kit text, so any output is safe). `--apply` needs a terminal on BOTH stdin
+    and stdout, tested before any file is read (a guard against accidents, not a security boundary: a pseudo-terminal gives a tty); it
+    prints that preview, then `approval code: <12 hex>`, and pins only when the human types the code (the code covers the lock entry; the
+    kit is read again and the code recomputed right before the write)."""
     if args.apply and not (sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty()):
         raise ValueError("pinning a kit records that a human reviewed it, which only a human may do: run it in your own terminal "
                          "(stdin and stdout must both be a terminal, so the full preview is seen; a guard against accidents, not a security boundary)")
     try:
         prior = kits.load_lock(".")  # a bad lockfile is refused here too, in the preview as well as at --apply
         plan = kits.plan_pin(".", args.id)
+        shown = {k: v for k, v in plan.items() if k != "source"}  # the manifest's URL is kit text: it is recorded, not printed
+        out = {"applied": False, **shown, "source_recorded": plan["source"] is not None}
+        if args.id in prior["kits"]:
+            out["note"] = "this kit is already pinned: --apply REPLACES its entry (version, digests, scan, reviewer)"
         if args.apply:
-            kits.apply_pin(".", plan, args.by)
+            print(json.dumps(out, indent=2))
+            code = kits.pin_code(plan, args.by)
+            if not stack.confirm_code(code):
+                raise ValueError(stack.E_NOT_CONFIRMED)
+            kits.apply_pin(".", plan, args.by, code)
+            out["applied"] = True
     except kits.KitError as e:
         print(f"error: kits pin refused: {e.reason}", file=sys.stderr)
         return 2
-    shown = {k: v for k, v in plan.items() if k != "source"}  # the manifest's URL is kit text: it is recorded, not printed
-    out = {"applied": bool(args.apply), **shown, "source_recorded": plan["source"] is not None}
-    if args.id in prior["kits"]:
-        out["note"] = "this kit is already pinned: --apply REPLACES its entry (version, digests, scan, reviewer)"
-    print(json.dumps(out, indent=2))
+    print(json.dumps(out, indent=2))  # after --apply: the pinned digests (dir_digest, agents_sha256) as written
     return 0
 
 
@@ -489,21 +496,28 @@ def _stack_init(args):
 
 
 def _stack_approve(args):
-    """`ado stack approve`: the human's approval. `--apply` needs a terminal on stdin, tested before any file or the config is read (a guard
-    against accidents, not a security boundary: a pseudo-terminal gives a tty). A terminal preview prints the profile's commands and rules in
-    full (printed, never stored) when stdin and stdout are both terminals; anything else prints counts and lengths only, so unapproved research text never reaches an agent's shell."""
-    tty = bool(sys.stdin and sys.stdin.isatty())
-    shown = tty and bool(sys.stdout and sys.stdout.isatty())  # the full text only to a terminal: not into a pipe or a file
-    if args.apply and not tty:
+    """`ado stack approve`: the human's approval. `--apply` needs a terminal on stdin AND stdout, tested before any file or the config is
+    read (a guard against accidents, not a security boundary: a pseudo-terminal gives a tty). It prints the full preview, then `approval
+    code: <12 hex>`, and approves only when the human types the code; the profile is read again and the code recomputed right before the
+    write. A terminal preview prints the profile's commands and rules in full (printed, never stored) when stdin and stdout are both
+    terminals; anything else prints counts and lengths only, so unapproved research text never reaches an agent's shell."""
+    shown = bool(sys.stdin and sys.stdin.isatty()) and bool(sys.stdout and sys.stdout.isatty())  # the full text only to a terminal: not into a pipe or a file
+    if args.apply and not shown:
         raise ValueError("approving a stack profile changes what strict CI runs, which only a human may do: run it in your own terminal "
-                         "(this shell has no terminal on stdin; a guard against accidents, not a security boundary)")
+                         "(stdin and stdout must both be a terminal, so the full preview is seen; a guard against accidents, not a security boundary)")
     if args.apply:
         if os.environ.get("ADO_CONFIG"):
             raise ValueError(stack._E_ENV)
         cfg = Config.load()
-        res = stack.apply_approve(".", "ado.config.json", args.by, args.story, cfg.dod_path)
+        prep = stack.prepare_approve(".", "ado.config.json", args.by, args.story, cfg.dod_path)
+        plan = prep["plan"]
+        print(stack.preview_text(plan["profile"], plan["test_command"], prep["config_command"], plan["version"], args.story, args.by, plan["status"]))
+        if not stack.confirm_code(prep["code"]):
+            raise ValueError(stack.E_NOT_CONFIRMED)
+        res = stack.apply_approve(".", "ado.config.json", args.by, args.story, cfg.dod_path, prep["code"])
         print(json.dumps({"applied": True, "version": res["version"], "sha256": res["sha256"], "by": res["by"], "date": res["date"],
-                          "decision": res["decision"], "test_command": res["config"]}, indent=2))
+                          "decision": res["decision"], "test_command": res["config"],
+                          "command": stack._clean(res["test_command"], stack.MAX_PROFILE, markup=False) if res["test_command"] is not None else None}, indent=2))
         return 0
     try:
         cfg = Config.load()

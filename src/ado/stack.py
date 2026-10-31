@@ -13,6 +13,7 @@ import posixpath
 import re
 import shlex
 import stat
+import sys
 import tempfile
 import unicodedata
 import urllib.parse
@@ -951,6 +952,49 @@ _E_ROLE = "--by must be a role of 1 to 40 letters, digits and spaces"
 _E_STORY = "--story must be a work item id (digits only)"
 _E_VERSION = "the profile version cannot be raised any further"
 _E_UNDONE = "some files could not be put back: check ado.config.json, ado.stack.json and the decisions file by hand"
+E_NOT_CONFIRMED = "not confirmed: nothing was approved"
+_E_SWAPPED = "the profile changed while you were reading it: nothing was approved"
+_CODE_PROMPT = "Type the approval code to approve, anything else cancels: "
+_MAX_ANSWER = 256
+
+
+def approval_code(fields):
+    """The first 12 hex of the sha256 over `fields` (a dict) as canonical JSON (sorted keys, no spaces): the code a human types to approve
+    exactly the data that will be written. It stops a blind approval and a swap between the prompt and the write; anyone who can run
+    code in the human's terminal can compute or read it too (process enforcement, not a security boundary)."""
+    return hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()[:12]
+
+
+def flush_typeahead():
+    """Throw away what was typed into the terminal before now, so a code typed before the prompt cannot approve. Quietly does nothing
+    where stdin has no terminal device (no termios, no file descriptor). It stops only input typed BEFORE the prompt."""
+    try:
+        import termios
+    except ImportError:
+        return
+    try:
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+    except (AttributeError, ValueError, OSError, termios.error):
+        pass
+
+
+def confirm_code(code):
+    """Print `approval code: <code>` and read ONE line from stdin, which the caller verified is a terminal (never a file or a pipe: tested
+    again here). True only when the line, stripped of surrounding whitespace, equals `code`; end of input, Ctrl-C, an unreadable line, a
+    stdin that is not a terminal and any other text are False."""
+    if not (sys.stdin and sys.stdin.isatty()):  # checked before the code is printed: nothing is shown to a pipe or a file
+        return False
+    flush_typeahead()
+    print(f"approval code: {code}")
+    print(_CODE_PROMPT, end="", flush=True)
+    try:
+        line = sys.stdin.readline(_MAX_ANSWER)
+    except (KeyboardInterrupt, ValueError, OSError):  # ValueError covers a bad encoding and a closed stream
+        print()
+        return False
+    if not line.endswith("\n"):
+        print()
+    return line.strip() == code
 
 
 def valid_story(v):
@@ -1112,22 +1156,39 @@ def _read_config(config_path):
     return path, raw, data
 
 
-def apply_approve(root=".", config_path="ado.config.json", by="tech lead", story_id=None, dod_path="dod"):
-    """Approve the profile and write `strict.test_command`: see `_apply_approve`. A config nested too deeply to compare is a bad config."""
+def prepare_approve(root=".", config_path="ado.config.json", by="tech lead", story_id=None, dod_path="dod"):
+    """Everything `apply_approve` would write, read now and written nowhere: `{"plan", "config_command", "code", "write"}`. `plan` is
+    `plan_approve`'s, `config_command` the config's current `strict.test_command`, `code` the `approval_code` over exactly the data that
+    will be written, and `write()` writes it (see `_prepare_approve` for the refusals). A config nested too deeply to compare is a bad config."""
     try:
-        return _apply_approve(root, config_path, by, story_id, dod_path)
+        return _prepare_approve(root, config_path, by, story_id, dod_path)
+    except RecursionError:
+        raise ValueError(_E_CFGBAD) from None
+
+
+def apply_approve(root=".", config_path="ado.config.json", by="tech lead", story_id=None, dod_path="dod", expect_code=None):
+    """Approve the profile and write `strict.test_command`. With `expect_code` (what the human typed in `confirm_code`) everything is read
+    again and the code recomputed right before the first write: a different code refuses, nothing written. A config nested too deeply to
+    compare is a bad config."""
+    try:
+        prep = _prepare_approve(root, config_path, by, story_id, dod_path)
+        if expect_code is not None and prep["code"] != expect_code:
+            raise ValueError(_E_SWAPPED)
+        return prep["write"]()
     except RecursionError:  # a config nested too deeply to compare: the files were put back by the inner handler
         raise ValueError(_E_CFGBAD) from None
 
 
-def _apply_approve(root, config_path, by, story_id, dod_path):
-    """Approve `<root>/ado.stack.json`: `{"version", "sha256", "test_command", "decision", "config", "by", "date"}`. The profile becomes
+def _prepare_approve(root, config_path, by, story_id, dod_path):
+    """Read and check everything an approval of `<root>/ado.stack.json` needs; write nothing. The returned `write()` approves: `{"version",
+    "sha256", "test_command", "decision", "config", "by", "date"}`. The profile becomes
     `approved` with `version + 1` and `approval {by, date, sha256, decision}`; `strict.test_command` in the config is set to the composed
     command or removed (`config` says set, removed or unchanged); with `story_id` one `kind: decision` line goes to the story's decisions
     file. The config is parsed, changed and written back with every other key, value and key order unchanged, laid out like the file was.
     Refused (fixed texts, nothing written): `ADO_CONFIG` set, a bad `by` or `story_id`, no usable profile, a composed command over 500, a
-    config that is missing, a symlink, not a regular single-link file, or invalid. Order: decision, config, profile; each is checked
-    before it replaces the file, and when a later step fails the earlier ones are put back."""
+    config that is missing, a symlink, not a regular single-link file, or invalid. Order of the writes: config, profile, and the decision
+    line LAST, so a failure or a kill never leaves a decision line for an approval that did not happen; each is checked before it
+    replaces the file, and when a later step fails the earlier ones are put back."""
     if os.environ.get("ADO_CONFIG"):
         raise ValueError(_E_ENV)
     if not (isinstance(by, str) and _ROLE.fullmatch(by)):
@@ -1185,30 +1246,37 @@ def _apply_approve(root, config_path, by, story_id, dod_path):
     config_text = None if _ordered(new_cfg) == _ordered(cfg) else _config_text(old_config.decode("utf-8"), new_cfg)
     if config_text is not None:
         check_config(config_text.encode("utf-8"))  # fail before the first write
-    done = []  # what to put back, newest last: (path, old text or None for a file that did not exist)
-    try:
-        if dec_path is not None:
-            got = decisions.apply_add(dec_path, story_id, "decision", note, "ado stack approve")
-            done.append((dec_path, old_md))  # before the id check: a line written under an unexpected id is rolled back too
-            if got != d_id:
-                raise ValueError(_E_CHANGED)
-        if config_text is not None:
-            _atomic_replace(cpath, config_text, check_config, old_config)
-            done.append((cpath, old_config.decode("utf-8")))
-        _atomic_replace(ppath, profile_text, check_profile, old_profile)
-    except BaseException as e:  # also Ctrl-C: the decision line must not outlive an approval that did not happen
-        failed = False
-        for path, old in reversed(done):
-            try:
-                if old is None:
-                    path.unlink()
-                else:
-                    _atomic_replace(path, old)
-            except (OSError, ValueError):
-                failed = True
-        if not isinstance(e, (ValueError, OSError, UnicodeError)):
-            raise
-        why = str(e) if isinstance(e, ValueError) else "a file could not be written"
-        raise ValueError(f"nothing was approved: {why}" + (f"; {_E_UNDONE}" if failed else "")) from None
-    return {"version": version, "sha256": digest, "test_command": composed, "decision": approval.get("decision"), "by": by, "date": approval["date"],
-            "config": "unchanged" if config_text is None else "set" if composed is not None else "removed"}
+    code = approval_code({"by": by, "config_sha256": hashlib.sha256(config_text.encode("utf-8")).hexdigest() if config_text is not None else None,
+                          "decision": approval.get("decision"), "profile_sha256": digest, "story": story_id, "test_command": composed, "version": version})
+
+    def write():
+        done = []  # what to put back, newest last: (path, old text or None for a file that did not exist)
+        try:
+            if config_text is not None:
+                _atomic_replace(cpath, config_text, check_config, old_config)
+                done.append((cpath, old_config.decode("utf-8")))
+            _atomic_replace(ppath, profile_text, check_profile, old_profile)
+            done.append((ppath, old_profile.decode("utf-8")))
+            if dec_path is not None:  # last: no decision line exists for an approval that did not complete
+                got = decisions.apply_add(dec_path, story_id, "decision", note, "ado stack approve")
+                done.append((dec_path, old_md))  # before the id check: a line written under an unexpected id is rolled back too
+                if got != d_id:
+                    raise ValueError(_E_CHANGED)
+        except BaseException as e:  # also Ctrl-C: nothing may outlive an approval that did not happen
+            failed = False
+            for path, old in reversed(done):
+                try:
+                    if old is None:
+                        path.unlink()
+                    else:
+                        _atomic_replace(path, old)
+                except (OSError, ValueError):
+                    failed = True
+            if not isinstance(e, (ValueError, OSError, UnicodeError)):
+                raise
+            why = str(e) if isinstance(e, ValueError) else "a file could not be written"
+            raise ValueError(f"nothing was approved: {why}" + (f"; {_E_UNDONE}" if failed else "")) from None
+        return {"version": version, "sha256": digest, "test_command": composed, "decision": approval.get("decision"), "by": by,
+                "date": approval["date"], "config": "unchanged" if config_text is None else "set" if composed is not None else "removed"}
+
+    return {"plan": plan, "config_command": strict_in.get("test_command") if isinstance(strict_in, dict) else None, "code": code, "write": write}

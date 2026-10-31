@@ -531,6 +531,7 @@ _E_BY = "--by must be a role of 1 to 40 letters, digits and spaces"
 _E_LOCK = f"{LOCK_FILE} cannot be trusted (a symlink, not a regular file, or invalid); nothing was changed"
 _E_LOCK_BACK = f"{LOCK_FILE} could not be read back identical; check the file"
 _E_CHANGED = "the kit or the lockfile changed since the preview; nothing was changed"
+_E_SWAPPED = "the kit changed while you were reading it: nothing was pinned"
 
 
 def _repository(text):
@@ -575,14 +576,24 @@ def _lock_entry(plan, by):
                     "flags": {k: v["count"] for k, v in sc["flags"].items()}}}
 
 
-def apply_pin(root, plan, by):
+def pin_code(plan, by):
+    """The approval code (`stack.approval_code`) over exactly the lock entry that `apply_pin` writes for `plan` and `by`, except the date."""
+    entry = _lock_entry(plan, by)
+    entry["reviewed"] = {"by": by}
+    return stack.approval_code({"id": plan["id"], "entry": entry})
+
+
+def apply_pin(root, plan, by, expect_code=None):
     """Write `plan` (from `plan_pin`) into `<root>/ado.kits.lock.json` as one kit entry with `reviewed {by, date}` and a compact `scan`,
     keys sorted, the file's line terminator kept, every other kit entry untouched. Refused with a fixed ValueError and nothing changed:
     a bad `by` (same rule as `stack approve --by`), a kit or agent copy that no longer matches `plan`, an existing lockfile that is a
-    symlink, not a regular file, invalid, or changed while writing. Written through a temp file in the same directory and `os.replace`."""
+    symlink, not a regular file, invalid, or changed while writing. With `expect_code` (what the human typed) the kit is read again and the
+    code recomputed right before the write: a different code refuses. Written through a temp file in the same directory and `os.replace`."""
     if not (isinstance(by, str) and stack._ROLE.fullmatch(by)):
         raise ValueError(_E_BY)
     fresh = plan_pin(root, plan["id"])
+    if expect_code is not None and pin_code(fresh, by) != expect_code:
+        raise ValueError(_E_SWAPPED)
     if any(fresh[k] != plan[k] for k in ("version", "source", "dir_digest", "agents_sha256", "scan")):
         raise ValueError(_E_CHANGED)
     try:

@@ -1270,13 +1270,13 @@ def test_stack_show_documented_with_exposure_rules_and_tripwire_wording():
 
 def test_stack_approve_documented_as_a_terminal_only_write_that_sets_the_test_command():
     row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `stack approve"))
-    for needle in ("unless stdin is a terminal", "before any file or the config is read", "`ADO_CONFIG` is set", "not a security boundary", "the approval is a record, not proof",
+    for needle in ("unless stdin and stdout are both terminals", "before any file or the config is read", "`ADO_CONFIG` is set", "not a security boundary", "the approval is a record, not proof",
                    "verbatim and in full", "counts and the composed command's length only, never profile text", "parsed values and key order of every other key unchanged",
                    "over 500 characters is refused", "`--story ID`", "`ado setup` never writes it", "puts the earlier ones back", "| none |"):
         assert needle in row, needle
     docs = _flat("docs/stack-kits.md")
     for needle in ("## Approving a profile", "the only place `strict.test_command` is written once a profile exists", "never stored in a file or log",
-                   "the agent never runs it", "refuses (exit 2, fixed text) unless stdin is a terminal", "approval is a record, not proof",
+                   "the agent never runs it", "refuses (exit 2, fixed text) unless stdin and stdout are both terminals", "approval is a record, not proof",
                    "process enforcement, not a security boundary", "the validator also refuses any other `approval.by`"):
         assert needle in docs, needle
     conf = _flat("docs/configuration.md")
@@ -1287,6 +1287,30 @@ def test_stack_approve_documented_as_a_terminal_only_write_that_sets_the_test_co
     assert "`ado stack approve --apply`) | ⛔ Human only" in hitl and "changes what strict CI runs" in hitl and "it is not a security boundary" in hitl
     log = _flat("CHANGELOG.md")
     assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack approve [--story ID] [--by ROLE] [--apply]`") < log.index("## 0.2")
+
+
+def test_the_approval_code_is_documented_honestly_for_approve_and_pin():
+    """P2-16b: `--apply` shows the preview and an approval code that the human types back; the docs say what that does and does not stop."""
+    for doc in ("README.md", "AGENTS.md", "rules/hitl.md", "docs/stack-kits.md", "CHANGELOG.md", "commands/stack.md"):
+        text = _flat(doc)
+        assert "approval code: <12 hex>" in text or "`approval code`" in text, doc
+        assert "types" in text and ("back" in text or "them back" in text), doc
+    stack_docs = _flat("docs/stack-kits.md")
+    for needle in ("- **The approval code.**", "the first 12 hex of the sha256 over exactly the data that will be written", "never from a file or a pipe",
+                   "`not confirmed: nothing was approved`", "`the profile changed while you were reading it: nothing was approved`",
+                   "`the kit changed while you were reading it: nothing was pinned`", "prints the composed `strict.test_command` it wrote",
+                   "The config, the profile and, last, the decision line are written in that order", "so no decision line exists for an approval that did not complete",
+                   "it stops a blind approval", "a swap between the prompt and the write", "does not stop a program that controls a pseudo-terminal",
+                   "`--apply` prints the same preview, then `approval code: <12 hex>`", "a program that controls a pseudo-terminal can read and type it"):
+        assert needle in stack_docs, needle
+    assert "`--apply` checks stdin only" not in stack_docs and "nothing binds them" not in stack_docs
+    assert "refuses (exit 2) unless stdin and stdout are both terminals" in " ".join(_readme_row("kits pin").split())
+    for doc in ("README.md", "rules/hitl.md", "CHANGELOG.md"):
+        assert "not a security boundary" in _flat(doc) and ("can type the code" in _flat(doc) or "can read and type the code" in _flat(doc)), doc
+    for doc in ("README.md", "rules/hitl.md", "CHANGELOG.md", "docs/stack-kits.md"):
+        text = _flat(doc)
+        assert "type-ahead is flushed" in text and "stops only a code typed before the prompt" in text and "or compute the hash, can still approve" in text, doc
+    assert "never read it out or type it for them" in _flat("commands/stack.md") and "checks stdin only" not in _flat("commands/stack.md")
 
 
 def test_stack_approve_full_preview_needs_both_terminals_and_the_bang_prefix_is_not_relied_on():
@@ -1412,7 +1436,7 @@ def test_kits_pin_documented_as_a_terminal_only_approval_record():
         assert "ado kits pin" in _flat(doc) or "`kits pin" in _flat(doc), doc
     kits = _flat("docs/stack-kits.md")
     for phrase in ("**Pinning: `ado kits pin <id> [--by ROLE] [--apply]`.**", "`human_checklist`", "five fixed lines", "`error: kits pin refused: unknown`",
-                   "**`--apply` refuses (exit 2, fixed text) unless stdin AND stdout are both terminals**", "**`--dev` installs whose registered agent copies are symlinks cannot be pinned**", "`error: kits pin refused: incomplete-scan`", "pins the kit **as it is now**", "**replaces**",
+                   "**`--apply` refuses (exit 2, fixed text) unless stdin AND stdout are both terminals**", "**`--dev` installs whose registered agent copies are symlinks cannot be pinned**", "`error: kits pin refused: incomplete-scan`", "pins only when the human types the code back", "**replaces**",
                    "**`<id>-config.yml` is not vetted**", "human approval record, process enforcement, not a sandbox", "`source_recorded`",
                    "left byte-identical", "exactly as `ado stack approve --by`"):
         assert phrase in kits, phrase
@@ -1540,7 +1564,7 @@ def test_finding_ids_files_and_exit_codes_of_piece_2_are_documented_and_match_th
         assert "ado.stack.json" in text and "ado.kits.lock.json" in text, doc
     # exit codes, per verb, in the README rows and in the configuration doc
     for name, needle in (("stack detect", "exit 2 with `error: cannot read git history here`"), ("stack show", "`--check`: in strict mode exit 2"),
-                         ("stack init", "Exit 2 for a refusal or an invalid profile"), ("stack approve", "refuses (exit 2) unless stdin is a terminal"),
+                         ("stack init", "Exit 2 for a refusal or an invalid profile"), ("stack approve", "refuses (exit 2) unless stdin and stdout are both terminals"),
                          ("kits verify", "Exit 2 on any unpinned or changed kit"), ("kits pin", "refuses (exit 2) unless stdin and stdout are both terminals")):
         assert needle in " ".join(_readme_row(name).split()), name
     assert "use only `0` (success, or a preview) and `2`" in _flat("docs/configuration.md")

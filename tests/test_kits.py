@@ -1,8 +1,7 @@
 import datetime
 import json
 import os
-import pty
-import select
+import re
 import shutil
 import subprocess
 import sys
@@ -13,7 +12,7 @@ import pytest
 from ado import __main__ as cli
 from ado import kits, stack, strict
 from ado.config import ConfigInvalid
-from tests.conftest import git
+from tests.conftest import TypedStdin, git, run_in_pty, shown_code, terminal
 
 KIT = ".specify/extensions/sf"
 ROOT = Path(__file__).resolve().parent.parent
@@ -386,7 +385,11 @@ def test_cli_kits_verify(repo, monkeypatch, capsys):
 
 # ---- ado kits pin (P2-9a): a human's approval record, terminal only ----
 def tty(monkeypatch, on=True, out=None):
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: on)
+    """stdin (and, unless `out` says otherwise, stdout) is a terminal or not. A terminal stdin types the approval code it reads off the screen."""
+    if on:
+        monkeypatch.setattr(sys, "stdin", TypedStdin())
+    else:
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: on if out is None else out)
 
 
@@ -433,41 +436,91 @@ def test_pin_refuses_without_tty(repo, monkeypatch, capsys):
         assert not (repo / kits.LOCK_FILE).exists()
 
 
-def _run_in_pty(repo, *args, stdout_pty=True):
-    """`ado kits pin ...` as a real process: stdin a pty, stdout a pty (or a pipe)."""
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
-    master, slave = pty.openpty()
-    proc = subprocess.Popen([sys.executable, "-m", "ado", "kits", "pin", *args], cwd=repo, env=env, stdin=slave,
-                            stdout=slave if stdout_pty else subprocess.PIPE, stderr=subprocess.PIPE)
-    os.close(slave)
-    out = b""
-    try:
-        while proc.poll() is None or select.select([master], [], [], 0)[0]:
-            if select.select([master], [], [], 0.1)[0]:
-                try:
-                    chunk = os.read(master, 4096)
-                except OSError:
-                    break
-                if not chunk:
-                    break
-                out += chunk
-        piped, err = proc.communicate(timeout=60)
-    finally:
-        os.close(master)
-    return proc.returncode, (out if stdout_pty else piped).decode(), err.decode()
+def _docs(screen):
+    """The JSON documents on a screen, in order (the pin preview, then the result of --apply)."""
+    dec, i, out = json.JSONDecoder(), 0, []
+    while (i := screen.find("{", i)) != -1:
+        doc, i = dec.raw_decode(screen, i)
+        out.append(doc)
+    return out
 
 
-def test_pin_in_a_real_process_needs_stdin_and_stdout_terminals(repo):
-    env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
-    res = subprocess.run([sys.executable, "-m", "ado", "kits", "pin", "sf", "--apply"], cwd=repo, env=env, stdin=subprocess.DEVNULL,
-                         capture_output=True, text=True)
-    assert res.returncode == 2 and res.stdout == "" and "only a human may do" in res.stderr
-    code, out, err = _run_in_pty(repo, "sf", "--apply", stdout_pty=False)  # `ado kits pin sf --apply | tee x`
-    assert code == 2 and "only a human may do" in err and not (repo / kits.LOCK_FILE).exists()
-    code, out, err = _run_in_pty(repo, "sf", "--apply")
+def test_apply_needs_both_stdin_and_stdout_terminals(repo):
+    for kw in ({"stdin_pty": False, "stdout_pty": False}, {"stdin_pty": False}, {"stdout_pty": False}):  # `< /dev/null`, `| tee x`
+        code, out, err = run_in_pty(["kits", "pin", "sf", "--apply"], repo, **kw)
+        assert code == 2 and out == "" and "only a human may do" in err and not (repo / kits.LOCK_FILE).exists()
+    code, out, err = run_in_pty(["kits", "pin", "sf", "--apply"], repo)
     assert code == 0, err
-    assert json.loads(out)["applied"] is True and set(json.loads((repo / kits.LOCK_FILE).read_text())["kits"]) == {"sf"}
+    assert [d["applied"] for d in _docs(out)] == [False, True] and set(json.loads((repo / kits.LOCK_FILE).read_text())["kits"]) == {"sf"}
     assert kits.verify(repo, kits.load_lock(repo))["kits"][0] == {"id": "sf", "state": "pinned"}
+
+
+def test_a_code_typed_before_the_prompt_is_discarded(repo):
+    """The code is computable beforehand; what is typed into the terminal before the prompt is flushed, so it cannot pin."""
+    lock = repo / kits.LOCK_FILE
+    early = kits.pin_code(kits.plan_pin(repo, "sf"), "tech lead")
+    code, out, err = run_in_pty(["kits", "pin", "sf", "--apply"], repo, early=early, answer="")  # then end of input at the prompt
+    assert code == 2 and err.endswith("error: not confirmed: nothing was approved\n") and not lock.exists(), err
+    code, out, err = run_in_pty(["kits", "pin", "sf", "--apply"], repo)  # the same code typed after the prompt still pins
+    assert code == 0 and lock.exists(), err
+
+
+def test_apply_requires_the_typed_code(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    lock = repo / kits.LOCK_FILE
+    for answer in ("nope\n", "\n", "   \n", "", KeyboardInterrupt, "x" * 5000, "\x00\n", "0" * 12 + "\n"):
+        stdin = terminal(monkeypatch, answer)
+        code, out, err = pin_cli(capsys, "sf", "--apply")
+        assert code == 2 and err == "error: not confirmed: nothing was approved\n" and stdin.lines == 1 and not lock.exists()
+        assert [d["applied"] for d in _docs(out)] == [False]  # the preview was shown; no second document
+    for kw in ({"answer": "nope"}, {"answer": ""}, {"interrupt": True}):  # a real process: wrong text, end of input, Ctrl-C
+        code, out, err = run_in_pty(["kits", "pin", "sf", "--apply"], repo, **kw)
+        assert code == 2 and err.endswith("error: not confirmed: nothing was approved\n") and not lock.exists(), err
+
+
+def test_apply_with_the_right_code_writes_and_prints_the_digests(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    stdin = terminal(monkeypatch, None)
+    code, out, err = pin_cli(capsys, "sf", "--apply", "--by", "Tech Lead")
+    assert code == 0 and stdin.lines == 1
+    preview, result = _docs(out)
+    assert out.index("human_checklist") < out.index("approval code: ") < out.rindex('"applied": true')  # the full preview, then the code
+    assert preview["applied"] is False and result["applied"] is True and result["id"] == "sf"
+    entry = json.loads((repo / kits.LOCK_FILE).read_text())["kits"]["sf"]
+    assert result["dir_digest"] == entry["dir_digest"] and result["agents_sha256"] == entry["agents_sha256"]
+    assert shown_code(out) == kits.pin_code(kits.plan_pin(repo, "sf"), "Tech Lead")
+    terminal(monkeypatch, "  " + shown_code(out) + " \t\n")  # surrounding whitespace is ignored (the same kit, so the same code)
+    assert pin_cli(capsys, "sf", "--apply", "--by", "Tech Lead")[0] == 0
+
+
+def test_the_pin_code_covers_what_is_written_and_a_plain_preview_prints_none(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    plan = kits.plan_pin(repo, "sf")
+    code = kits.pin_code(plan, "tech lead")
+    assert re.fullmatch(r"[0-9a-f]{12}", code) and code == kits.pin_code(plan, "tech lead")
+    assert kits.pin_code(plan, "po") != code
+    for field, value in (("version", "9.9.9"), ("source", "https://example.com/x"), ("dir_digest", "e" * 64), ("agents_sha256", "f" * 64)):
+        assert kits.pin_code({**plan, field: value}, "tech lead") != code, field
+    assert kits.pin_code({**plan, "scan": {**plan["scan"], "commands": plan["scan"]["commands"] + 1}}, "tech lead") != code
+    for on in (False, True):
+        tty(monkeypatch, on)
+        assert "approval code" not in pin_cli(capsys, "sf")[1]
+
+
+def test_kit_edited_after_the_prompt_is_refused(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    lock = repo / kits.LOCK_FILE
+    msg = "error: the kit changed while you were reading it: nothing was pinned\n"
+    terminal(monkeypatch, None, before=lambda code: _put(repo, f"{KIT}/commands/specify.md", "edited after the prompt\n"))  # between prompt and code
+    code, out, err = pin_cli(capsys, "sf", "--apply")
+    assert code == 2 and err == msg and not lock.exists() and [d["applied"] for d in _docs(out)] == [False]
+    # the same in a real process: the file is edited while the child waits for the line
+    _put(repo, f"{KIT}/commands/specify.md", "back\n")
+    code, out, err = run_in_pty(["kits", "pin", "sf", "--apply"], repo, before=lambda c: _put(repo, f"{KIT}/commands/specify.md", "edited again\n"))
+    assert code == 2 and err.endswith(msg) and not lock.exists()
+    # an edit that changes nothing the entry records is no swap
+    terminal(monkeypatch, None, before=lambda code: _put(repo, f"{KIT}/local-config.yml", "other: 1\n"))
+    assert pin_cli(capsys, "sf", "--apply")[0] == 0 and lock.exists()
 
 
 def test_pin_preview_checklist_and_no_kit_text(repo, monkeypatch, capsys):

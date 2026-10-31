@@ -228,7 +228,7 @@ exists. It changes what strict CI runs, so the agent never runs it: after `ado s
   **The `UNVERIFIED` count is a lower bound.** It counts only items whose source is the literal `unverified`. A claim marked unverified
   inside a command's `why` is not counted, but the preview prints every command's `why` under the command. Read every `why` before you
   approve (the shipped seeds each have such claims: see "Seed profiles").
-- **`--apply`** refuses (exit 2, fixed text) unless stdin is a terminal, before it reads any file or the config, and refuses when
+- **`--apply`** refuses (exit 2, fixed text) unless stdin and stdout are both terminals, before it reads any file or the config, and refuses when
   `ADO_CONFIG` is set. It sets `status: approved`, raises `version` by 1 and writes `approval {by, date, sha256, decision}`: `--by` is a
   role (letters, digits and spaces with at least one letter or digit, at most 40, default `tech lead`; the validator also refuses any other `approval.by`), `sha256` is the
   hash of the profile as written, `decision` is `US<id> D<n>` when `--story` is given. A draft, a changed or an already approved profile can
@@ -239,10 +239,21 @@ exists. It changes what strict CI runs, so the agent never runs it: after `ado s
   kept (spacing may change). The new text is read back and checked by the config validator before it replaces the file (atomic, same
   mode). A missing, invalid, duplicate-key, symlinked or non-regular config is refused and left as it was.
 - **`--story ID`** (digits) adds one decision line, `Stack profile v<n> approved, sha256 <12 hex>`, to `<dod_path>/Decisions_<id>.md`,
-  so the normal decisions post carries it to the PO. The decision, config and profile are written in that order, each checked before it
-  replaces the file, and a failed step puts the earlier ones back.
+  so the normal decisions post carries it to the PO. The config, the profile and, last, the decision line are written in that order, each
+  checked before it replaces the file, and a failed step (or a Ctrl-C) puts the earlier ones back, so no decision line exists for an
+  approval that did not complete.
+- **The approval code.** `--apply` prints the full preview (the one a terminal gets without `--apply`), then `approval code: <12 hex>`: the first
+  12 hex of the sha256 over exactly the data that will be written (canonical JSON, sorted keys: the hash of the approved profile, the composed
+  command, the version, `--by`, `--story`, the decision id and the hash of the config text). It reads one line from the terminal that was
+  checked as stdin, never from a file or a pipe, and goes on only when that line, stripped of surrounding whitespace, equals the code.
+  Anything else, end of input (Ctrl-D) or Ctrl-C writes nothing and exits 2 with `not confirmed: nothing was approved`. Right before the
+  write the profile and the config are read again and the code is recomputed: a different code (the file was edited after the preview)
+  is refused with `the profile changed while you were reading it: nothing was approved`. After a successful apply it prints the
+  composed `strict.test_command` it wrote (or that it removed the key). The plain preview prints no code.
+  What the code is for: it stops a blind approval (you have to read the screen to know it) and a swap between the prompt and the write. It
+  does not stop a program that controls a pseudo-terminal: it can read the screen and type the code, or compute the hash itself. Input typed before the prompt is discarded (the terminal's type-ahead is flushed just before the code is printed); that stops only a code typed before the prompt, and a program that can write to the terminal after the prompt, or compute the hash, can still approve.
 
-The terminal check stops accidents; it is not a security boundary (a pseudo-terminal gives a tty, and anyone can edit the files), and the
+The terminal check and the typed code stop accidents; they are not a security boundary (a pseudo-terminal gives a tty and can type the code, and anyone can edit the files), and the
 approval is a record, not proof: trust comes from reviewing the commit, and in strict CI from the target branch's copy. This is process
 enforcement, not a security boundary.
 
@@ -325,8 +336,8 @@ prompt command: the `ado` CLI never fetches a web page. `speckit.ado.setup` call
      org, a server or credentials goes in `org_only`: the agent shows it and runs it only after the human's explicit yes for that run.
 4. **Hand-off.** The agent writes `.ado/stack-draft.json` (gitignored), previews with `ado stack init --from .ado/stack-draft.json`, and
    runs `--apply` only after the human's yes. It then tells the human to open their own terminal window and run `ado stack approve` and
-   `ado stack approve --apply` (the `!` prefix is only a shortcut, not verified to give a terminal, and `--apply` checks stdin only; see
-   "Approving a profile") and never runs them itself.
+   `ado stack approve --apply` (the `!` prefix is only a shortcut, not verified to give a terminal, and both need stdin and stdout to be
+   terminals; `--apply` shows an approval code the human types back; see "Approving a profile") and never runs them itself.
 
 Under `--workflow` the command asks nothing and writes nothing: it stops with the fix. The `ado-lifecycle` workflow has no step for this
 command; its shell step `stack-check` (`ado stack show --check`, after `pull`, before `review-spec`) stops a strict run on a missing,
@@ -395,7 +406,7 @@ vetted, and a `--dev` install cannot be pinned). The preview prints no prose fro
 (`[A-Za-z0-9._-]{1,40}`) and kit-relative paths (at most 200 characters of `[A-Za-z0-9._/-]`, else `<path #n>`); none can hold an escape
 character, a space or a newline, but they are not fixed text. Reading the kit is the human's job, not the checklist's. When the kit is already pinned the preview adds a fixed `note` that `--apply` **replaces** that entry. **`--apply` refuses (exit 2, fixed text) unless stdin AND stdout are both
 terminals**, tested before any file is read, so the human has the full output in front of them; the check stops accidents and is not a
-security boundary (a pseudo-terminal gives a tty). Preview and `--apply` are separate runs and nothing binds them (as for `stack approve`): `--apply` recomputes everything and pins the kit **as it is now**, so compare the digests in its output with the ones you saw in the preview. It writes
+security boundary (a pseudo-terminal gives a tty). `--apply` prints the same preview, then `approval code: <12 hex>` (the first 12 hex of the sha256 over the id and exactly the lock entry it will write, without the date), and pins only when the human types the code back; anything else, end of input or Ctrl-C writes nothing and exits 2 with `not confirmed: nothing was approved`. The kit and the agent copies are read again and the code recomputed right before the write: a kit that changed after the preview is refused (`the kit changed while you were reading it: nothing was pinned`) and the result prints the digests it pinned. As for `stack approve`, the code stops a blind pin and a swap between the prompt and the write; a program that controls a pseudo-terminal can read and type it. Input typed before the prompt is discarded (the terminal's type-ahead is flushed just before the code is printed); that stops only a code typed before the prompt, and a program that can write to the terminal after the prompt, or compute the hash, can still approve. It writes
 the entry `{version, source, catalog_sha256, dir_digest, agents_sha256, reviewed: {by, date}, scan: {commands, hooks, scripts, tools,
 flags: {network, installs, writes, secrets, allowed_tools}}}` (`catalog_sha256` is always `null` for now: Spec Kit's catalog cache is not read). `--by` is a role (letters, digits, spaces, at most
 40; never a name; default `tech lead`), validated exactly as `ado stack approve --by`. The write is atomic (a temp file in the repository

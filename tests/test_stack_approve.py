@@ -8,6 +8,7 @@ import datetime
 import json
 import os
 import pty
+import re
 import stat
 import subprocess
 import sys
@@ -18,7 +19,7 @@ import pytest
 from ado import decisions, stack
 from ado.__main__ import main
 from ado.config import Config
-from tests.conftest import git
+from tests.conftest import TypedStdin, git, run_in_pty, shown_code, terminal
 from tests.test_stack_show import MARKER, approve, profile, put
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,8 +37,11 @@ def repo(tmp_path, monkeypatch, git_env):
 
 
 def tty(monkeypatch, on=True, out=None):
-    """stdin (and, unless `out` says otherwise, stdout) is a terminal or not."""
-    monkeypatch.setattr(sys.stdin, "isatty", lambda: on)
+    """stdin (and, unless `out` says otherwise, stdout) is a terminal or not. A terminal stdin types the approval code it reads off the screen."""
+    if on:
+        monkeypatch.setattr(sys, "stdin", TypedStdin())
+    else:
+        monkeypatch.setattr(sys.stdin, "isatty", lambda: False)
     monkeypatch.setattr(sys.stdout, "isatty", lambda: on if out is None else out)
 
 
@@ -63,6 +67,11 @@ def approve_cli(capsys, *flags):
     code = main(["stack", "approve", *flags])
     out = capsys.readouterr()
     return code, out.out, out.err
+
+
+def result(out):
+    """The JSON result that `--apply` prints after the preview and the typed code."""
+    return json.loads(out[out.rindex('{\n  "applied"'):])
 
 
 def read_config(repo):
@@ -145,7 +154,7 @@ def test_preview_non_tty_prints_no_text(repo, monkeypatch, capsys):
     tty(monkeypatch, False)
     code, out, err = approve_cli(capsys)
     assert code == 0 and err == "" and MARKER not in out and "echo" not in out and "docs.pytest.org" not in out and "backend" not in out
-    shown = json.loads(out)
+    shown = result(out)
     composed = stack.compose_test_command(p)
     assert shown["applied"] is False and shown["version"] == 3 and shown["unverified"] == 2
     assert shown["counts"]["stacks"] == 2 and shown["counts"]["commands"] == 3
@@ -277,7 +286,7 @@ def test_test_command_removed_when_no_stack_defines_one(repo, monkeypatch, capsy
     old = setup(repo, p, {"organization": "contoso", "strict": {"test_command": "make old", "test_timeout": 900}, "project": "Fabrikam"})
     tty(monkeypatch)
     code, out, err = approve_cli(capsys, "--apply")
-    assert code == 0 and json.loads(out)["test_command"] == "removed"
+    assert code == 0 and result(out)["test_command"] == "removed"
     cfg = read_config(repo)
     assert cfg["strict"] == {"test_timeout": 900} and list(cfg) == ["organization", "strict", "project"]
     assert stack.read_profile(repo)["status"] == "approved"
@@ -291,7 +300,7 @@ def test_unchanged_command_leaves_the_config_bytes_alone(repo, monkeypatch, caps
     old = setup(repo, cfg={"organization": "contoso", "project": "Fabrikam", "strict": {"test_command": composed}}, indent=8)
     tty(monkeypatch)
     code, out, err = approve_cli(capsys, "--apply")
-    assert code == 0 and json.loads(out)["test_command"] == "unchanged"
+    assert code == 0 and result(out)["test_command"] == "unchanged"
     assert (repo / "ado.config.json").read_text(encoding="utf-8") == old
 
 
@@ -365,7 +374,7 @@ def test_version_increments_and_hash_matches(repo, monkeypatch, capsys):
     tty(monkeypatch)
     code, out, err = approve_cli(capsys, "--apply", "--by", "Release Manager")
     assert code == 0 and err == ""
-    shown = json.loads(out)
+    shown = result(out)
     res = stack.read_profile(repo)
     assert res["status"] == "approved"
     written = res["profile"]
@@ -374,7 +383,8 @@ def test_version_increments_and_hash_matches(repo, monkeypatch, capsys):
     assert shown["sha256"] == written["approval"]["sha256"] and shown["by"] == "Release Manager"
     assert {k: v for k, v in written.items() if k not in ("version", "status", "approval")} == {k: v for k, v in profile().items() if k not in ("version", "status")}
     assert (repo / "ado.stack.json").read_text(encoding="utf-8") == json.dumps(written, indent=2, ensure_ascii=False) + "\n"
-    assert MARKER not in out and "pytest" not in out  # the apply output holds no profile text
+    assert MARKER not in out[out.rindex('{\n  "applied"'):]  # the result holds the written command and no other profile text
+    assert shown["command"] == read_config(repo)["strict"]["test_command"]
     # approving again (to bring a hand-edited command back in line) is a new version
     cfg = read_config(repo)
     cfg["strict"]["test_command"] = "true"
@@ -434,7 +444,7 @@ def test_story_adds_one_decision_line(repo, monkeypatch, capsys):
     res = stack.read_profile(repo)
     digest = res["profile"]["approval"]["sha256"]
     assert parsed[0]["text"] == f"Stack profile v3 approved, sha256 {digest[:12]}" and MARKER not in md and "pytest" not in md
-    assert res["profile"]["approval"]["decision"] == "US1001 D1" and json.loads(out)["decision"] == "US1001 D1"
+    assert res["profile"]["approval"]["decision"] == "US1001 D1" and result(out)["decision"] == "US1001 D1"
 
 
 def test_story_appends_to_an_existing_file_and_uses_dod_path(repo, monkeypatch, capsys):
@@ -581,10 +591,157 @@ def test_stdin_terminal_stdout_piped_prints_no_profile_text_in_a_real_process(re
     assert res.returncode == 0 and MARKER not in res.stdout + res.stderr and json.loads(res.stdout)["counts"]["stacks"] == 1
 
 
-def test_apply_needs_only_stdin_to_be_a_terminal(repo, monkeypatch, capsys):
+def test_apply_needs_both_stdin_and_stdout_terminals(repo, monkeypatch, capsys):
     setup(repo)
-    tty(monkeypatch, True, out=False)
-    assert approve_cli(capsys, "--apply")[0] == 0 and stack.read_profile(repo)["status"] == "approved"
+    before = snapshot(repo)
+
+    def boom(*a, **k):
+        raise AssertionError("a file or the config was read before the terminal check")
+    for target in ("read_profile", "plan_approve", "prepare_approve", "apply_approve"):
+        monkeypatch.setattr(stack, target, boom)
+    monkeypatch.setattr(Config, "load", boom)
+    for stdin_tty, stdout_tty in ((False, False), (True, False), (False, True)):
+        tty(monkeypatch, stdin_tty, stdout_tty)
+        code, out, err = approve_cli(capsys, "--apply")
+        assert code == 2 and out == "" and "only a human may do" in err and "stdin and stdout must both be a terminal" in err
+        assert "not a security boundary" in err and snapshot(repo) == before
+    monkeypatch.undo()
+    for kw in ({"stdin_pty": False, "stdout_pty": False}, {"stdin_pty": False}, {"stdout_pty": False}):  # `< /dev/null`, `| tee x`, both
+        code, out, err = run_in_pty(["stack", "approve", "--apply"], repo, **kw)
+        assert code == 2 and "only a human may do" in err and "approval code" not in out and snapshot(repo) == before
+    code, out, err = run_in_pty(["stack", "approve", "--apply"], repo)  # both terminals: the code is asked for and typed
+    assert code == 0, err
+    assert stack.read_profile(repo)["status"] == "approved"
+
+
+def test_the_approval_code_covers_what_is_written(repo, monkeypatch, capsys):
+    setup(repo)
+    seen = []
+    for story, by, run in ((None, "tech lead", "echo a"), (None, "tech lead", "echo b"), (None, "po", "echo a"), ("1001", "tech lead", "echo a")):
+        put(repo, profile(stacks=[{"id": "python", "root": ".", "commands": {"test": {"run": run, "source": "S1"}}}]))
+        seen.append(stack.prepare_approve(repo, str(repo / "ado.config.json"), by, story)["code"])
+    assert len(set(seen)) == 4 and all(re.fullmatch(r"[0-9a-f]{12}", c) for c in seen)
+    prep = stack.prepare_approve(repo, str(repo / "ado.config.json"))
+    assert prep["code"] == stack.prepare_approve(repo, str(repo / "ado.config.json"))["code"]  # the same data, the same code
+    assert snapshot(repo) == snapshot(repo) and stack.read_profile(repo)["status"] == "draft"  # preparing writes nothing
+    put(repo, profile(sources={"S1": {"kind": "official", "url": "https://example.com/other", "retrieved": "2026-10-30", "evidence": "other"},
+                       "S2": profile()["sources"]["S2"]}))
+    assert stack.prepare_approve(repo, str(repo / "ado.config.json"))["code"] != prep["code"]  # a note edited: the profile hash moves
+    (repo / "ado.config.json").write_text(config_text({**CONFIG, "mode": "advisory"}))
+    assert stack.prepare_approve(repo, str(repo / "ado.config.json"))["code"] not in seen
+
+
+def test_apply_requires_the_typed_code(repo, monkeypatch, capsys):
+    setup(repo)
+    before = snapshot(repo)
+    for answer in ("nope\n", "\n", "   \n", "", KeyboardInterrupt, "x" * 5000, "\x00\n", "0" * 12 + "\n"):
+        stdin = terminal(monkeypatch, answer)
+        code, out, err = approve_cli(capsys, "--apply", "--story", "1001")
+        assert code == 2 and err == "error: not confirmed: nothing was approved\n" and stdin.lines == 1, (answer, err)
+        assert out.index("# Stack profile approval preview") < out.index("approval code: ") and '"applied"' not in out
+        assert snapshot(repo) == before and not (repo / "dod").exists()  # config, profile, decisions untouched
+    for kw in ({"answer": "nope"}, {"answer": ""}, {"interrupt": True}):  # a real process: wrong text, end of input, Ctrl-C
+        code, out, err = run_in_pty(["stack", "approve", "--apply"], repo, **kw)
+        assert code == 2 and err.endswith("error: not confirmed: nothing was approved\n") and snapshot(repo) == before, err
+
+
+def test_a_code_typed_before_the_prompt_is_discarded(repo):
+    """The code is computable beforehand (anyone can run the same hash); what is typed into the terminal before the prompt is flushed."""
+    setup(repo)
+    before = snapshot(repo)
+    early = stack.prepare_approve(repo, str(repo / "ado.config.json"))["code"]
+    code, out, err = run_in_pty(["stack", "approve", "--apply"], repo, early=early, answer="")  # then end of input at the prompt
+    assert code == 2 and err.endswith("error: not confirmed: nothing was approved\n") and snapshot(repo) == before, err
+    code, out, err = run_in_pty(["stack", "approve", "--apply"], repo)  # the same code typed after the prompt still approves
+    assert code == 0 and stack.read_profile(repo)["status"] == "approved", err
+
+
+def test_the_code_is_never_read_from_a_pipe_or_a_file_and_never_shown_to_one(monkeypatch, capsys):
+    import io
+    for source in (io.StringIO("0123456789ab\n"), io.StringIO("")):  # a pipe or a file: isatty() is False
+        monkeypatch.setattr(sys, "stdin", source)
+        assert stack.confirm_code("0123456789ab") is False and capsys.readouterr().out == "" and source.tell() == 0
+
+
+def test_apply_with_the_right_code_writes_and_prints_the_command(repo, monkeypatch, capsys):
+    setup(repo, two_stack_profile())
+    stdin = terminal(monkeypatch, None)
+    code, out, err = approve_cli(capsys, "--apply", "--story", "1001", "--by", "Tech Lead")
+    assert code == 0 and stdin.lines == 1 and err == ""
+    preview, _, result = out.partition("approval code: ")
+    assert "# Stack profile approval preview" in preview and "echo a" in preview  # the full preview comes first
+    typed, _, result = result.partition("\n")
+    assert typed == shown_code(out) and typed in out
+    doc = json.loads(result[result.index("{"):])
+    composed = read_config(repo)["strict"]["test_command"]
+    assert doc["applied"] is True and doc["command"] == composed and "sh -c" in composed and doc["test_command"] == "set"
+    assert stack.read_profile(repo)["status"] == "approved" and doc["decision"] == stack.read_profile(repo)["profile"]["approval"]["decision"]
+    assert doc["sha256"] == stack.read_profile(repo)["profile"]["approval"]["sha256"]
+    # whitespace around the code is ignored; a real process types it too
+    terminal(monkeypatch, None)
+    setup(repo)
+    stdin_ws = terminal(monkeypatch, None)
+    stdin_ws.readline = lambda size=-1: "  \t" + shown_code(sys.stdout.getvalue()) + "  \n"
+    assert approve_cli(capsys, "--apply")[0] == 0
+    setup(repo)
+    code, out, err = run_in_pty(["stack", "approve", "--apply"], repo)
+    assert code == 0 and json.loads(out[out.rindex("{"):])["command"] == read_config(repo)["strict"]["test_command"]
+
+
+def test_profile_edited_after_the_prompt_is_refused(repo, monkeypatch, capsys):
+    """The edit happens between the prompt and the typed code: in-process through the `before` hook of the fake terminal, in a real process
+    by the test rewriting the file while the child waits for its line."""
+    setup(repo, profile(stacks=[{"id": "python", "root": ".", "commands": {"test": {"run": "PYTHONPATH=src python3 -m pytest -q", "source": "S1"}}}]))
+    msg = "error: the profile changed while you were reading it: nothing was approved\n"
+    other = profile(stacks=[{"id": "python", "root": ".", "commands": {"test": {"run": "make evil-test", "source": "S1"}}}])
+    before = snapshot(repo)
+    terminal(monkeypatch, None, before=lambda code: put(repo, other))
+    code, out, err = approve_cli(capsys, "--apply")
+    assert code == 2 and err == msg and "evil" not in out and '"applied"' not in out
+    after = snapshot(repo)
+    assert after["ado.config.json"] == before["ado.config.json"] and stack.read_profile(repo)["status"] == "draft"
+    assert b"evil" in after["ado.stack.json"]  # the edited file is as the editor left it: nothing was approved over it
+    setup(repo)
+    before = snapshot(repo)
+    code, out, err = run_in_pty(["stack", "approve", "--apply"], repo, before=lambda c: put(repo, other))
+    assert code == 2 and err.endswith(msg) and snapshot(repo)["ado.config.json"] == before["ado.config.json"]
+    assert stack.read_profile(repo)["status"] == "draft"
+    # the same swap at the config: another test command key or mode edited while reading changes what is written
+    setup(repo)
+    before = snapshot(repo)
+    terminal(monkeypatch, None, before=lambda code: (repo / "ado.config.json").write_text(config_text({**CONFIG, "mode": "advisory"})))
+    assert approve_cli(capsys, "--apply")[2] == msg and stack.read_profile(repo)["status"] == "draft"
+
+
+def test_decision_line_written_last_and_absent_on_failure(repo, monkeypatch, capsys):
+    setup(repo)
+    dec = repo / "dod" / "Decisions_1001.md"
+    order, failing, real = [], [None], os.replace
+
+    def replace(src, dst, *a, **k):
+        order.append(Path(dst).name)
+        if Path(dst).name == failing[0]:
+            raise OSError("disk full")
+        return real(src, dst, *a, **k)
+    monkeypatch.setattr(os, "replace", replace)
+    terminal(monkeypatch, None)
+    assert approve_cli(capsys, "--apply", "--story", "1001")[0] == 0
+    assert order == ["ado.config.json", "ado.stack.json", "Decisions_1001.md"] and "Stack profile v3 approved" in dec.read_text()
+    # a failure at the config write, then at the profile write: no decision line, every file as it was
+    for failing[0] in ("ado.config.json", "ado.stack.json"):
+        setup(repo)
+        dec.unlink(missing_ok=True)
+        before = snapshot(repo)
+        code, out, err = approve_cli(capsys, "--apply", "--story", "1001")
+        assert code == 2 and "nothing was approved" in err and not dec.exists() and snapshot(repo) == before, failing[0]
+    # a failure of the decision write itself (the last step) puts the config and the profile back
+    failing[0] = "Decisions_1001.md"
+    setup(repo)
+    dec.unlink(missing_ok=True)
+    before = snapshot(repo)
+    code, out, err = approve_cli(capsys, "--apply", "--story", "1001")
+    assert code == 2 and "nothing was approved" in err and not dec.exists() and snapshot(repo) == before
+    assert stack.read_profile(repo)["status"] == "draft"
 
 
 @pytest.mark.parametrize("nth", [1, 2, 3])
