@@ -160,18 +160,19 @@ def dir_digest(root, kit_id):
     listed = strict._git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--end-of-options", "--", prefix)
     if listed is None or listed.returncode:
         raise KitError("unreadable")
-    paths = sorted({p for p in _paths(listed.stdout, prefix) if not _excluded(kit_id, p[len(prefix):])})  # all checked before git hashes
-    if not paths:
-        raise KitError("empty")
-    if len(paths) > MAX_FILES:
+    listed_paths = sorted(set(_paths(listed.stdout, prefix)))  # all checked before git hashes
+    if len(listed_paths) > MAX_FILES:
         raise KitError("unreadable")
-    for p in paths:
+    for p in listed_paths:  # excluded files too: a symlinked <id>-config.yml is refused, not skipped
         try:
             st = _stat(root, p)
         except FileNotFoundError:
             raise KitError("unreadable") from None
         if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_FILE:
             raise KitError("unreadable")
+    paths = [p for p in listed_paths if not _excluded(kit_id, p[len(prefix):])]
+    if not paths:
+        raise KitError("empty")
     _refuse_content_attributes(root, paths)
     hashed = strict._git(root, "hash-object", "--stdin-paths", stdin="".join(p + "\n" for p in paths).encode("utf-8"), timeout=120)
     ids = hashed.stdout.decode("ascii", "replace").split("\n")[:-1] if hashed is not None and not hashed.returncode else []
@@ -226,10 +227,10 @@ def dir_digest_at(repo, commit, kit_id):
         rel = path[len(prefix):]
         if _has_control(path):
             return _CHANGED
+        if fields[0] not in ("100644", "100755") or fields[1] != "blob" or not _BLOB.fullmatch(fields[2]):
+            return _CHANGED  # judged before the exclusion: a symlinked <id>-config.yml is changed, not skipped
         if _excluded(kit_id, rel):
             continue
-        if fields[0] not in ("100644", "100755") or fields[1] != "blob" or not _BLOB.fullmatch(fields[2]):
-            return _CHANGED
         entries.append((fields[2], rel))
     return _digest(entries) if entries else None
 
@@ -302,7 +303,7 @@ def _matches(root, kit, pinned):
 def verify(root, lock):
     """`{"kits": [{"id", "state"[, "reason"]}], "findings": [{"rule", "kit", "fix"}]}` for the kits in the registry against
     `lock` (from `read_lock`): `pinned`; `unpinned` (not in the lock, or an id/entry that could not be read: `id` null with `n`);
-    `changed` (a hash or the version differs, or a file could not be read: `reason` names why); `stale` (locked but not installed).
+    `changed` (a hash or the version differs, or a file could not be read: `reason` names why); `stale` (locked but not installed; with `reason` `files-remain` and a `kit-changed` finding when the registry file exists and the kit's files are still on disk).
     A disabled kit is judged like an enabled one: disabling only flips `enabled`, the agent copies stay invocable. Findings are `kit-unpinned` and `kit-changed`; the texts are fixed and carry no kit text."""
     out, findings, seen = [], [], set()
     for kit in installed(root):
@@ -323,7 +324,16 @@ def verify(root, lock):
         out.append(row)
         if not ok:
             findings.append({"rule": "kit-changed", "kit": kit["id"], "fix": FIX})
-    out += [{"id": k, "state": "stale"} for k in lock["kits"] if k not in seen]
+    has_registry = os.path.lexists(os.path.join(str(root), REGISTRY))  # installed() above read it, or raised: a present one was readable
+    for k in lock["kits"]:
+        if k in seen:
+            continue
+        row = {"id": k, "state": "stale"}
+        # only a registry that exists can have lost the entry: upstream says not to commit it, so a fresh clone has none and sees nothing
+        if has_registry and os.path.lexists(os.path.join(str(root), ".specify", "extensions", k)):
+            row["reason"] = "files-remain"
+            findings.append({"rule": "kit-changed", "kit": k, "fix": FIX})
+        out.append(row)
     out.sort(key=lambda r: (r["id"] is None, r["id"] or "", r.get("n", 0)))
     return {"kits": out, "findings": findings}
 

@@ -365,6 +365,7 @@ def _code(s, cap=200):
 TARGET_CONFIG_NOTE = "target branch (strict)"  # `result["config"]` when CI judged the PR with the target branch's config
 PR_CONFIG_NOTE = "pull request"  # ... or with the PR's own strict config, when `--base` was given
 TRUST_NOTE = "trust-introducing PR: review ado.stack.json as code"  # this PR edits the profile, the lockfile or strict.test_command
+KITS_TRUST_NOTE = "trust-introducing PR: review ado.kits.lock.json as code"  # this PR adds the first kits lockfile (the target has none)
 
 
 def render_summary(result):
@@ -372,6 +373,7 @@ def render_summary(result):
     head = "### ADO gate\n\n"
     source = f"config: {result['config']}\n" if result.get("config") in (TARGET_CONFIG_NOTE, PR_CONFIG_NOTE) else ""
     source += f"{TRUST_NOTE}\n" if result.get("trust_note") == TRUST_NOTE else ""
+    source += f"{KITS_TRUST_NOTE}\n" if result.get("kits_trust_note") == KITS_TRUST_NOTE else ""
     if "traceability" not in result:  # no / unreadable ledger: advisory note only
         return head + f"Advisory: {_code(result.get('note', ''))}\n" + source
     trace, drift = result["traceability"], result["drift"]

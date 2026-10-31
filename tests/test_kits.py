@@ -3,6 +3,7 @@ import json
 import os
 import pty
 import select
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -274,6 +275,47 @@ def test_disabled_kit_is_judged_like_an_enabled_one(repo, monkeypatch, capsys):
     assert {k["id"]: k["state"] for k in json.loads(capsys.readouterr().out)["kits"]}["sf"] == "changed"
     reg.write_text(_registry(("sf-extra", _entry(commands=["speckit.sf-extra.run"]))))  # entry removed, files remain: stale
     assert {k["id"]: k["state"] for k in kits.verify(repo, lock)["kits"]}["sf"] == "stale"
+
+
+def test_stale_with_files_on_disk_is_a_changed_finding(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    lock = {"schema": 1, "kits": {i: _pin(repo, i) for i in ("sf", "sf-extra")}}
+    lock["kits"]["gone"] = lock["kits"]["sf"]
+    (repo / kits.LOCK_FILE).write_text(json.dumps(lock))
+    (repo / ".specify/extensions/.registry").write_text(_registry(("sf-extra", _entry(commands=["speckit.sf-extra.run"]))))
+    out = kits.verify(repo, lock)  # sf: entry removed, files remain; gone: nothing on disk at all
+    rows = {k["id"]: k for k in out["kits"]}
+    assert rows["sf"] == {"id": "sf", "state": "stale", "reason": "files-remain"} and rows["gone"] == {"id": "gone", "state": "stale"}
+    assert [(f["rule"], f["kit"]) for f in out["findings"]] == [("kit-changed", "sf")]
+    assert cli.main(["kits", "verify"]) == 2 and "sf" in capsys.readouterr().out
+    (repo / ".specify/extensions/.registry").unlink()  # upstream says not to commit the registry: a fresh clone has none and sees nothing
+    out = kits.verify(repo, lock)
+    assert {k["id"]: k for k in out["kits"]}["sf"] == {"id": "sf", "state": "stale"} and out["findings"] == []
+    assert cli.main(["kits", "verify"]) == 0
+    (repo / ".specify/extensions/.registry").write_text(_registry(("sf-extra", _entry(commands=["speckit.sf-extra.run"]))))
+    shutil.rmtree(repo / KIT)
+    assert kits.verify(repo, lock)["findings"] == []
+    os.symlink(repo / "elsewhere", repo / KIT)  # a symlink where the kit dir was is still "files remain"
+    assert [f["rule"] for f in kits.verify(repo, lock)["findings"]] == ["kit-changed"]
+
+
+def test_symlinked_kit_config_file_is_refused_not_excluded(repo):
+    before = kits.dir_digest_at(repo, _head(repo), "sf")
+    assert kits.dir_digest(repo, "sf") == before
+    for name in ("sf-config.yml", "local-config.yml"):
+        (repo / KIT / name).unlink()
+        os.symlink("../../../elsewhere", repo / KIT / name)
+        with pytest.raises(kits.KitError) as e:
+            kits.dir_digest(repo, "sf")
+        assert e.value.reason == "symlink"
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "link")
+        assert kits.dir_digest_at(repo, _head(repo), "sf") == "changed"
+        git(repo, "rm", "-q", "-f", f"{KIT}/{name}")
+        _put(repo, f"{KIT}/{name}", "x: 1\n")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "back")
+        assert kits.dir_digest_at(repo, _head(repo), "sf") == before
 
 
 @pytest.mark.parametrize("attrs", ["* ident\n", ".specify/** filter=lfs\n", "*.md working-tree-encoding=UTF-16\n", ".specify/** filter=x\n"])

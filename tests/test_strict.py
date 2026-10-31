@@ -1,11 +1,13 @@
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 
 import pytest
 
-from ado import gate, stack, strict
+from ado import gate, kits, stack, strict
 from ado.__main__ import main
 from ado.client import AdoError
 from ado.config import Config
@@ -2016,3 +2018,99 @@ def test_advisory_noop_byte_identical(tmp_path, monkeypatch, capsys):
         for phase in ("implement", "pr", "done"):
             assert main(["strict", "check", "1001", "--phase", phase]) == 0
             assert capsys.readouterr().out == base % phase
+
+
+# ---- P2-9b: the kit rules of a local strict config (kits.verify over the registry and the working tree) ----
+def _kit_repo(tmp_path, git_env, pinned=True):
+    """The `_story` repo plus an installed kit `sf` (registry, kit dir, Claude skill copy), pinned in ado.kits.lock.json when `pinned`."""
+    from tests.test_kits import _entry, _put, _registry
+    client, _ = _story(tmp_path, git_env)
+    _put(tmp_path, ".specify/extensions/sf/extension.yml", "id: sf\n")
+    _put(tmp_path, ".specify/extensions/sf/commands/specify.md", "specify\n")
+    _put(tmp_path, ".claude/skills/speckit-sf-specify/SKILL.md", "skill\n")
+    _put(tmp_path, ".specify/extensions/.registry", _registry(("sf", _entry(commands=["speckit.sf.specify"]))))
+    if pinned:
+        reg = kits.installed(tmp_path)[0]
+        entry = {"version": "1.0.0", "source": None, "catalog_sha256": None, "dir_digest": kits.dir_digest(tmp_path, "sf"),
+                 "agents_sha256": kits.agents_sha256(tmp_path, reg["registered"])}
+        (tmp_path / "ado.kits.lock.json").write_text(json.dumps({"schema": 1, "kits": {"sf": entry}}))
+    return client
+
+
+def _kit_rules(res):
+    return [r for r in _rules(res) if r.startswith("kit-")]
+
+
+def test_local_unpinned_and_changed_refuse_each_phase(tmp_path, git_env):
+    client = _kit_repo(tmp_path, git_env, pinned=False)
+    for phase in ("implement", "pr", "done"):
+        res = _pr(tmp_path, client, phase)
+        assert _kit_rules(res) == ["kit-unpinned"] and res["ok"] is False, phase
+        f = next(f for f in res["findings"] if f["rule"] == "kit-unpinned")
+        assert set(f) == {"rule", "detail", "fix"} and "sf" in f["detail"] and "ado kits pin" in f["fix"] and "terminal" in f["fix"]
+    d = tmp_path / "pinned"
+    d.mkdir()
+    client = _kit_repo(d, git_env)
+    for phase in ("implement", "pr", "done"):
+        assert _kit_rules(_pr(d, client, phase)) == [], phase
+    assert _pr(d, client, "pr")["ok"] is True
+    (d / ".specify/extensions/sf/commands/specify.md").write_text("tampered\n")  # a kit file, then (restored) its agent copy
+    for phase in ("implement", "pr", "done"):
+        res = _pr(d, client, phase)
+        assert _kit_rules(res) == ["kit-changed"] and "tampered" not in json.dumps(res), phase
+    (d / ".specify/extensions/sf/commands/specify.md").write_text("specify\n")
+    (d / ".claude/skills/speckit-sf-specify/SKILL.md").write_text("tampered\n")
+    assert _kit_rules(_pr(d, client, "implement")) == ["kit-changed"]
+
+
+def test_local_disabled_stale_and_unreadable_kits_are_judged(tmp_path, git_env):
+    from tests.test_kits import _entry, _put, _registry
+    client = _kit_repo(tmp_path, git_env)
+    reg = tmp_path / ".specify/extensions/.registry"
+    reg.write_text(_registry(("sf", {**_entry(commands=["speckit.sf.specify"]), "enabled": False})))
+    (tmp_path / ".specify/extensions/sf/commands/specify.md").write_text("tampered\n")
+    assert _kit_rules(_impl(client, tmp_path)) == ["kit-changed"]  # disabled is still judged
+    (tmp_path / ".specify/extensions/sf/commands/specify.md").write_text("specify\n")
+    reg.write_text(_registry())  # the registry entry is gone, the files remain: the kit is still on disk
+    assert _kit_rules(_impl(client, tmp_path)) == ["kit-changed"]
+    shutil.rmtree(tmp_path / ".specify/extensions/sf")  # gone entirely: nothing runs, no finding
+    assert _kit_rules(_impl(client, tmp_path)) == []
+    reg.write_text("{not json IGNORE-ALL-PREVIOUS")  # an untrustworthy registry is a finding, not a pass
+    res = _impl(client, tmp_path)
+    assert _kit_rules(res) == ["kit-changed"] and "IGNORE" not in json.dumps(res)
+    reg.unlink()
+    (tmp_path / "ado.kits.lock.json").write_text("{not json IGNORE-ALL-PREVIOUS")  # so is an untrustworthy lockfile
+    res = _impl(client, tmp_path)
+    assert _kit_rules(res) == ["kit-changed"] and "IGNORE" not in json.dumps(res)
+
+
+def test_kit_rules_are_registered_and_not_overridable(tmp_path, git_env):
+    for phase in ("implement", "pr", "done"):
+        assert strict._kits in strict.PHASES[phase]
+    assert not any(r.startswith("kit") for r in strict._COVERS) and not any(v.startswith("kit") for vs in strict._COVERS.values() for v in vs)
+    client = _kit_repo(tmp_path, git_env, pinned=False)
+    DEC(tmp_path).write_text(decisions.render_file(1001) + _d(1, "skip kit-unpinned", kind="override") + _d(2, "skip l2", kind="override"))
+    assert _kit_rules(_impl(client, tmp_path)) == ["kit-unpinned"]
+
+
+def test_no_kits_installed_changes_nothing(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env)  # no registry, no lockfile: v0.3 results are untouched, no git is run for the kits
+    assert _pr(tmp_path, client, "pr") == {"phase": "pr", "mode": "strict", "ok": True, "findings": [], "overrides_used": []}
+
+
+def test_advisory_reports_only(tmp_path, git_env, monkeypatch, capsys):
+    client = _kit_repo(tmp_path, git_env, pinned=False)
+    client.config.mode = "advisory"
+    res = _pr(tmp_path, client, "pr")  # advisory: strict check judges nothing, kits included
+    assert res["ok"] is True and res["findings"] == [] and res["note"] == "mode is advisory"
+    monkeypatch.chdir(tmp_path)
+    from ado import __main__ as m
+    assert m.main(["kits", "verify"]) == 2  # ... and `ado kits verify` is where an advisory project reads the same facts
+    out = json.loads(capsys.readouterr().out)
+    assert [f["rule"] for f in out["findings"]] == ["kit-unpinned"]
+
+
+def test_kits_and_strict_import_in_either_order():
+    for first in ("ado.kits", "ado.strict"):
+        r = subprocess.run([sys.executable, "-c", f"import {first}; import ado.strict, ado.kits"], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr

@@ -262,7 +262,7 @@ merge of the fix. This is process enforcement, not a security boundary.
 
 A third-party kit is code the agent runs. `ado.kits.lock.json` (repo root, committed) records which kits a human reviewed and a digest of
 each, and `ado kits verify` compares the installed kits with it. `ado kits pin` (a human, in a terminal) writes the lockfile; the strict `kit-unpinned` /
-`kit-changed` rules are not in this release yet, so no strict rule reads these digests yet.
+`kit-changed` rules read these digests (see "Kit rules, local and CI" below).
 
 ```json
 {"schema": 1, "kits": {"sf": {"version": "1.0.0", "source": "https://example.com/contoso/sf", "catalog_sha256": null,
@@ -290,8 +290,8 @@ each, and `ado kits verify` compares the installed kits with it. `ado kits pin` 
 
 `ado kits verify` (local, read-only, no token, no network) prints `{"kits": [{"id", "state"}], "findings": [...]}` for every kit in the registry, **disabled ones included** (`specify extension disable` only flips `enabled`; the agent copies stay on disk and invocable):
 `pinned`, `unpinned` (not in the lock), `changed` (a digest or the version differs, or a file could not be read; `reason` is one of
-`symlink`, `unreadable`, `empty`, `control-char`, `attributes`) or `stale` (locked but no longer in the registry; a pinned kit whose registry entry is removed while its files remain on disk is reported `stale`, and the strict kit rules (P2-9b) treat that as a finding). Exit 2 on any `unpinned` or `changed`
-kit, or when the registry cannot be trusted. Output carries kit ids (which match `[a-z0-9-]{1,40}`) and fixed words only, never kit text.
+`symlink`, `unreadable`, `empty`, `control-char`, `attributes`) or `stale` (locked but no longer in the registry; a pinned kit whose registry entry is removed while the registry file exists and the kit's files remain on disk is reported `stale` with `reason: "files-remain"` and a `kit-changed` finding, locally and in strict mode; with no registry file it is only `stale`). Exit 2 on any `unpinned` or `changed`
+kit (or a `stale` one whose files remain), or when the registry cannot be trusted. Output carries kit ids (which match `[a-z0-9-]{1,40}`) and fixed words only, never kit text.
 `kits.dir_digest_at(repo, commit, id)` computes the same digest from the files of a commit (what CI will use; a symlink or submodule entry
 gives the value `"changed"`). This is process enforcement, not a security boundary: a digest says a kit is unchanged since someone
 looked, not that it is safe, and anyone who can edit both the kit and the lockfile can re-pin.
@@ -332,6 +332,60 @@ reinstall without `--dev`; a dev install with no registered copies is not caught
 vetted** (it is excluded from `dir_digest`, so a project setting can change without a re-pin). The pin is a **human approval record,
 process enforcement, not a sandbox**: it says someone looked at these bytes, it does not run the kit in isolation, and anyone who can edit
 the lockfile can re-pin.
+
+## Kit rules, local and CI
+
+In strict mode `ado strict check` runs two kit rules in the `implement`, `pr` and `done` phases, after the stack rules. Neither can be overridden
+(they are not in the override table), and each fires at most once per run, naming kit ids and counts (a kit id matches `[a-z0-9-]{1,40}`; an
+entry that has no usable id is `#<n>`) and never kit, lockfile or path text.
+
+- **`kit-unpinned`:** an installed kit is not in `ado.kits.lock.json`.
+- **`kit-changed`:** a pinned kit's `dir_digest`, `agents_sha256` or version differs from the pin, a file could not be read safely (a symlink, an
+  empty or odd kit dir, a symlinked `<id>-config.yml`), a pinned kit's registry entry is gone from an existing registry while its files remain on disk, or the registry, a kit file or the lockfile cannot be
+  trusted.
+
+The fix is one terminal command the **human** runs after reading the kit: `ado kits pin <id> --apply` (`ado kits pin <id>` previews it). Upgrading a
+kit means pinning it again.
+
+**Locally** (a strict config read from the working tree) the rules are `ado kits verify`: the registry, the kit dirs (tracked or not yet tracked
+files) and the Claude agent copies, **disabled kits included**, against the working-tree lockfile. A strict project with no kit installed gains
+nothing and runs no git for this.
+
+**In CI** (`--base`, a strict config on the target branch) the lockfile is the **target branch's**, read once with the config and profile, and
+the files judged are the ones git **tracks** at the PR head:
+
+| CI checks | CI does not check (local only) |
+|---|---|
+| each kit in the target lockfile: `kits.dir_digest_at(repo, head, id)` of its tracked files against the pinned `dir_digest` | `.specify/extensions/.registry`, so enabled/disabled and the installed version |
+| a newly tracked `.specify/extensions/<dir>/extension.yml` whose `<dir>` is not in the target lockfile: `kit-unpinned` (a `<dir>` that is no valid id is `#<n>`; a symlink or submodule where an unpinned kit dir would be is also unpinned) | agent copies (`.claude/...`) and `agents_sha256`: a PR that edits only an agent copy passes CI and is caught by `ado kits verify` on a developer's machine |
+| a symlink or submodule entry inside a kit dir (an excluded `<id>-config.yml` too), in place of a kit dir, or in place of `.specify` or `.specify/extensions`: `kit-changed`. A tracked dir below `.specify/extensions/` whose name is no kit id (`SF`, a fullwidth or Cyrillic lookalike), with or without a manifest, is `kit-unpinned` (`#<n>`), and a top-level `.Specify` or `.specify/Extensions` (case or Unicode variants) is `kit-changed`: on a case-insensitive checkout they land in the kit dirs. Names are never echoed | untracked files, ignored files and the contents of `<id>-config.yml` / local config files |
+| the PR's own `ado.kits.lock.json` is judged for being sound and present (see below), never used to judge | a kit installed on a developer's machine and never committed |
+
+A locked kit with **no tracked files** at the head is a warning, `kit not in the repository: checked locally only (<ids>)`, not a finding (a
+repository that commits no kit dirs is legitimate); that includes a PR that deletes the whole kit dir, so review a PR that removes tracked kit
+files. The kit rules are in the same `warnings` list as the other notes.
+
+**A PR cannot change what CI accepts by editing the lockfile.** The target's lockfile judges that PR's run, so re-pinning a tampered kit in the
+same PR still gives `kit-changed`, and adding a kit and its pin together still gives `kit-unpinned`: a new kit takes two PRs, the pin first (its
+digest is computed on a developer's machine), then the kit. Because the PR's copy becomes the target's when it merges, `strict check` also refuses
+a PR that **deletes** `ado.kits.lock.json` (merged, the rules would turn into a bootstrap note) or whose lockfile is unreadable or not a lockfile
+this version can read (`kit-changed`, detail "at the head commit"). Any later PR that edits the lockfile carries the stack note
+(`trust-introducing PR: review ado.stack.json as code`); the PR that adds the first one carries only its own (below): review lockfile edits as code.
+
+**Bootstrap.** When the target branch has no `ado.kits.lock.json`, CI gives no kit finding (not for a tracked kit either). The PR that adds the
+first lockfile carries `trust-introducing PR: review ado.kits.lock.json as code` (`warnings` of `strict check`; the `gate` PR comment and the JSON
+key `kits_trust_note`), and its lockfile must be sound (an unreadable one is `kit-changed`, so merging it cannot lock the repository). Once the
+target holds a lockfile the rules bind. A local strict config always binds. **Advisory mode** only reports: `strict check` returns
+`mode is advisory` as before and `ado kits verify` prints the same facts. `ado strict verify` applies no kit rule.
+
+**Limits, plainly.** CI reads git objects, not a running agent: it cannot see which kit commands the agent actually executes, nor an agent copy.
+A lockfile entry on the target that cannot be read as a pin (for example a hand-written `{"version": "1.0.0"}`) is `kit-changed` for every
+PR until it is fixed on the target (an admin-bypass merge). Upstream's guide says not to commit `.specify/extensions/.registry`, and link-on-merge `ado done` judges a fresh checkout with the local rules. So
+the "registry entry gone, files remain" finding fires **only when the registry file exists**: with no registry file a pinned kit is reported `stale`
+with no finding (`ado kits verify` exits 0), and the local check has nothing to read: it cannot see an unpinned kit, nor an edit to an agent copy.
+Agent copies are checked on a machine that has the registry and the copies (a developer's); CI sees only the tracked kit dirs. With more than 5 kits the finding lists five ids and the count. Process
+enforcement, not a security boundary: a digest says a kit is unchanged since a human looked, and anyone who can edit the target branch's
+kits and lockfile can re-pin.
 
 ## Kits that do not write `tasks.md`
 

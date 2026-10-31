@@ -51,7 +51,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   `*-config.local.yml` and `<id>-config.yml`; CRLF and `core.autocrlf` agree with the committed value), `kits.dir_digest_at` (the same from
   a commit; symlink or submodule gives `"changed"`), `kits.agents_sha256` (the Claude agent copies by the exact registered names),
   `kits.read_lock` (`source` and `version` validated, else null). A symlink, control character in a path, empty kit dir or `--dev` install
-  is refused, as is a kit path with `ident`, `filter` or `working-tree-encoding` set by `.gitattributes`; disabled kits are judged like enabled ones. Exit 2 on an unpinned or changed kit. The strict kit rules are not in this release yet. See
+  is refused, as is a kit path with `ident`, `filter` or `working-tree-encoding` set by `.gitattributes`; disabled kits are judged like enabled ones. Exit 2 on an unpinned or changed kit, or a `stale` one whose files remain (`reason: "files-remain"`). See
   `docs/stack-kits.md` "Pinning kits".
 - `kits.scan(root, id)`: facts for the human who reviews a kit before pinning, from `extension.yml` (line scanner over fixed keys, no YAML
   library) and the command and script files it names: command and script counts, hooks with `optional`, `requires.tools`, and counts with
@@ -79,6 +79,18 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   lockfile or `strict.test_command` carries `trust-introducing PR: review ado.stack.json as code` (`warnings` in `strict check`, a line and the JSON key `trust_note` in the gate
   comment); once merged the edit is in force with no note (an approved hash is computable by anyone), so review these files as code.
   `strict verify` applies no stack or kit rule. `stack.profile_for`, `stack.lock_error`. See `docs/stack-kits.md` "Strict rules and CI".
+- Strict kit rules (`strict check`, phases `implement`, `pr`, `done`; not overridable): `kit-unpinned` and `kit-changed`, one finding of each
+  at most, naming kit ids (`[a-z0-9-]{1,40}`) or `#<n>` and counts only. Locally they are `kits.verify` (disabled kits included; a pinned kit
+  whose registry entry is gone from an existing registry file while its files remain is `kit-changed`, with no registry file it is only `stale`; an untrustworthy registry, kit file or lockfile is `kit-changed`). In CI
+  (strict target) the lockfile is the target branch's and each locked kit is judged by `kits.dir_digest_at(repo, head, id)` of the files git
+  tracks; a newly tracked `.specify/extensions/<dir>/extension.yml` that the target lock does not pin is `kit-unpinned`; a symlink or submodule
+  in or in place of a kit dir, `.specify` or `.specify/extensions` (or a symlinked `<id>-config.yml`) is `kit-changed`, as is a case or Unicode lookalike of `.specify`/`extensions`;
+  a tracked dir below `.specify/extensions/` whose name is no kit id (`SF`) is `kit-unpinned`; the registry, agent copies, untracked files and
+  `<id>-config.yml` are not read (local only); a locked kit with no tracked files is the warning `kit not in the repository: checked locally only`.
+  A PR that edits `ado.kits.lock.json` does not change its own verdict; one that deletes it, or whose copy is unreadable, is `kit-changed`. With no
+  lockfile on the target there is no finding and, when the PR adds the first one, the warning `trust-introducing PR: review ado.kits.lock.json as
+  code` (`strict check` `warnings`; `gate` comment line and JSON key `kits_trust_note`). Advisory mode only reports (`ado kits verify`).
+  The first lockfile carries its own note instead of the stack one. Process enforcement, not a security boundary. See `docs/stack-kits.md` "Kit rules, local and CI".
 - **Upgrade note (strict projects):** a strict project with no `ado.stack.json` now fails `strict check`. That includes link-on-merge
   `ado done` (merged tree, local config), which refuses `stack-profile-missing` for existing strict projects until the profile PR merges:
   run `ado stack init --seed <name>` (or `speckit.ado.stack`, once installed), then a human runs `ado stack approve --apply`, and merge it first.

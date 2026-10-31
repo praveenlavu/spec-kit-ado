@@ -814,6 +814,8 @@ def main(argv=None):
                 out["config"] = gate.TARGET_CONFIG_NOTE
                 if strict.edits_trust_files(client.config, args.src):  # the PR edits the profile, lockfile or test command: say so in the comment
                     out["trust_note"] = gate.TRUST_NOTE
+                if strict.adds_kits_lock(client.config, args.src):  # the first kits lockfile: nobody has reviewed its pins as code
+                    out["kits_trust_note"] = gate.KITS_TRUST_NOTE
             elif args.command == "gate" and args.base is not None and client.config.mode == "strict":  # a strict PR config under --base
                 out["config"] = gate.PR_CONFIG_NOTE
     except (ConfigError, AuthError, dod.DodExists, ValueError) as e:

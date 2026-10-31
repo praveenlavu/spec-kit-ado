@@ -3,12 +3,13 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 
 import pytest
 
 from ado import __main__ as m
-from ado import decisions, strict
+from ado import decisions, kits, strict
 from ado.__main__ import main
 from ado.dod import SECTION2
 from tests.conftest import FakeClient, commit, git
@@ -491,10 +492,12 @@ def test_advisory_or_absent_target_config_reads_no_stack_files(tmp_path, monkeyp
 
 
 # -- strict check: the target's profile judges --
-def _ci(tmp_path, monkeypatch, git_env, target_files, head_files=None, target_cfg=STACK_STRICT, head_cfg=STACK_STRICT):
+def _ci(tmp_path, monkeypatch, git_env, target_files, head_files=None, target_cfg=STACK_STRICT, head_cfg=STACK_STRICT, base_files=None):
     """`origin/trunk` = base + the target's config and `target_files`; HEAD = base + the spec/ledger files, the PR's own config and
     `head_files`. Returns a runner for `strict check 1001 --phase implement --base origin/trunk` -> (rc, JSON, holder of the client)."""
     repo = _repo(tmp_path, git_env)
+    if base_files:  # tracked on the target, the PR and everything between (e.g. an installed kit)
+        commit(repo, "base files", base_files)
     base = git(repo, "rev-parse", "HEAD")
     _project(tmp_path, prof=None)
     _target(repo, target_cfg, base, files=target_files)
@@ -601,7 +604,7 @@ def test_the_note_fires_on_any_head_edit_of_the_trust_files(tmp_path, monkeypatc
         d.mkdir()
         _ci(d, monkeypatch, git_env, {"ado.stack.json": approved}, **kw)
         rc, out = _run(capsys)
-        assert (rc, out["ok"], out["warnings"]) == (0, True, [NOTE]), name  # consistent edits pass, flagged for review as code
+        assert (rc, out["ok"], out["warnings"]) == (0, True, [KNOTE] if name == "lockfile" else [NOTE]), name  # consistent edits pass, flagged for review as code (the first lockfile by its own note)
     d = tmp_path / "none"
     d.mkdir()
     _ci(d, monkeypatch, git_env, {"ado.stack.json": approved})
@@ -749,7 +752,8 @@ def test_gate_comment_notes_any_head_edit_of_the_trust_files(tmp_path, monkeypat
         kw = {"head": ORG, **kw}
         summary = _gate_pr(repo, monkeypatch, git_env, STRICT, kw.pop("head"), **kw)
         rc, out = _gate(capsys, summary, "--base", "origin/main")
-        assert out["trust_note"] == NOTE and _md(summary).splitlines().count(NOTE) == 1, name
+        key, note = ("kits_trust_note", KNOTE) if name == "lockfile" else ("trust_note", NOTE)  # a first lockfile has its own note, not both
+        assert out[key] == note and _md(summary).splitlines().count(note) == 1 and (name != "lockfile" or NOTE not in _md(summary)), name
 
 
 def test_gate_comment_for_an_invalid_trust_file_does_not_blame_the_config(tmp_path, monkeypatch, capsys, git_env):
@@ -764,3 +768,327 @@ def test_gate_comment_for_an_invalid_trust_file_does_not_blame_the_config(tmp_pa
     other.mkdir()
     summary = _gate_pr(other, monkeypatch, git_env, "{not json", ORG)  # a broken config file keeps its old wording
     assert _gate(capsys, summary, "--base", "origin/main")[0] == 3 and "ado.config.json is invalid" in _md(summary)
+
+
+# ---- P2-9b: the kit rules in CI: the TARGET branch's lockfile judges the files git tracks at the PR head ----
+KIT = ".specify/extensions/sf"
+KIT_FILES = {f"{KIT}/extension.yml": "id: sf\n", f"{KIT}/commands/specify.md": "specify\n"}
+KNOTE = "trust-introducing PR: review ado.kits.lock.json as code"
+UNTRACKED = "kit not in the repository: checked locally only"
+APPROVED = json.dumps(approve(profile()))
+
+
+def _blob(text):  # the git blob id of a SHA-1 repository
+    data = text.encode()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def _lock(files=None, **more):
+    """A lockfile pinning `sf` to the digest of `files` (default KIT_FILES); `more`: extra kits as {id: entry}."""
+    prefix = KIT + "/"
+    digest = kits._digest([(_blob(t), p[len(prefix):]) for p, t in (files or KIT_FILES).items() if p.startswith(prefix)])
+    entry = {"version": "1.0.0", "source": None, "catalog_sha256": None, "dir_digest": digest, "agents_sha256": "a" * 64}
+    return json.dumps({"schema": 1, "kits": {"sf": entry, **more}})
+
+
+def _kci(tmp_path, monkeypatch, git_env, lock="pinned", head_files=None, base_files=KIT_FILES, **kw):
+    """A strict target with an approved profile and (lock: "pinned" = sf pinned to KIT_FILES, None = none, else the text) the lockfile,
+    KIT_FILES tracked everywhere; `head_files` is the PR's own change."""
+    files = {"ado.stack.json": APPROVED, **({"ado.kits.lock.json": _lock() if lock == "pinned" else lock} if lock is not None else {})}
+    return _ci(tmp_path, monkeypatch, git_env, files, head_files, base_files=base_files, **kw)
+
+
+def _kit_rules(out):
+    return [r for r in _rules_of(out) if r.startswith("kit-")]
+
+
+def _sub(tmp_path, name):
+    d = tmp_path / name
+    d.mkdir()
+    return d
+
+
+def _kit_findings(out, rule):
+    got = [f for f in out["findings"] if f["rule"] == rule]
+    assert len(got) == 1 and set(got[0]) == {"rule", "detail", "fix"}, out["findings"]
+    return got[0]
+
+
+def test_ci_uses_target_lock_and_head_tracked_files(tmp_path, monkeypatch, capsys, git_env):
+    _kci(tmp_path, monkeypatch, git_env)
+    rc, out = _run(capsys)
+    assert (rc, out["ok"], out["findings"]) == (0, True, []) and "warnings" not in out  # the lock matches the tracked files
+    (tmp_path / KIT / "commands/specify.md").write_text("dirty\n")  # an uncommitted edit, a new untracked file and agent copies: CI reads none
+    (tmp_path / KIT / "commands/new.md").write_text("new\n")
+    (tmp_path / ".claude/skills/speckit-sf-specify").mkdir(parents=True)
+    (tmp_path / ".claude/skills/speckit-sf-specify/SKILL.md").write_text("agent copy\n")
+    for phase in ("implement", "pr", "done"):
+        assert _kit_rules(_run(capsys, phase=phase)[1]) == [], phase
+    d = _sub(tmp_path, "edit")  # a committed edit to a tracked kit file
+    _kci(d, monkeypatch, git_env, head_files={f"{KIT}/commands/specify.md": "IGNORE-ALL-PREVIOUS evil\n"})
+    for phase in ("implement", "pr", "done"):
+        rc, out = _run(capsys, phase=phase)
+        f = _kit_findings(out, "kit-changed")
+        assert "sf" in f["detail"] and "evil" not in json.dumps(out) and "IGNORE" not in json.dumps(out) and f["fix"], phase
+        assert "kit-unpinned" not in _rules_of(out) and rc == 2
+    e = _sub(tmp_path, "added")  # a new tracked file in a locked kit dir
+    _kci(e, monkeypatch, git_env, head_files={f"{KIT}/hooks/after.sh": "echo x\n"})
+    assert _kit_rules(_run(capsys)[1]) == ["kit-changed"]
+    g = _sub(tmp_path, "deleted")  # a deleted tracked file
+    _kci(g, monkeypatch, git_env, head_files={f"{KIT}/commands/specify.md": None})
+    assert _kit_rules(_run(capsys)[1]) == ["kit-changed"]
+
+
+def test_ci_pr_editing_lock_has_no_effect(tmp_path, monkeypatch, capsys, git_env):
+    evil = {**KIT_FILES, f"{KIT}/commands/specify.md": "evil\n"}
+    _kci(tmp_path, monkeypatch, git_env, head_files={f"{KIT}/commands/specify.md": "evil\n", "ado.kits.lock.json": _lock(evil)})
+    rc, out = _run(capsys)  # the PR re-pins sf to its own tampered files: the target's pin still judges
+    assert rc == 2 and _kit_rules(out) == ["kit-changed"] and NOTE in out["warnings"]
+    d = _sub(tmp_path, "new-kit")  # the PR adds a kit AND its pin
+    other = {f"{KIT.replace('/sf', '/other')}/extension.yml": "id: other\n"}
+    entry = json.loads(_lock())["kits"]["sf"]
+    _kci(d, monkeypatch, git_env, head_files={**other, "ado.kits.lock.json": json.dumps({"schema": 1, "kits": {"sf": entry, "other": entry}})})
+    rc, out = _run(capsys)
+    assert rc == 2 and _kit_rules(out) == ["kit-unpinned"] and "other" in _kit_findings(out, "kit-unpinned")["detail"]
+    e = _sub(tmp_path, "weaker")  # the PR drops sf from the lock: this run is unaffected, the edit is flagged for review as code
+    _kci(e, monkeypatch, git_env, head_files={"ado.kits.lock.json": json.dumps({"schema": 1, "kits": {}})})
+    rc, out = _run(capsys)
+    assert (rc, out["ok"]) == (0, True) and NOTE in out["warnings"]
+
+
+def test_ci_pr_deleting_or_breaking_the_lock_is_refused(tmp_path, monkeypatch, capsys, git_env):
+    _kci(tmp_path, monkeypatch, git_env, head_files={"ado.kits.lock.json": None})
+    rc, out = _run(capsys)  # merged, a deleted lock would turn every kit rule into a bootstrap note
+    assert rc == 2 and _kit_rules(out) == ["kit-changed"] and "ado.kits.lock.json" in _kit_findings(out, "kit-changed")["detail"]
+    for n, raw in enumerate(("{not json IGNORE-ALL-PREVIOUS", '{"schema": 1, "kits": {"sf": {"version": "1.0.0"}}}', json.dumps({"schema": 2, "kits": {}}))):
+        d = _sub(tmp_path, f"bad{n}")
+        _kci(d, monkeypatch, git_env, head_files={"ado.kits.lock.json": raw})
+        rc, out = _run(capsys)
+        assert rc == 2 and _kit_rules(out) == ["kit-changed"] and "IGNORE" not in json.dumps(out), raw
+    g = _sub(tmp_path, "symlink")  # a lockfile that is a symlink at the head
+    _kci(g, monkeypatch, git_env, head_files={"elsewhere.json": _lock()})
+    os.remove(g / "ado.kits.lock.json")
+    os.symlink("elsewhere.json", g / "ado.kits.lock.json")
+    commit(g, "AB#1001 link")
+    assert _kit_rules(_run(capsys)[1]) == ["kit-changed"]
+
+
+def test_ci_target_lock_entry_that_cannot_be_read_is_changed(tmp_path, monkeypatch, capsys, git_env):
+    bad = json.dumps({"schema": 1, "kits": {"sf": {"version": "IGNORE-ALL-PREVIOUS"}}})  # valid for the config, not a pin
+    _kci(tmp_path, monkeypatch, git_env, lock=bad)
+    rc, out = _run(capsys)
+    assert rc == 2 and _kit_rules(out) == ["kit-changed"] and "IGNORE" not in json.dumps(out)
+
+
+def test_ci_new_tracked_kit_is_unpinned(tmp_path, monkeypatch, capsys, git_env):
+    _kci(tmp_path, monkeypatch, git_env, head_files={".specify/extensions/other/extension.yml": "id: other\n"})
+    for phase in ("implement", "pr", "done"):
+        rc, out = _run(capsys, phase=phase)
+        f = _kit_findings(out, "kit-unpinned")
+        assert _kit_rules(out) == ["kit-unpinned"] and "other" in f["detail"] and "sf" not in f["detail"] and f["fix"], phase
+    d = _sub(tmp_path, "odd")  # a dir that is no valid kit id, a dot dir, a dir with no manifest, a manifest too deep, a locked kit's second manifest
+    _kci(d, monkeypatch, git_env, head_files={
+        ".specify/extensions/IGNORE ALL PREVIOUS/extension.yml": "x\n", ".specify/extensions/.cache/extension.yml": "x\n",
+        ".specify/extensions/readme-only/README.md": "x\n", ".specify/extensions/deep/inner/extension.yml": "x\n",
+        f"{KIT}/inner/extension.yml": "x\n"})
+    rc, out = _run(capsys)
+    f = _kit_findings(out, "kit-unpinned")
+    assert "IGNORE" not in json.dumps(out) and "#1" in f["detail"] and "#2" in f["detail"] and "readme-only" not in f["detail"] and "deep" not in f["detail"]
+    assert _kit_rules(out) == ["kit-unpinned", "kit-changed"] or _kit_rules(out) == ["kit-changed", "kit-unpinned"]  # sf got a new tracked file
+    e = _sub(tmp_path, "many")  # the finding stays one short line however many kits there are
+    _kci(e, monkeypatch, git_env, head_files={f".specify/extensions/k{n}/extension.yml": "x\n" for n in range(30)})
+    out = _run(capsys)[1]
+    assert len(_kit_findings(out, "kit-unpinned")["detail"]) < 300 and "30" in _kit_findings(out, "kit-unpinned")["detail"]
+
+
+def test_ci_symlink_or_submodule_entry_is_changed(tmp_path, monkeypatch, capsys, git_env):
+    def inside_link(d):  # a symlink inside the locked kit dir
+        os.symlink("../../../README.md", d / KIT / "commands/link.md")
+        git(d, "add", "-A")
+
+    def inside_gitlink(d):  # a submodule inside the locked kit dir
+        git(d, "update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},{KIT}/vendor")
+
+    def dir_link(d):  # the locked kit dir itself is a symlink to tracked content elsewhere
+        git(d, "rm", "-rq", KIT)
+        shutil.rmtree(d / KIT, ignore_errors=True)
+        (d / "evil").mkdir()
+        (d / "evil/extension.yml").write_text("id: sf\n")
+        (d / KIT).parent.mkdir(parents=True, exist_ok=True)
+        os.symlink("../../evil", d / KIT)
+        git(d, "add", "-A")
+
+    def dir_gitlink(d):  # ... or a submodule
+        git(d, "rm", "-rq", KIT)
+        shutil.rmtree(d / KIT, ignore_errors=True)
+        git(d, "update-index", "--add", "--cacheinfo", f"160000,{'2' * 40},{KIT}")
+
+    def manifest_link(d):  # the manifest itself is a symlink
+        os.remove(d / KIT / "extension.yml")
+        os.symlink("../../../README.md", d / KIT / "extension.yml")
+        git(d, "add", "-A")
+
+    def extensions_link(d):  # `.specify/extensions` is a symlink: the kit files would be read from elsewhere
+        git(d, "rm", "-rq", ".specify")
+        shutil.rmtree(d / ".specify", ignore_errors=True)
+        (d / "evil").mkdir()
+        (d / "evil/sf").mkdir()
+        (d / "evil/sf/extension.yml").write_text("id: sf\n")
+        (d / ".specify").mkdir()
+        os.symlink("../evil", d / ".specify/extensions")
+        git(d, "add", "-A")
+
+    def specify_link(d):  # ... or `.specify` itself
+        git(d, "rm", "-rq", ".specify")
+        shutil.rmtree(d / ".specify", ignore_errors=True)
+        (d / "evil").mkdir()
+        os.symlink("evil", d / ".specify")
+        git(d, "add", "-A")
+
+    def extensions_gitlink(d):
+        git(d, "rm", "-rq", ".specify")
+        shutil.rmtree(d / ".specify", ignore_errors=True)
+        git(d, "update-index", "--add", "--cacheinfo", f"160000,{'4' * 40},.specify/extensions")
+
+    cases = {"extensions-link": extensions_link, "specify-link": specify_link, "extensions-gitlink": extensions_gitlink, "inside-link": inside_link, "inside-gitlink": inside_gitlink, "dir-link": dir_link, "dir-gitlink": dir_gitlink, "manifest-link": manifest_link}
+    for name, mutate in cases.items():
+        d = _sub(tmp_path, name)
+        _kci(d, monkeypatch, git_env)
+        mutate(d)  # stages its own change (a submodule entry exists only in the index)
+        git(d, "commit", "-q", "-m", "AB#1001 mutate")
+        rc, out = _run(capsys)
+        assert rc == 2 and _kit_rules(out) == ["kit-changed"], (name, out["findings"], out.get("warnings"))
+        assert UNTRACKED not in json.dumps(out), name
+    d = _sub(tmp_path, "unlocked-link")  # an unlocked dir that is a symlink or a submodule is an unpinned kit, not skipped
+    _kci(d, monkeypatch, git_env)
+    os.symlink("../../evil", d / ".specify/extensions/evil")
+    git(d, "add", "-A")
+    git(d, "update-index", "--add", "--cacheinfo", f"160000,{'3' * 40},.specify/extensions/vendor")
+    git(d, "commit", "-q", "-m", "AB#1001 link")
+    rc, out = _run(capsys)
+    assert rc == 2 and _kit_rules(out) == ["kit-unpinned"] and "evil" in out["findings"][0]["detail"] + out["findings"][-1]["detail"]
+
+
+def test_ci_agent_copies_not_read(tmp_path, monkeypatch, capsys, git_env):
+    for name in ("installed", "verify", "agents_sha256", "dir_digest", "load_lock"):
+        monkeypatch.setattr(kits, name, lambda *a, **k: (_ for _ in ()).throw(AssertionError("CI reads the tracked files only")))
+    registry = json.dumps({"extensions": {"evil": {"enabled": True, "registered_commands": {"claude": ["speckit.evil.run"]}}}})
+    _kci(tmp_path, monkeypatch, git_env, head_files={
+        ".specify/extensions/.registry": registry, ".claude/commands/speckit.evil.run.md": "evil\n",
+        ".claude/skills/speckit-sf-specify/SKILL.md": "tampered agent copy\n"})
+    for phase in ("implement", "pr", "done"):
+        rc, out = _run(capsys, phase=phase)
+        assert _kit_rules(out) == [], phase
+    d = _sub(tmp_path, "plain")
+    _kci(d, monkeypatch, git_env)
+    assert _run(capsys)[0] == 0
+
+
+def test_ci_untracked_kit_is_warning(tmp_path, monkeypatch, capsys, git_env):
+    _kci(tmp_path, monkeypatch, git_env, base_files={"src/x.py": "x = 1\n"})  # sf is locked but nothing of it is tracked here
+    (tmp_path / KIT / "commands").mkdir(parents=True)
+    for rel, text in KIT_FILES.items():  # the kit exists on disk, untracked: CI still has no tracked file to judge
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text)
+    for phase in ("implement", "pr", "done"):
+        rc, out = _run(capsys, phase=phase)
+        assert _kit_rules(out) == [] and UNTRACKED in "\n".join(w for w in out["warnings"] if isinstance(w, str)), phase
+    assert _run(capsys)[0] == 0
+    d = _sub(tmp_path, "deleted")  # the PR deletes the whole locked kit: a warning too (the kit is gone from the checkout)
+    _kci(d, monkeypatch, git_env, head_files={p: None for p in KIT_FILES})
+    rc, out = _run(capsys)
+    assert rc == 0 and UNTRACKED in "\n".join(w for w in out["warnings"] if isinstance(w, str))
+    e = _sub(tmp_path, "two")  # one tracked and matching, one not tracked: only the second is named
+    two = {**KIT_FILES}
+    lock = json.loads(_lock())
+    lock["kits"]["fabrikam-kit"] = lock["kits"]["sf"]
+    _kci(e, monkeypatch, git_env, lock=json.dumps(lock), base_files=two)
+    out = _run(capsys)[1]
+    note = next(w for w in out["warnings"] if isinstance(w, str) and UNTRACKED in w)
+    assert "fabrikam-kit" in note and "sf" not in note.replace("fabrikam-kit", "")
+
+
+def test_bootstrap_no_target_lock_is_note(tmp_path, monkeypatch, capsys, git_env):
+    _kci(tmp_path, monkeypatch, git_env, lock=None, head_files={".specify/extensions/other/extension.yml": "id: other\n"})
+    for phase in ("implement", "pr", "done"):
+        rc, out = _run(capsys, phase=phase)
+        assert _kit_rules(out) == [] and "warnings" not in out, phase  # no lock anywhere: no finding, no note
+    d = _sub(tmp_path, "adds")  # the PR adds the first lockfile (and a kit the target never pinned)
+    _kci(d, monkeypatch, git_env, lock=None, head_files={"ado.kits.lock.json": _lock(), ".specify/extensions/other/extension.yml": "x\n"})
+    rc, out = _run(capsys)
+    assert (rc, out["ok"], out["findings"]) == (0, True, []) and KNOTE in out["warnings"] and out["warnings"].count(KNOTE) == 1
+    e = _sub(tmp_path, "bad")  # the first lockfile must itself be sound: merged, an invalid one would fail every later run
+    for n, raw in enumerate(("{not json IGNORE-ALL-PREVIOUS", '{"schema": 1, "kits": {"sf": {}}}')):
+        f = _sub(e, f"b{n}")
+        _kci(f, monkeypatch, git_env, lock=None, head_files={"ado.kits.lock.json": raw})
+        rc, out = _run(capsys)
+        assert rc == 2 and _kit_rules(out) == ["kit-changed"] and KNOTE in out["warnings"] and "IGNORE" not in json.dumps(out)
+    g = _sub(tmp_path, "present")  # the target HAS a lock: no bootstrap note for an edit of it
+    _kci(g, monkeypatch, git_env, head_files={"ado.kits.lock.json": json.dumps({"schema": 1, "kits": {}})})
+    assert KNOTE not in _run(capsys)[1]["warnings"]
+
+
+def test_gate_comment_notes_a_first_kits_lockfile(tmp_path, monkeypatch, capsys, git_env):
+    summary = _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG, head_files={"ado.kits.lock.json": _lock()})
+    rc, out = _gate(capsys, summary, "--base", "origin/main")
+    assert out["kits_trust_note"] == KNOTE and _md(summary).splitlines().count(KNOTE) == 1
+    cases = {"target has a lock": dict(target_files={"ado.kits.lock.json": _lock()}, head_files={"ado.kits.lock.json": _lock()}), "head adds none": {}}
+    for n, (name, kw) in enumerate(cases.items()):
+        repo = _sub(tmp_path, f"c{n}")
+        s = _gate_pr(repo, monkeypatch, git_env, STRICT, ORG, **kw)
+        out = _gate(capsys, s, "--base", "origin/main")[1]
+        assert "kits_trust_note" not in out and KNOTE not in _md(s), name
+    other = _sub(tmp_path, "nobase")
+    s = _gate_pr(other, monkeypatch, git_env, STRICT, ORG, head_files={"ado.kits.lock.json": _lock()})
+    assert "kits_trust_note" not in _gate(capsys, s)[1] and KNOTE not in _md(s)
+
+
+def test_advisory_target_ignores_the_kit_rules(tmp_path, monkeypatch, capsys, git_env):
+    _kci(tmp_path, monkeypatch, git_env, target_cfg=ORG, head_cfg=ORG, head_files={".specify/extensions/other/extension.yml": "x\n"})
+    rc, out = _run(capsys)
+    assert (rc, out["ok"], out["findings"]) == (0, True, []) and out["note"] == "mode is advisory"
+
+
+def _track(repo, path, text="x\n"):
+    """Stage `path` in the index only and commit: a case-insensitive file system (macOS) would fold the variants in the working tree."""
+    blob = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"], input=text, capture_output=True, text=True, check=True).stdout.strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"100644,{blob},{path}")
+
+
+def test_ci_case_and_unicode_lookalike_paths_are_not_ignored(tmp_path, monkeypatch, capsys, git_env):
+    """On a case-insensitive checkout (macOS, Windows) these land in the pinned kit dir, so they are findings, and no name is echoed."""
+    hostile = ("SF/commands/x.md", "\uff53f/commands/x.md", "\u0455f/commands/x.md", "Sf/extension.yml")
+    for n, name in enumerate(hostile):
+        d = _sub(tmp_path, f"dir{n}")
+        _kci(d, monkeypatch, git_env)
+        _track(d, f".specify/extensions/{name}")
+        git(d, "commit", "-q", "-m", "AB#1001 variant")
+        rc, out = _run(capsys)
+        f = _kit_findings(out, "kit-unpinned")
+        assert rc == 2 and _kit_rules(out) == ["kit-unpinned"] and "#1" in f["detail"], name
+        assert name.split("/")[0] not in json.dumps(out, ensure_ascii=False) and "SF" not in json.dumps(out), name
+    for n, path in enumerate((".Specify/extensions/sf/x.md", ".specify/Extensions/sf/x.md", ".SPECIFY/extensions/sf/commands/specify.md",
+                              "\uff0especify/extensions/sf/x.md")):
+        d = _sub(tmp_path, f"top{n}")
+        _kci(d, monkeypatch, git_env)
+        _track(d, path)
+        git(d, "commit", "-q", "-m", "AB#1001 variant")
+        rc, out = _run(capsys)
+        assert rc == 2 and "kit-changed" in _kit_rules(out), path
+        dump = json.dumps(out, ensure_ascii=False)
+        assert not any(t in dump for t in (".Specify", "Extensions", "SPECIFY", "\uff0e")), path
+    d = _sub(tmp_path, "plain-file")  # a plain file and a dot dir beside the kits are not kit dirs
+    _kci(d, monkeypatch, git_env, head_files={".specify/extensions/README.md": "x\n", ".specify/extensions/.cache/c.json": "{}\n"})
+    assert _kit_rules(_run(capsys)[1]) == []
+
+
+def test_ci_symlinked_kit_config_file_is_changed(tmp_path, monkeypatch, capsys, git_env):
+    files = {**KIT_FILES, f"{KIT}/sf-config.yml": "org: contoso\n"}  # the kit's own settings file is excluded from the digest ...
+    _kci(tmp_path, monkeypatch, git_env, base_files=files)
+    assert _run(capsys)[0] == 0
+    d = _sub(tmp_path, "link")  # ... unless it is a symlink
+    _kci(d, monkeypatch, git_env, base_files=files)
+    os.remove(d / KIT / "sf-config.yml")
+    os.symlink("../../../README.md", d / KIT / "sf-config.yml")
+    commit(d, "AB#1001 link")
+    assert _kit_rules(_run(capsys)[1]) == ["kit-changed"]

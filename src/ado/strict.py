@@ -15,10 +15,11 @@ import subprocess
 import tempfile
 import threading
 import time
+import unicodedata
 from datetime import date
 from pathlib import Path
 
-from . import decisions, dod, gate, prs, push, questions, stack, tasks
+from . import decisions, dod, gate, kits, prs, push, questions, stack, tasks
 from .auth import AuthError
 from .client import AdoError
 from .config import Config, ConfigInvalid, _has_control
@@ -96,7 +97,7 @@ class _Ctx:
         self.ledger = gate._read(Path(repo) / dod.dod_file(self.cfg.dod_path, story_id), repo, set())
         spec_dir = dod.ledger_spec_dir(self.ledger) if self.ledger is not None else None
         self.spec_dir = spec_dir.strip() or None if spec_dir else None  # a CRLF ledger leaves `\r` on the header value
-        self._files, self._stack, self._head = {}, None, None
+        self._files, self._stack, self._head, self._kits = {}, None, None, None
         path = Path(repo) / decisions.decisions_file(self.cfg.dod_path, story_id)
         md = gate._read(path, repo, set()) if os.path.lexists(path) else None  # confined like the ledger: no symlink, <= 1 MiB
         self.decisions_md = md or ""
@@ -244,8 +245,8 @@ def _head_blob(repo, head, path, label):
 
 def _head_trust(cfg, repo, head):
     """For a strict target config: what the head commit holds of the trust files, against the target's. `{"profile": read_profile-like dict,
-    "differs": the profile or strict.test_command differs from the target's, "changed": that or the lockfile differs, "cmd": the head
-    config's strict.test_command}`. An absent head config counts as no command; an unreadable file as different."""
+    "differs": the profile or strict.test_command differs from the target's, "changed": that or the lockfile differs, "lock": the head's lockfile
+    (bytes, None when absent, _UNREADABLE), "cmd": the head config's strict.test_command}`. An absent head config counts as no command; an unreadable file as different."""
     raw = _head_blob(repo, head, stack.PROFILE_FILE, _HEAD_LABEL)
     lock = _head_blob(repo, head, "ado.kits.lock.json", "ado.kits.lock.json at the head commit")
     try:
@@ -258,14 +259,28 @@ def _head_trust(cfg, repo, head):
     else:
         res = stack.read_profile(blob=raw) if raw is not None else {"status": "none", "profile": None, "errors": []}
     differs = raw != cfg.target_profile_blob or cmd != cfg.strict.get("test_command")
-    return {"profile": res, "differs": differs, "changed": differs or lock != cfg.target_lock_blob, "cmd": cmd}
+    return {"profile": res, "lock": lock, "differs": differs, "changed": differs or lock != cfg.target_lock_blob, "cmd": cmd}
+
+
+def _stack_note(cfg, trust):
+    """Whether the stack note applies to `_head_trust` result `trust`: the head differs from the target in the profile, `strict.test_command` or
+    the lockfile, except that the first lockfile (the target has none) carries its own note instead (`adds_kits_lock`)."""
+    return trust["differs"] or (trust["changed"] and not (cfg.target_lock_blob is None and trust["lock"] is not None))
 
 
 def edits_trust_files(cfg, repo, commit="HEAD"):
     """True when `commit` (the PR head) differs from the target branch in `ado.stack.json`, `ado.kits.lock.json` or `strict.test_command`
-    (only for a config taken from the target): the PR comment and `warnings` say to review it as code."""
+    (only for a config taken from the target; a first lockfile is `adds_kits_lock`'s instead): the PR comment and `warnings` say to review
+    it as code."""
     full = _rev(repo, commit) if cfg.from_target else ""
-    return bool(full) and _head_trust(cfg, repo, full)["changed"]
+    return bool(full) and _stack_note(cfg, _head_trust(cfg, repo, full))
+
+
+def adds_kits_lock(cfg, repo, commit="HEAD"):
+    """True when a config taken from the target branch has no `ado.kits.lock.json` there and `commit` (the PR head) has an entry for it:
+    the first lockfile, whose pins nobody has reviewed as code yet (bootstrap)."""
+    full = _rev(repo, commit) if cfg.from_target and cfg.target_lock_blob is None else ""
+    return bool(full) and _head_blob(repo, full, "ado.kits.lock.json", "ado.kits.lock.json at the head commit") is not None
 
 
 def _stack_state(c):
@@ -377,6 +392,165 @@ def _stack_unprofiled(c):
     shown = ", ".join(f"{stack.safe_path(r, n)} ({i})" for n, (r, i) in enumerate(new[:5], 1))
     return [_finding("stack-unprofiled", f"{len(new)} high-confidence stack root(s) have no stack in the approved profile: {shown}"
                      + (", ..." if len(new) > 5 else ""), fix)]
+
+
+# ---- kit rules (D§7): `kit-unpinned` / `kit-changed`; not overridable (not in _COVERS). Process enforcement, not a security boundary ----
+# Local config: `kits.verify` over the registry, the kit dirs and the agent copies of the working tree against the working-tree lockfile.
+# CI (cfg.from_target): the TARGET branch's lockfile (read once by read_target_trust) judges the files git TRACKS at the PR head; the
+# registry, the agent copies and untracked files are not read there. No target lockfile (bootstrap): no finding, a note. Findings are
+# fixed texts: kit ids match [a-z0-9-]{1,40} or are named by position (#n); no kit, lock or path text is echoed.
+_KIT_PIN = "review the kit, then a human runs `ado kits pin <id> --apply` in their own terminal window (`ado kits pin <id>` previews it)"
+_KIT_REPIN = "review what changed, then a human re-pins it with `ado kits pin <id> --apply` in their own terminal window"
+_KIT_CI_ORDER = "; in CI merge the pin in a PR of its own before the kit change, because the lockfile that judges is the target branch's"
+KIT_UNTRACKED = "kit not in the repository: checked locally only"
+_KIT_LOCK_BAD = "ado.kits.lock.json at the head commit cannot be read, or is not a lockfile this version can trust: merged, it would fail every later run"
+_KIT_LOCK_GONE = "the PR deletes ado.kits.lock.json: merged, it would turn these rules into a note (write an empty `kits` object to unpin everything)"
+_KIT_LOCK_ENTRY = "ado.kits.lock.json at the target branch has an entry that cannot be read as a pin"
+_KIT_REPLACED = "`.specify` or `.specify/extensions` is a symlink, a submodule or a file at the head commit: the kits cannot be judged"
+_KIT_LOOKALIKE = "a tracked path differs from `.specify` or `.specify/extensions` only in case or Unicode form: on a case-insensitive checkout it lands in the kit dirs"
+_KIT_GIT = "the kit files of the head commit cannot be read (git could not answer)"
+
+
+def _kit_ids(labels):
+    return ", ".join(labels[:5]) + (f", ... ({len(labels)} in all)" if len(labels) > 5 else "")
+
+
+def _kit_result(unpinned, changed, problems=(), warnings=(), ci=False):
+    """`{"findings", "warnings"}`: one kit-unpinned and one kit-changed finding at most, however many kits (ids, counts and fixed words only)."""
+    out = []
+    if unpinned:
+        out.append(_finding("kit-unpinned", f"{len(unpinned)} kit(s) not pinned in ado.kits.lock.json: {_kit_ids(unpinned)}", _KIT_PIN + (_KIT_CI_ORDER if ci else "")))
+    if changed or problems:
+        out.append(_finding("kit-changed", "; ".join(([f"{len(changed)} kit(s) differ from their pin in ado.kits.lock.json: {_kit_ids(changed)}"] if changed else [])
+                                                      + list(problems)), _KIT_REPIN + (_KIT_CI_ORDER if ci else "")))
+    return {"findings": out, "warnings": list(warnings)}
+
+
+def _kits_local(c):
+    try:
+        res = kits.verify(c.repo, kits.load_lock(c.repo))
+    except (kits.KitError, ConfigInvalid):  # an untrustworthy registry, kit file or lockfile is a finding, never a pass
+        return _kit_result([], [], ["the kit registry, a kit file or ado.kits.lock.json cannot be trusted: run `ado kits verify`"])
+    return _kit_result([f["kit"] for f in res["findings"] if f["rule"] == "kit-unpinned"], [f["kit"] for f in res["findings"] if f["rule"] == "kit-changed"])
+
+
+def _lock_problem(raw):
+    """True when the head's lockfile bytes (or the unreadable sentinel) are not a lockfile this version can read."""
+    if raw is _UNREADABLE:
+        return True
+    try:
+        kits.read_lock(raw)
+    except ConfigInvalid:
+        return True
+    return False
+
+
+def _fold(name):
+    return unicodedata.normalize("NFKC", name).casefold()
+
+
+def _lookalikes(repo, head, args, want):
+    """True when the tree listing `args` (git ls-tree names) holds an entry that equals `want` only after case and Unicode folding (a
+    case-insensitive checkout would put it in the same place); None when git cannot answer."""
+    r = _git(repo, "ls-tree", "-z", "--name-only", "--full-tree", "--end-of-options", head, *args)
+    if r is None or r.returncode:
+        return None
+    names = (rec.decode("utf-8", "replace").rsplit("/", 1)[-1] for rec in r.stdout.split(b"\0") if rec)
+    return any(n != want and _fold(n) == want for n in names)
+
+
+def _tracked_kits(repo, head):
+    """From git's tree of the 40-hex `head`: (names with a tracked file below `.specify/extensions/`, names with a tracked
+    `<name>/extension.yml`, {name: mode of an entry that is itself the name: a file, symlink or submodule where a kit dir would be}, whether
+    `.specify` or `extensions` has a case/Unicode lookalike), or "replaced" when `.specify` or `.specify/extensions` is itself a symlink,
+    submodule or file (the kits would live elsewhere), or None when git cannot answer. Names are decoded leniently (an odd one never equals
+    a kit id)."""
+    top = _git(repo, "ls-tree", "-z", "--full-tree", "--end-of-options", head, "--", ".specify", ".specify/extensions")
+    if top is None or top.returncode:
+        return None
+    if any(rec.partition(b"\t")[0].split(b" ")[0] != b"040000" for rec in top.stdout.split(b"\0") if rec):
+        return "replaced"
+    roots, inner = _lookalikes(repo, head, (), ".specify"), _lookalikes(repo, head, ("--", ".specify/"), "extensions")
+    if roots is None or inner is None:
+        return None
+    r = _git(repo, "ls-tree", "-r", "-z", "--full-tree", "--end-of-options", head, "--", ".specify/extensions/")
+    if r is None or r.returncode:
+        return None
+    present, manifests, entries = set(), set(), {}
+    for rec in r.stdout.split(b"\0"):
+        if not rec:
+            continue
+        meta, _, raw = rec.partition(b"\t")
+        parts = raw.decode("utf-8", "replace").split("/")
+        if len(parts) < 3 or parts[:2] != [".specify", "extensions"]:
+            return None
+        if len(parts) == 3:
+            entries[parts[2]] = meta.split(b" ")[0]
+            continue
+        present.add(parts[2])
+        if len(parts) == 4 and parts[3] == "extension.yml":
+            manifests.add(parts[2])
+    return present, manifests, entries, roots or inner
+
+
+def _kits_ci(c):
+    cfg, head = c.cfg, _head_commit(c)
+    hl = _stack_state(c)["head"]["lock"]
+    if cfg.target_lock_blob is None:  # bootstrap: nothing to judge against, so a note; the first lockfile must still be sound
+        if hl is None:
+            return _kit_result([], [])
+        return _kit_result([], [], [_KIT_LOCK_BAD] if _lock_problem(hl) else [], [gate.KITS_TRUST_NOTE], ci=True)
+    problems = []
+    if hl != cfg.target_lock_blob:  # the PR's copy becomes the target's on merge
+        if hl is None:
+            problems.append(_KIT_LOCK_GONE)
+        elif _lock_problem(hl):
+            problems.append(_KIT_LOCK_BAD)
+    try:
+        lock = kits.read_lock(cfg.target_lock_blob)["kits"]
+    except ConfigInvalid:
+        return _kit_result([], [], problems + [_KIT_LOCK_ENTRY], ci=True)
+    tracked = _tracked_kits(c.repo, head) if head else None
+    if tracked is None:
+        return _kit_result([], [], problems + [_KIT_GIT], ci=True)
+    if tracked == "replaced":
+        return _kit_result([], [], problems + [_KIT_REPLACED], ci=True)
+    present, manifests, entries, lookalike = tracked
+    if lookalike:
+        problems.append(_KIT_LOOKALIKE)
+    odd = {n for n, mode in entries.items() if mode in (b"120000", b"160000") and not n.startswith(".")}  # symlinked or submodule dirs
+    # a tracked dir whose name is no kit id (`SF`, a fullwidth or Cyrillic lookalike) would land in a pinned kit dir on a case-insensitive
+    # checkout, with or without a manifest; dot names (.cache) and plain files at the top are not kit dirs
+    odd |= {n for n in present if not n.startswith(".") and not stack._ID.fullmatch(n)}
+    names = sorted((manifests | odd) - set(lock))
+    unpinned = [n if stack._ID.fullmatch(n) else f"#{i}" for i, n in enumerate(names, 1)]
+    changed, untracked = [], []
+    for kit_id, pin in lock.items():
+        if kit_id in entries:  # a file, symlink or submodule where the locked kit dir was
+            changed.append(kit_id)
+        elif kit_id not in present:
+            untracked.append(kit_id)
+        else:
+            try:
+                digest = kits.dir_digest_at(c.repo, head, kit_id)
+            except kits.KitError:
+                digest = "changed"
+            if digest is None:
+                untracked.append(kit_id)
+            elif digest != pin["dir_digest"]:  # includes "changed": a symlink or submodule inside the kit dir, an odd mode or path
+                changed.append(kit_id)
+    warn = [f"{KIT_UNTRACKED} ({_kit_ids(untracked)})"] if untracked else []
+    return _kit_result(unpinned, changed, problems, warn, ci=True)
+
+
+def _kits_state(c):
+    if c._kits is None:
+        c._kits = _kits_ci(c) if c.cfg.from_target else _kits_local(c)
+    return c._kits
+
+
+def _kits(c):
+    return _kits_state(c)["findings"]
 
 
 # ---- L1 order evidence (D§5): red <sha> → green <sha> per AC, checked against git ----
@@ -878,9 +1052,9 @@ def _fidelity_warnings(c):
 
 
 PHASES = {
-    "implement": [_ledger, _spec_files, _placeholders, _open_questions, _board, _test_command, _stack_profile, _stack_unprofiled],
-    "pr": [_ledger, _base, _l1, _record, _decisions_pr, _review, _fidelity_pr, _stack_profile, _stack_unprofiled],
-    "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _review, _fidelity_done, _stack_profile, _stack_unprofiled],
+    "implement": [_ledger, _spec_files, _placeholders, _open_questions, _board, _test_command, _stack_profile, _stack_unprofiled, _kits],
+    "pr": [_ledger, _base, _l1, _record, _decisions_pr, _review, _fidelity_pr, _stack_profile, _stack_unprofiled, _kits],
+    "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _review, _fidelity_done, _stack_profile, _stack_unprofiled, _kits],
 }
 
 # ---- override (D§7): `skip <rule>` lines of kind override; only these findings, never L1 or a missing spec/plan/tasks ----
@@ -926,8 +1100,10 @@ def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False)
     out = {"phase": phase, "mode": mode, "ok": not findings, "findings": findings,
            "overrides_used": sorted(used, key=lambda i: int(i[1:]))}
     warnings = _fidelity_warnings(ctx) if phase in ("pr", "done") else []
-    if (_stack_state(ctx)["head"] or {}).get("changed"):  # the PR edits the profile, the lockfile or strict.test_command: review it as code
+    head = _stack_state(ctx)["head"]
+    if head and _stack_note(ctx.cfg, head):  # the PR edits the profile, the lockfile or strict.test_command: review it as code
         warnings.append(gate.TRUST_NOTE)
+    warnings += _kits_state(ctx)["warnings"]
     return {**out, "warnings": warnings} if warnings else out
 
 

@@ -1392,7 +1392,7 @@ def test_kits_verify_documented():
     for phrase in ("`dir_digest`", "`agents_sha256`", "`--dev`", "**cannot be pinned**", "never a glob", "`local-config.yml`",
                    "`*-config.local.yml`", "**disabled ones included**", "`working-tree-encoding`", "reported `stale`", "process enforcement, not a security boundary", "`ado kits pin`"):
         assert phrase in kits, phrase
-    assert "not in this release yet" in _flat("README.md") and "not in this release yet" in _flat("CHANGELOG.md")
+    assert "not in this release yet" not in _flat("README.md") and "not in this release yet" not in _flat("CHANGELOG.md")  # the rules shipped in P2-9b
 
 
 def test_kits_scan_documented_as_a_heuristic_aid_not_a_verdict():
@@ -1423,3 +1423,33 @@ def test_kits_pin_documented_as_a_terminal_only_approval_record():
     log = _flat("CHANGELOG.md")
     assert log.index("## 0.3.0 — unreleased") < log.index("`kits.plan_pin`") < log.index("## 0.2")
     assert "not a sandbox" in log and "`<id>-config.yml` is not vetted" in log
+
+
+# ---- P2-9b: strict kit rules, local and CI ----
+def test_kit_rules_documented_with_what_ci_checks_and_what_is_local_only():
+    kits = _flat("docs/stack-kits.md")
+    assert "## Kit rules, local and CI" in (ROOT / "docs/stack-kits.md").read_text(encoding="utf-8")
+    for phrase in ("`kit-unpinned`", "`kit-changed`", "(they are not in the override table)", "**disabled kits included**", "**target branch's**",
+                   "git **tracks** at the PR head", "`kits.dir_digest_at(repo, head, id)`", "CI does not check (local only)", "agent copies", "`.specify/extensions/.registry`",
+                   "`kit not in the repository: checked locally only (<ids>)`", "**A PR cannot change what CI accepts by editing the lockfile.**",
+                   "**deletes** `ado.kits.lock.json`", "**Bootstrap.**", "`trust-introducing PR: review ado.kits.lock.json as code`", "`kits_trust_note`",
+                   "**Advisory mode** only reports", 'reason: "files-remain"', "Process\nenforcement, not a security boundary".replace("\n", " ")):
+        assert phrase in kits, phrase
+    for doc in ("README.md", "AGENTS.md", "CHANGELOG.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        text = _flat(doc)
+        assert "`kit-unpinned`" in text and "`kit-changed`" in text or doc.startswith("docs/ci-"), doc
+        assert "ado.kits.lock.json" in text, doc
+    for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        text = _flat(doc)
+        assert "**Kits, CI against local:**" in text and "kit not in the repository: checked locally only" in text and "agent copies" in text, doc
+        assert "review ado.kits.lock.json as code" in text, doc
+    readme = _flat("README.md")
+    assert "**Kit rules**" in readme and "**What CI checks and what runs locally:**" in readme and "trust-introducing PR: review ado.kits.lock.json as code" in readme
+    log = _flat("CHANGELOG.md")
+    assert log.index("## 0.3.0 — unreleased") < log.index("Strict kit rules") < log.index("## 0.2")
+    assert "kits_trust_note" in log and "Process enforcement, not a security boundary" in log
+    assert "never edit `ado.kits.lock.json` or a kit file to silence them" in _flat("AGENTS.md")
+    for phrase in ("**only when the registry file exists**", "it cannot see an unpinned kit, nor an edit to an agent copy", "a symlinked `<id>-config.yml`",
+                   "whose name is no kit id (`SF`, a fullwidth or Cyrillic lookalike)", "the PR that adds the first one carries only its own"):
+        assert phrase in kits, phrase
+    assert "only when the registry file exists" in readme and "own note instead" in log
