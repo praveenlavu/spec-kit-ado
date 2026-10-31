@@ -274,14 +274,14 @@ tests fail: `ado strict verify` runs them. Advisory mode (the default) is unchan
 **Security note: the test command is code from your project.** `ado strict verify` runs `strict.test_command`
 at one commit in a temporary checkout: a throwaway `git clone --shared --no-checkout` in a fresh directory outside the repo (origin removed, never fetched,
 repository hooks off), so it shares no config, hooks or index with your repo, and the whole directory is removed afterwards, even on failure, timeout or Ctrl-C.
-Every git call and the command get a scrubbed environment: only `PATH`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `VIRTUAL_ENV`, `JAVA_HOME`, `GOPATH`, `CARGO_HOME` and `NODE_PATH`
-are passed (no `GIT_*` from the parent, no global git config, no prompts), `HOME` is an empty temporary directory, and any name ending `_TOKEN`, `_PAT`, `_SECRET`,
+Every git call and the command get a scrubbed environment: only `PATH`, `LANG`, `LC_*`, `TERM`, `TMPDIR`, `VIRTUAL_ENV`, `JAVA_HOME`, `GOPATH`, `NODE_PATH`, `GOROOT`, `FLUTTER_ROOT`, `DOTNET_ROOT`, `ANDROID_HOME`, `ANDROID_SDK_ROOT` and `RUSTUP_HOME`
+are passed (the six SDK locations only when set to an absolute path without control characters; no `GIT_*` from the parent, no global git config, no prompts; the list is fixed in code and a profile cannot add names), `CARGO_HOME`, `GRADLE_USER_HOME` and `PUB_CACHE` are never passed (they can hold credentials), `HOME` is an empty temporary directory, and any name ending `_TOKEN`, `_PAT`, `_SECRET`,
 `_KEY`, `_PASSWORD` or `_CREDENTIALS`, `ADO_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, `AZURE_DEVOPS_EXT_PAT`, `SYSTEM_ACCESSTOKEN`, `SSH_AUTH_SOCK` and `AWS_*` are dropped.
 It has no stdin, runs in its own process group killed at `strict.test_timeout`, and its output is never returned or logged (line counts only, kept in constant memory). The recorded `seconds` stop when the command exits, not when its output pipes close. Global and system git config are ignored, so Git LFS filters do not run and LFS files are checked out as pointer files: a test that needs the real LFS content cannot pass here.
 **This is hygiene, not a sandbox**: the command still has your user's filesystem and network access, so it can read or write files outside the checkout (including your repo and
 home directory) and read or change its own checkout's `.git`. A process that calls `setsid` escapes the group kill, and if it keeps the output pipes open the runner stops
 waiting for them 10 s after the command ends. **CI must run it without secrets**: check out with `persist-credentials: false` (the shipped workflows do) and run the test command
-in a job where no step holds secrets.
+in a job where no step holds secrets. Hiding `HOME` hides default lookups only: see "Not a sandbox" in [docs/configuration.md](docs/configuration.md).
 
 ## Stack kits and the phase map
 

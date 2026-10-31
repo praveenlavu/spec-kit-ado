@@ -148,6 +148,64 @@ def test_scrubbed_env_allow_list_then_deny_list():
     assert "HOME" in strict.scrubbed_env({}) and strict.scrubbed_env({})["HOME"] != "/real/home"
 
 
+_SDK = {"GOROOT": "/sdk/go", "FLUTTER_ROOT": "/sdk/flutter", "DOTNET_ROOT": "/sdk/dotnet", "ANDROID_HOME": "/sdk/android",
+        "ANDROID_SDK_ROOT": "/sdk/android", "RUSTUP_HOME": "/sdk/rustup"}
+
+
+def test_cargo_home_gradle_pub_cache_not_passed(repo, tmp_path, monkeypatch):
+    for k in ("CARGO_HOME", "GRADLE_USER_HOME", "PUB_CACHE"):
+        monkeypatch.setenv(k, "/home/dana/secret-dir")
+        assert k not in strict.scrubbed_env({k: "/home/dana/secret-dir"})
+    out = tmp_path / "env.txt"
+    assert strict.run_at(str(repo), git(repo, "rev-parse", "HEAD"), f"env > {shlex.quote(str(out))}", 30)["exit"] == 0
+    assert "/home/dana/secret-dir" not in out.read_text()
+
+
+def test_sf_and_sfdx_vars_not_passed(repo, tmp_path, monkeypatch):
+    bad = {"SF_ACCESS_TOKEN": "a", "SF_TARGET_ORG": "o", "SF_USE_GENERIC_UNIX_KEYCHAIN": "true", "SFDX_AUTH_URL": "u",
+           "SFDX_DEFAULTUSERNAME": "d", "SALESFORCE_CLI_TOKEN": "t"}
+    assert strict.scrubbed_env(bad) == {"HOME": "/nonexistent", "PYTHONDONTWRITEBYTECODE": "1"}
+    for k, v in bad.items():
+        monkeypatch.setenv(k, v)
+    out = tmp_path / "env.txt"
+    assert strict.run_at(str(repo), git(repo, "rev-parse", "HEAD"), f"env > {shlex.quote(str(out))}", 30)["exit"] == 0
+    names = {line.split("=", 1)[0] for line in out.read_text().splitlines() if "=" in line}
+    assert not names & set(bad)
+
+
+def test_sdk_names_passed_when_set(repo, tmp_path, monkeypatch):
+    assert strict.scrubbed_env(_SDK) == {**_SDK, "HOME": "/nonexistent", "PYTHONDONTWRITEBYTECODE": "1"}
+    assert not set(_SDK) & set(strict.scrubbed_env({}))  # only when set
+    for k, v in _SDK.items():
+        monkeypatch.setenv(k, v)
+    out = tmp_path / "env.txt"
+    assert strict.run_at(str(repo), git(repo, "rev-parse", "HEAD"), f"env > {shlex.quote(str(out))}", 30)["exit"] == 0
+    seen = dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
+    assert {k: seen.get(k) for k in _SDK} == _SDK
+
+
+@pytest.mark.parametrize("value", ["relative/sdk", "", ".", "~/sdk", "/sdk/go\nPATH=/evil", "/sdk\x00/go", "/sdk/\x1b[31m", "/sdk/go\u2028x", "/sdk/\x7f"])
+def test_sdk_path_value_must_be_absolute_without_control_chars(value):
+    for k in _SDK:
+        assert k not in strict.scrubbed_env({k: value})
+    assert strict.scrubbed_env({"GOROOT": "/ok/go"})["GOROOT"] == "/ok/go"
+
+
+def test_home_is_temp(repo, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", os.path.expanduser("~"))
+    out = tmp_path / "home.txt"
+    strict.run_at(str(repo), git(repo, "rev-parse", "HEAD"), f"printf %s \"$HOME\" > {shlex.quote(str(out))}", 30)
+    home = out.read_text()
+    assert home != os.environ["HOME"] and os.path.basename(os.path.dirname(home)).startswith("ado-strict-")
+    assert strict._git_env({"HOME": "/real"}, "/fresh")["HOME"] == "/fresh"
+
+
+def test_deny_pass_still_drops_secret_suffixes_of_allowed_names(monkeypatch):
+    monkeypatch.setattr(strict, "_ENV_ALLOW", strict._ENV_ALLOW + ("DOTNET_API_KEY", "TOOL_SECRET", "X_PASSWORD", "Y_TOKEN", "GH_TOKEN"))
+    env = {"DOTNET_API_KEY": "/k", "TOOL_SECRET": "/s", "X_PASSWORD": "/p", "Y_TOKEN": "/t", "GH_TOKEN": "/g", "GOROOT": "/ok"}
+    assert strict.scrubbed_env(env) == {"GOROOT": "/ok", "HOME": "/nonexistent", "PYTHONDONTWRITEBYTECODE": "1"}
+
+
 def test_unknown_sha_error(repo, made):
     for bad in ("deadbeef", "0" * 40, "zzzzzzz", "abc", "--help", "main", "HEAD", ""):
         with pytest.raises(ValueError) as e:

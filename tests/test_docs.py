@@ -1365,3 +1365,19 @@ def test_stack_dod_items_documented():
     assert "## Definition-of-done items" in (ROOT / "docs/stack-kits.md").read_text(encoding="utf-8")
     assert "tick them only with evidence" in _flat("commands/pull.md") and "tick one only with evidence" in _flat("AGENTS.md")
     assert "`ado done` counts them" in _flat("README.md") and "byte-identical" in _flat("docs/stack-kits.md")
+
+
+def test_test_run_env_allow_list_documented():
+    from ado import strict
+    readme, conf, log = _flat("README.md"), _flat("docs/configuration.md"), _flat("CHANGELOG.md")
+    names = [n for n in strict._ENV_ALLOW]
+    assert "CARGO_HOME" not in names and "GRADLE_USER_HOME" not in names and "PUB_CACHE" not in names
+    sentence = readme[readme.index("only `PATH`"):readme.index("are passed (the six SDK")]
+    for n in names:  # the README names exactly the allow-list (plus LC_*)
+        assert f"`{n}`" in sentence, n
+    assert sorted(set(re.findall(r"`([A-Z_*]+)`", sentence)) - {"LC_*"}) == sorted(names)
+    assert "`CARGO_HOME`" in readme and "`GRADLE_USER_HOME`" in readme and "`PUB_CACHE`" in readme  # named as NOT passed
+    assert "absolute path without control characters" in readme
+    assert "`~/.sfdx`" in conf and "`~/.config/gh`" in conf and "alternates" in conf and "persist-credentials: false" in conf
+    assert "not a sandbox" in conf.lower()
+    assert "`CARGO_HOME` is no longer passed" in log

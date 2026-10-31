@@ -21,7 +21,7 @@ from pathlib import Path
 from . import decisions, dod, gate, prs, push, questions, stack, tasks
 from .auth import AuthError
 from .client import AdoError
-from .config import Config, ConfigInvalid
+from .config import Config, ConfigInvalid, _has_control
 
 _PLACEHOLDER = re.compile(r"_\(\s*fill\s+in", re.I)
 _BULLETS = (("Approach", "Approach"), ("Assumptions", "Assumptions"), ("Use cases & edge cases", "Use cases"))
@@ -934,7 +934,11 @@ def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False)
 # ---- L2 test runner (D§5): the project's test command at one commit, in a throwaway checkout ----
 # The command is code from the project under test. It runs in a throwaway clone outside the repo with an allow-listed
 # environment, stdin closed, a timeout and its own process group; nothing it prints is returned or logged (counts only).
-_ENV_ALLOW = ("PATH", "LANG", "TERM", "TMPDIR", "VIRTUAL_ENV", "JAVA_HOME", "GOPATH", "CARGO_HOME", "NODE_PATH")
+# Toolchain locations only, never a credential directory: CARGO_HOME (credentials.toml), GRADLE_USER_HOME (gradle.properties)
+# and PUB_CACHE (older Dart kept credentials.json there) are deliberately absent. Profiles cannot add names.
+_ENV_ALLOW = ("PATH", "LANG", "TERM", "TMPDIR", "VIRTUAL_ENV", "JAVA_HOME", "GOPATH", "NODE_PATH", "GOROOT", "FLUTTER_ROOT",
+              "DOTNET_ROOT", "ANDROID_HOME", "ANDROID_SDK_ROOT", "RUSTUP_HOME")
+_ENV_SDK_PATHS = ("GOROOT", "FLUTTER_ROOT", "DOTNET_ROOT", "ANDROID_HOME", "ANDROID_SDK_ROOT", "RUSTUP_HOME")  # value must be an absolute path
 _ENV_DENY_NAMES = {"ADO_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "AZURE_DEVOPS_EXT_PAT", "SYSTEM_ACCESSTOKEN", "SSH_AUTH_SOCK"}
 _ENV_DENY_SUFFIX = ("_TOKEN", "_PAT", "_SECRET", "_KEY", "_PASSWORD", "_CREDENTIALS")
 
@@ -943,6 +947,7 @@ def scrubbed_env(env, home="/nonexistent"):
     """The environment a test run gets: only the allow-list (PATH, LANG, LC_*, TERM, TMPDIR and the toolchain variables
     that are present), then a deny-list pass for secret-looking names (defence in depth). HOME is `home`, never the real one."""
     out = {k: v for k, v in env.items() if k in _ENV_ALLOW or k.startswith("LC_")}
+    out = {k: v for k, v in out.items() if k not in _ENV_SDK_PATHS or (os.path.isabs(v) and not _has_control(v))}
     out = {k: v for k, v in out.items() if not (k.upper() in _ENV_DENY_NAMES or k.upper().startswith("AWS_")
                                                   or k.upper().endswith(_ENV_DENY_SUFFIX))}
     return {**out, "HOME": home, "PYTHONDONTWRITEBYTECODE": "1"}
