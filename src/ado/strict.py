@@ -1,7 +1,7 @@
 """`ado strict check`: the rules of strict SDD+TDD mode (design D§4). Read-only: it never writes and never runs tests
 (`run_at` below is the L2 test runner, called only by `verify`, which writes the verification record `check` validates).
 
-Each phase is its own list of rule functions in PHASES; a later task appends to a list without touching `check`.
+Each phase is its own list of rule functions in PHASES; a new rule is appended to a list without touching `check`.
 A rule takes a _Ctx and returns findings `{"rule", "detail", "fix"}`. The ledger and the spec dir come from the PR
 in CI, so every file is read through gate._read (regular, <= 1 MiB, confined to the repo, never a symlink), and a
 `detail` carries only ids, file names and counts: never ledger, spec or ADO text."""

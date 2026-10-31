@@ -1,5 +1,6 @@
 # V3-12: strict mode wired into `ado pr create`, `ado done` and `ado gate`; `strict check --base/--head`; override stamping.
 import json
+import re
 import subprocess
 from datetime import date
 
@@ -250,6 +251,70 @@ def test_done_strict_refuses_open_decision(tmp_path, monkeypatch, capsys, git_en
         assert "decision-open" in [f["rule"] for f in json.loads(cap.out)["findings"]]
         assert cap.err.startswith("error: strict check failed: ") and "decision-open" in cap.err and "v2 api" not in cap.err + cap.out
         assert not (tmp_path / "out").exists() and fake["c"].calls == []
+
+
+def _no_review(tmp_path, s):
+    LEDGER(tmp_path).write_text(re.sub(r"### Review.*?(### AC fidelity)", r"\1", LEDGER(tmp_path).read_text(), flags=re.S))
+    commit(tmp_path, "no review")
+
+
+def _other_green(tmp_path, s):
+    _edit_ledger(tmp_path, f"green {s.green}", f"green {s.red}")  # the record names another green than section 3 now does
+
+
+_SUP = lambda n, t: _d(n, f"supersedes D{t}: use the v2 api as asked")  # unposted: no marker
+DONE_CASES = {  # one case per pr/done rule family: (kwargs for the story, ledger change, rule)
+    "decision-open": ({"dec": decisions.render_file(1001) + _d(1, "pick the v2 api")}, None),
+    "decision-rejected": ({"dec": decisions.render_file(1001) + _d(1, "use the v2 api", status="rejected")}, None),
+    "override-unposted": ({"dec": decisions.render_file(1001) + _d(1, "skip l2", kind="override")}, None),
+    "supersedes-unposted": ({"dec": decisions.render_file(1001) + _d(1, "use the v1 api", status="rejected") + _SUP(2, 1)}, None),
+    "decisions-invalid": ({"dec": decisions.render_file(1001) + _d(1, "ok") + "- [ ] D2: broken line without a status\n"}, None),
+    "evidence-missing": ({}, lambda t, s: _edit_ledger(t, f"red {s.red} → green {s.green}", "done")),
+    "record-missing": ({"record": False}, None),
+    "record-incomplete": ({}, _other_green),  # `done` skips staleness, so this is its form of record-stale
+    "fidelity-missing": ({"fidelity": False}, None),
+    "review-missing": ({}, _no_review),
+    "review-blocks": ({"review": "yes"}, None),
+}
+
+
+@pytest.mark.parametrize("rule", list(DONE_CASES))
+def test_done_apply_strict_refuses_each_rule_family_and_sends_nothing(tmp_path, monkeypatch, capsys, git_env, rule):
+    kw, change = DONE_CASES[rule]
+    mod, fake, sent, s = _wire(tmp_path, monkeypatch, git_env, **kw)
+    if change:
+        change(tmp_path, s)
+    _tick(tmp_path)
+    before = DEC(tmp_path).read_bytes() if DEC(tmp_path).exists() else None
+    assert mod.main(["done", "1001", "--apply", "--plan-out", "out/plan.md"]) == 2
+    cap = capsys.readouterr()
+    assert rule in [f["rule"] for f in json.loads(cap.out)["findings"]]
+    assert cap.err.startswith("error: strict check failed: ") and rule in cap.err
+    assert not (tmp_path / "out").exists() and fake["c"].calls == [] and sent == []  # no plan file, no request of any kind
+    assert (DEC(tmp_path).read_bytes() if DEC(tmp_path).exists() else None) == before  # a refused run stamps nothing
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_strict_check_never_executes_the_test_command(tmp_path, git_env, monkeypatch, phase):
+    client, _ = _story(tmp_path, git_env)
+    real_run, real_popen, git_calls = subprocess.run, subprocess.Popen, []
+
+    def only_git(real):  # `subprocess.run` is built on Popen: both may start git and nothing else (the test command runs via /bin/sh)
+        def wrapped(args, *a, **k):
+            assert args[0] == "git", f"strict check ran {args[0]!r}"
+            git_calls.append(args)
+            return real(args, *a, **k)
+        return wrapped
+
+    def boom(*a, **k):
+        raise AssertionError("strict check must not run the test command")
+    monkeypatch.setattr(strict, "run_at", boom)
+    monkeypatch.setattr(strict, "run_configured", boom)
+    monkeypatch.setattr(subprocess, "run", only_git(real_run))
+    monkeypatch.setattr(subprocess, "Popen", only_git(real_popen))
+    res = _pr(tmp_path, client, phase)
+    assert res["phase"] == phase and git_calls  # it did read git (a vacuous pass would read nothing)
+    assert not any(f["rule"] in ("red-passes", "green-fails", "head-fails", "runner-error", "timeout") for f in res["findings"])
 
 
 def test_done_strict_apply_stamps_used_then_sends(tmp_path, monkeypatch, capsys, git_env):

@@ -177,6 +177,13 @@ def test_plan_none_when_everything_posted():
     assert "nothing to post" in decisions.render_plan(1001, plan)
 
 
+def test_preview_says_gets_for_one_line_and_get_for_several():
+    one = decisions.render_plan(1001, _plan(OPEN))
+    assert "After posting, D1 gets ` · posted: <comment id>:<hash>` in the decisions file." in one
+    two = decisions.render_plan(1001, _plan(OPEN + "\n- [ ] D2: two → _(open)_ · kind: decision · why: w"))
+    assert "After posting, D1, D2 get ` · posted:" in two
+
+
 def test_plan_adds_one_new_comment_listing_unposted_lines_only():
     plan = _plan(f"{OPEN} · posted: 5:{H1}\n{OPEN2}\n{VAL}")
     assert plan["action"] == "add" and plan["lines"] == ["D4"] and plan["cut"] == []

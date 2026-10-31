@@ -232,7 +232,7 @@ steps:
   # Strict mode: runs the tests at every red and green commit and records the result in ledger section 4 (a local write); exit 2 stops
   # the run before any Task state is synced. Advisory mode: a no-op (exit 0, "mode is advisory").
   # `timeout: 7200`: the engine's shell default is 300 s, which would kill the test runs (one per red and green commit and HEAD) mid-way
-  # and skip the worktree cleanup. Each run still has its own strict.test_timeout.
+  # and skip the cleanup of the throwaway clone. Each run still has its own strict.test_timeout.
   - id: strict-verify
     type: shell
     timeout: 7200

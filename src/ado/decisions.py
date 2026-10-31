@@ -238,7 +238,7 @@ def render_plan(work_item_id, plan, unparsed=False):
         lines += [f"Note: {', '.join(plan['cut'])} cut to {MAX_COMMENT_LINE} characters (…).", ""]
     if plan["action"] == "add":
         lines += ["Comment text:", ""] + [f"> {_esc(x)}" for x in _text(plan["html"]).splitlines()] + [""]
-        lines += [f"After posting, {', '.join(plan['lines'])} get ` · posted: <comment id>:<hash>` in the decisions file.", ""]
+        lines += [f"After posting, {', '.join(plan['lines'])} {'gets' if len(plan['lines']) == 1 else 'get'} ` · posted: <comment id>:<hash>` in the decisions file.", ""]
     return "\n".join(lines)
 
 

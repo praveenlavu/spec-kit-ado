@@ -61,10 +61,12 @@ check and `ado strict verify <id>` itself and fixes a finding in its own session
 (one per red and green commit, plus HEAD) mid-way and skip the cleanup of their temporary checkouts. No other step sets a timeout: the `ado` calls
 are local or one HTTP round trip, and a command step has none unless it captures output.
 The decisions comment is posted once, after `implement`, so the product owner sees every `D<n>` the plan and implement phases
-recorded. The last gate, `wait-po-validation`, comes after the PR loop (the run still ends at the open PR): the product owner
+recorded. Post a decision before superseding it: `--supersedes` refuses a target that is still unposted (`post D<n> first`), so the PO sees both the old line and the one that replaces it. The last gate, `wait-po-validation`, comes after the PR loop (the run still ends at the open PR): the product owner
 answers in the story's comment thread, and a human records each verdict in their own terminal with
 `ado decisions <id> --resolve` and commit and push the resolved lines to the PR branch before the merge (the PR branch must carry the `posted:` markers and the verdicts).
 In strict mode `ado done` refuses while any is open; if nothing was posted just approve. Approve it once they are all recorded; the story closes after merge.
+
+**End of the flow.** The workflow ends at the open PR; nothing in it ticks ledger section 5, so `ado done` reports the story not ready after the merge until that section is ticked. After the merge run `/speckit-ado-done <id>` (it ticks section 5 only with evidence, shows the plan, then closes the story), or tick section 5 by hand and commit it before CI `close-story` runs. In strict mode `done` additionally runs the strict `done` check. In strict mode set `close-story: true`: without it no strict `done` runs.
 
 Each `*-loop` is a preview (`ado … --plan-out`), a gate that shows that plan file, and an apply
 with `--expect-plan`: the apply refuses if the plan changed since you approved it, and the loop
@@ -106,7 +108,7 @@ previews and asks again.
 - Spec Kit `>=0.9.0` and a project initialized with any integration.
 - The `ado` CLI 0.3.0 or later on `PATH` (the new steps need strict mode and `ado decisions --post --if-any`; with a 0.2.0 CLI
   `decisions-preview` fails on the unknown flag), and the extension, connected with `ado setup`
-  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0` installs the 0.2.0 release, which lacks them).
+  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0` installs the 0.2.0 release, which lacks them). The requirement 'CLI 0.3.0 or later' is satisfied once the release bump to 0.3.0 happens: the CLI reports 0.2.0 until then, although a build of the development branch already has every verb the workflow needs.
 - `git`; `gh` only when the PR goes to GitHub.
 
 The shell steps run `ado` with your token and privileges. Read them in

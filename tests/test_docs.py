@@ -1113,3 +1113,95 @@ def test_squash_recovery_for_a_changed_test_command_documented():
         assert "re-run `ado strict verify <id>` on the merge result in a checkout of the target branch" in text, doc
         assert "or record an `l2` override" in text and "post it (`ado decisions <id> --post`)" in text, doc
     assert "'done_state' must be a non-empty string" in _flat("CHANGELOG.md")
+
+
+# ---- V3-17b: whole-delta docs (M3, S3, S4, L1, L2, L4, L5) ----
+
+def _strict_rule_ids():
+    """Every rule id strict.py can emit, read from its source: `_finding("id", ...)`, `"rule": "id"` and the spec-file table."""
+    src = (ROOT / "src/ado/strict.py").read_text(encoding="utf-8")
+    ids = (set(re.findall(r'_finding\(\s*"([a-z][a-z-]*)"', src)) | set(re.findall(r'"rule":\s*"([a-z][a-z-]*)"', src))
+           | set(re.findall(r'\("[a-z.]+\.md",\s*"([a-z][a-z-]*)"', src)))
+    assert len(ids) >= 40, ids  # a regex that stops matching must not pass vacuously
+    return ids
+
+
+def test_every_strict_rule_id_is_documented_in_readme_and_agents():
+    for doc in ("README.md", "AGENTS.md"):
+        text = _flat(doc)
+        missing = sorted(i for i in _strict_rule_ids() if f"`{i}`" not in text)
+        assert not missing, f"{doc} does not name these strict rule ids: {missing}"
+
+
+def test_advisory_mode_additions_listed_in_the_changelog():
+    flat = _flat("CHANGELOG.md")
+    assert flat.count("### Advisory-mode additions in 0.3.0") == 1
+    sec = re.split(r" #{2,3} ", flat.split("### Advisory-mode additions in 0.3.0")[1])[0]
+    for n, part in enumerate((
+            "new ledgers get the decisions-file pointer sentence",
+            "`gate` adds `open_decisions` only when a decisions file exists",
+            "`done` adds `decisions_file` and a plan step and attaches `Decisions_<id>.md` only when the file exists",
+            "the usage text lists the new verbs `decisions` and `strict`",
+            "`done` and `attach` refuse symlinked or oversized files",
+            "`gate` exits 3 for an invalid target-branch config when `--base` is given",
+            "the plan and implement prompts record decisions and the workflow posts them behind a gate in every mode when a decisions file exists"), 1):
+        assert f"{n}. " in sec and part.lower() in sec.lower(), (n, part)
+
+
+def test_exit_3_on_an_invalid_target_config_recovery_documented():
+    for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md", "docs/configuration.md"):
+        text = _flat(doc)
+        assert ("To recover from exit 3 on an invalid target-branch config, fix the target config through an admin-bypass merge, "
+                "or run the gate once without `--base`") in text, doc
+
+
+def test_stale_wording_fixed():
+    assert "in a later task" not in _flat("CHANGELOG.md") and "a later task" not in _flat("src/ado/strict.py")
+    assert "worktree cleanup" not in _flat("workflows/ado-lifecycle/workflow.yml")
+
+
+_CLOSE = ("In strict mode set `close-story: true`: without it no strict `done` runs",)
+_FLOW = ("The workflow ends at the open PR; nothing in it ticks ledger section 5",
+         "run `/speckit-ado-done <id>` (it ticks section 5 only with evidence, shows the plan, then closes the story)",
+         "or tick section 5 by hand and commit it before CI `close-story` runs",
+         "In strict mode `done` additionally runs the strict `done` check")
+
+
+def _norm(doc):
+    return _flat(doc).replace("closeStory", "close-story")  # the Azure Pipelines template spells it closeStory
+
+
+def test_end_of_flow_and_close_story_documented():
+    for doc in ("README.md", "workflows/ado-lifecycle/README.md", "commands/done.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        text = _norm(doc)
+        for part in _FLOW:
+            assert part in text, (doc, part)
+    for doc in ("README.md", "workflows/ado-lifecycle/README.md", "commands/done.md", "docs/configuration.md", "docs/ci-github.md",
+                "docs/ci-azure-pipelines.md"):
+        assert _CLOSE[0] in _norm(doc), doc
+
+
+def test_post_a_decision_before_superseding_it_documented():
+    for doc in ("README.md", "AGENTS.md", "rules/hitl.md", "workflows/ado-lifecycle/README.md"):
+        text = _flat(doc)
+        assert "Post a decision before superseding it" in text and "the PO sees both" in text, doc
+        assert "`--supersedes` refuses a target that is still unposted" in text, doc
+
+
+def test_test_command_examples_use_python3_and_the_runner_path_documented():
+    for doc in ("README.md", "docs/configuration.md"):
+        assert '"test_command": "python3 -m pytest -q"' in _flat(doc), doc
+    for doc in ("README.md", "AGENTS.md", "docs/configuration.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        assert ("The test command runs with the PATH of the environment that runs the check "
+                "(put the toolkit venv first if your tests need it)") in _flat(doc), doc
+    for md in ROOT.rglob("*.md"):
+        rel = md.relative_to(ROOT)
+        if not (_SKIP_DIRS & set(rel.parts)):
+            assert not re.search(r'test_command"?\s*:\s*"python\s', md.read_text(encoding="utf-8")), rel  # a Mac has no `python`
+
+
+def test_cli_version_requirement_and_release_bump_documented():
+    for doc in ("workflows/ado-lifecycle/README.md", "VERSIONING.md"):
+        text = _flat(doc)
+        assert "'CLI 0.3.0 or later' is satisfied once the release bump to 0.3.0 happens" in text, doc
+    assert "the CLI reports 0.2.0 until then" in _flat("workflows/ado-lifecycle/README.md")
