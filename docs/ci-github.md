@@ -11,11 +11,11 @@ GitHub repository whose work is tracked in Azure Boards. Reference them at the m
 | `ado-strict-verify.yml` | `pull_request` | Optional, secret-free strict re-run (see [Optional strict re-run job](#optional-strict-re-run-job-ado-strict-verifyyml-shipped-unrun)). Does nothing unless the target branch's `ado.config.json` is strict; then it runs `ado strict verify <id> --no-record --base origin/<PR base branch>` and fails the check on any non-zero exit. |
 | `ado-link-on-merge.yml` | `pull_request: closed` | For a merged PR, comments on every `AB#<id>` in the title or body and optionally sets `transition-state`. With `close-story: true`, after merge it attaches the completed ledger and moves the story to `done_state`; only if every DoD box is ticked. Per-item failures are warnings, except a strict `ado done` refusal (exit 2 with findings on stdout): it is annotated `::error::<id>: strict done refused: <rule ids>` (ids only, at most 20, never the findings' text) and fails the job after every story has been handled. A refused story is not moved by `transition-state` either (the other stories are). The workflow checks out the exact merged commit (`ref: ${{ github.event.pull_request.merge_commit_sha }}`, `fetch-depth: 0`, `persist-credentials: false`), a detached checkout that holds the PR's ledger and `Decisions_<id>.md`. |
 
-In strict mode `ado strict check` (L1 order evidence) reads git history: check out with `fetch-depth: 0`, since a shallow clone reports `sha-unknown`. In strict mode `ado done --apply` (the `close-story` step of `ado-link-on-merge.yml`) also runs the `done` strict check: the checkout must hold the merged `<dod_path>/DoD_<id>.md` and `Decisions_<id>.md`, which the merge-commit checkout does; a detached `HEAD` is enough for it (it needs no red or green commit).
+In strict mode `ado strict check` (L1 order evidence) reads git history: check out with `fetch-depth: 0`, since a shallow clone reports `sha-unknown`. In strict mode `ado done --apply` (the `close-story` step of `ado-link-on-merge.yml`) also runs the `done` strict check: the checkout must hold the merged `<dod_path>/DoD_<id>.md` and `Decisions_<id>.md`, which the merge-commit checkout does; a detached `HEAD` is enough for it (it needs no red or green commit). If the target branch's `strict.test_command` changes after a squash merge, `done` reports `record-command-mismatch` for the merged story (the record was made with the old command, and `done` cannot re-run the tests). Recovery: re-run `ado strict verify <id>` on the merge result in a checkout of the target branch and commit the ledger, or record an `l2` override (`ado strict override <id> l2 --reason "<text>"`) and post it (`ado decisions <id> --post`).
 
 ## Optional strict re-run job (`ado-strict-verify.yml`), SHIPPED UNRUN
 
-Optional strict re-run job, SHIPPED UNRUN. `ado-strict-verify.yml` re-runs the recorded red and green commits in CI: `ado strict verify <id> --no-record --base origin/<PR base branch>` (nothing is written; the exit code is the verdict). It declares no secret, sets no `ADO_TOKEN`, grants `contents: read` only and checks out with `persist-credentials: false` and `fetch-depth: 0`. It is the only check that cannot be satisfied by editing the ledger: the ledger is plain text, but the job re-runs the tests at the SHAs it names and proves that those commits fail and pass under the target branch's test command. It does not show that a test is meaningful: the PR still writes the tests at those commits (the fidelity verdicts and the human review gate cover that). HEAD = the PR head commit, as the gate's `--head` (the first checkout takes `ref: ${{ github.event.pull_request.head.sha }}`, not the merge commit). It is **optional**.
+Optional strict re-run job, SHIPPED UNRUN. `ado-strict-verify.yml` re-runs the recorded red and green commits in CI: `ado strict verify <id> --no-record --base origin/<PR base branch>` (nothing is written; the exit code is the verdict). It declares no secret, sets no `ADO_TOKEN`, grants `contents: read` only and checks out with `persist-credentials: false` and `fetch-depth: 0`. Plainly: it re-runs the tests at the recorded commits under the target branch's command; it fails while an `l2` or `test-command` override is in force unless `allow-override` is set; it cannot be satisfied by hand-written records; it does not show a test is meaningful (the PR still writes the tests at those commits; the fidelity verdicts and the human review gate cover that). An override in force skips the run, so `ado strict verify --no-record` exits 2 with the finding `override-in-force` (naming the override ids) unless `--allow-override` is passed; the input `allow-override` (default false) adds that flag. HEAD = the PR head commit, as the gate's `--head` (the first checkout takes `ref: ${{ github.event.pull_request.head.sha }}`, not the merge commit). It is **optional**.
 
 **Shipped unrun.** GitHub Actions is billing-blocked in this project's environment, so this workflow has never run on a hosted runner. It is covered by structural pins
 (no secret or token reference, `permissions: contents: read`, the exact command, the guards, `persist-credentials: false` on every checkout, no `pull_request_target`), `bash -n` on every `run:` block and real-bash tests
@@ -91,18 +91,19 @@ jobs:
 
 ## Inputs
 
-The first three accept (`ado-strict-verify.yml` takes only `toolkit-ref`):
+The first three accept (`ado-strict-verify.yml` takes `toolkit-ref` and `allow-override`, see below):
 
 | Input | Default | Meaning |
 |---|---|---|
 | `config-path` | `ado.config.json` | Path to the config in your repo. |
 | `toolkit-ref` | `v0` | Ref of `praveenlavu/spec-kit-ado` to install the CLI from. |
+| `allow-override` | `false` | `ado-strict-verify.yml` only: add `--allow-override` to `ado strict verify`, accepting an override in force (otherwise the job fails with `override-in-force`). |
 
 `ado-link-on-merge.yml` also takes `transition-state` (default empty: comment only) and
 `close-story` (boolean, default `false`). With `close-story: true`, after merge it attaches
 the completed ledger and moves the story to `done_state`; only if every DoD box is
 ticked. The close runs before `transition-state`; a story the close left in `done_state` is not
-transitioned again, and a story that was already closed gets its ledger attached if it is missing.
+transitioned again, and a story that was already closed gets its ledger attached if it is missing. In strict mode a `transition-state` equal to `done_state` is refused (`ado update --state <done_state>` exits 2 and points to `ado done`; the template logs a warning and the story is not closed): set `close-story: true`, so `ado done` runs the strict `done` check; without it no strict `done` runs.
 A story that was already in `done_state` is never transitioned, even if that attach fails or the
 ledger is not ready (a warning says the state was left unchanged); this applies when `ado done` runs, i.e. a ledger exists.
 The log says which of these happened.

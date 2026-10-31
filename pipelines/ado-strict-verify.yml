@@ -2,7 +2,8 @@
 # SHIPPED UNRUN (hosted agents are billing-blocked in this project): covered by structural pins, `bash -n` and real-bash tests with a fake `ado` only.
 #   - template: pipelines/ado-strict-verify.yml@spec-kit-ado
 # No token is mapped and persistCredentials is false. It re-runs `ado strict verify --no-record` (the red commit must fail, the green commit must pass) on the PR's code,
-# so editing the ledger alone cannot satisfy it (it does not show that a test is meaningful: the PR still writes the tests at those commits).
+# so a hand-written record cannot satisfy it: it re-runs the tests at the recorded commits under the target branch's command; it fails while an `l2` or `test-command` override is in force
+# unless `allowOverride` is set; it does not show a test is meaningful (the PR still writes the tests at those commits).
 # SECURITY: it runs the project's test command on the PR's code: no secret to steal, but a hostile PR can still run arbitrary code on the agent. Use ephemeral agents.
 # It does nothing unless the TARGET branch's ado.config.json says mode: strict: under any other target the test command would come from the PR.
 # The story id comes from the source branch name by the `ado branch --id-from` rule, as for the gate.
@@ -10,6 +11,9 @@ parameters:
   - name: repoPath
     type: string
     default: repo   # where `self` is checked out, relative to $(Agent.BuildDirectory)
+  - name: allowOverride
+    type: boolean
+    default: false   # true = accept an override in force (an `l2` or `test-command` override skips the run this job exists for)
 
 steps:
   - checkout: self
@@ -78,7 +82,8 @@ steps:
       fi
       # The test command comes from the target branch's config; the runner clones the PR head into a scrubbed environment. Rule ids only in the log, never test output.
       vcode=0
-      env -u ADO_TOKEN ado strict verify "$id" --no-record --base "origin/${TARGET_BRANCH#refs/heads/}" > "$AGENT_TEMPDIRECTORY/verify.json" 2> "$AGENT_TEMPDIRECTORY/verify.err" || vcode=$?
+      allow=; case "$ALLOW_OVERRIDE" in [Tt]rue) allow=--allow-override ;; esac  # allowOverride renders as True/False
+      env -u ADO_TOKEN ado strict verify "$id" --no-record --base "origin/${TARGET_BRANCH#refs/heads/}" $allow > "$AGENT_TEMPDIRECTORY/verify.json" 2> "$AGENT_TEMPDIRECTORY/verify.err" || vcode=$?
       if [ -s "$AGENT_TEMPDIRECTORY/verify.err" ]; then echo "ado strict verify: $(ann < "$AGENT_TEMPDIRECTORY/verify.err")"; fi
       if [ "$vcode" -eq 0 ]; then echo "spec-kit-ado: strict verify passed."; exit 0; fi
       rules=$(python3 -I -c 'import json,re,sys;print(" ".join(re.sub("[^A-Za-z0-9_-]","",str(x["rule"]))[:40] for x in json.load(open(sys.argv[1]))["findings"][:20]))' "$AGENT_TEMPDIRECTORY/verify.json" 2>/dev/null) || rules=
@@ -91,3 +96,4 @@ steps:
       SOURCE_BRANCH: $(System.PullRequest.SourceBranch)
       TARGET_BRANCH: $(System.PullRequest.TargetBranch)
       HEAD_SHA: $(System.PullRequest.SourceCommitId)
+      ALLOW_OVERRIDE: ${{ parameters.allowOverride }}

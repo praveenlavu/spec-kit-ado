@@ -161,7 +161,7 @@ class Config:
             if b not in GATE_CHECKS:
                 raise ConfigInvalid(f"{path}: gate.block[{i}]: unknown check "
                                   f"(valid: {', '.join(GATE_CHECKS)})")
-        for k in ("story_type", "removed_state"):
+        for k in ("story_type", "removed_state", "done_state"):
             if k in data and not (isinstance(data[k], str) and data[k]):
                 raise ConfigInvalid(f"{path}: '{k}' must be a non-empty string")
         if not valid_branch_prefix(data.get("branch_prefix", "feature/")):

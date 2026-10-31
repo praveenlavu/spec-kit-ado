@@ -213,8 +213,8 @@ def test_story_type_and_removed_state(tmp_path):
     assert (cfg.story_type, cfg.removed_state) == ("Product Backlog Item", "Cut")
 
 
-@pytest.mark.parametrize("key", ["story_type", "removed_state"])
-@pytest.mark.parametrize("bad", ["", 3])
+@pytest.mark.parametrize("key", ["story_type", "removed_state", "done_state"])
+@pytest.mark.parametrize("bad", ["", 3, None])
 def test_story_type_removed_state_must_be_nonempty_string(tmp_path, key, bad):
     with pytest.raises(ConfigError, match=key):
         _write(tmp_path, **{key: bad})

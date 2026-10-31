@@ -204,7 +204,7 @@ def _pr(client, args):
 def dispatch(client, args):
     if args.command == "strict":
         if args.strict_command == "verify":
-            return strict.verify(client, args.id, record=args.record, base=args.base)
+            return strict.verify(client, args.id, record=args.record, base=args.base, allow_override=args.allow_override)
         base = args.base
         if base is None and args.phase == "pr" and client.config.mode == "strict":
             base = strict.default_base(".")  # "" when origin/HEAD is not set: the finding base-unknown, never a pass
@@ -234,7 +234,14 @@ def dispatch(client, args):
     if args.command == "create":
         return workitems.create(client, args.type, args.title, _fields(args.field))
     if args.command == "update":
-        return workitems.update(client, args.id, args.state, _fields(args.field))
+        fields = _fields(args.field)
+        done = client.config.done_state  # a non-empty string: the config validates it
+        sent = {str(args.state or "").strip().casefold(), *(str(v).strip().casefold() for k, v in fields.items()
+                                                           if k.strip().lower() == "system.state")}
+        if client.config.mode == "strict" and isinstance(done, str) and done.strip() and done.strip().casefold() in sent:
+            raise ValueError("strict mode: close the story with `ado done <id>` (it runs the strict done check); "
+                             "`ado update` cannot move it to the done state")
+        return workitems.update(client, args.id, args.state, fields)
     if args.command == "comments":
         out = comments.safe_out(args.out or f".ado/context/{args.id}.md")  # before any request
         found = comments.fetch(client, args.id)
@@ -572,6 +579,8 @@ def main(argv=None):
                      help="append the verification record to the ledger (default)")
     rec.add_argument("--no-record", dest="record", action="store_false", help="write nothing, only set the exit code (CI)")
     q.add_argument("--base", metavar="REF", help="refuse a red or green commit that is already in REF (it must be this branch's own work)")
+    q.add_argument("--allow-override", action="store_true",
+                   help="with --no-record: accept an override in force (default: it is the finding override-in-force, since it skips the run)")
 
     args = parser.parse_args(argv)
     if getattr(args, "expect_plan", None) and not args.apply:

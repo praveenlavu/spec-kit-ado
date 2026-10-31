@@ -830,7 +830,7 @@ def test_l1_order_evidence_documented():
 def test_strict_verify_and_record_documented():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     row = next(x for x in readme.splitlines() if x.startswith("| `strict verify <id>"))
-    assert "[--record\\|--no-record] [--base REF]" in row and "`### Verification — <date> @ <head sha>`" in row
+    assert "[--record\\|--no-record] [--allow-override] [--base REF]" in row and "`### Verification — <date> @ <head sha>`" in row
     assert "before `## 5.`" in row and "` (superseded)`" in row
     assert "`--no-record` (CI) writes nothing" in row and "no token and no ADO request" in row
     check_row = next(x for x in readme.splitlines() if x.startswith("| `strict check <id>"))
@@ -978,8 +978,11 @@ def test_strict_verify_job_documented_as_optional_unrun_and_hostile_code_capable
         text = _flat(doc)
         assert "ado-strict-verify.yml" in text and "SHIPPED UNRUN" in text, doc
         assert "`ado strict verify <id> --no-record --base origin/" in text, doc
-        assert "no secret" in text and "cannot be satisfied by editing the ledger" in text, doc
-        assert "does not show that a test is meaningful" in text and "the PR still writes the tests at those commits" in text, doc
+        assert "no secret" in text and "it cannot be satisfied by hand-written records" in text, doc
+        assert "it re-runs the tests at the recorded commits under the target branch's command" in text, doc
+        assert "it fails while an `l2` or `test-command` override is in force unless `allow" in text and "`override-in-force`" in text, doc
+        assert "it does not show a test is meaningful" in text and "the PR still writes the tests at those commits" in text, doc
+        assert "cannot be satisfied by editing the ledger" not in text and "only check" not in text, doc
         assert "cannot be faked" not in text and "cannot fake" not in text, doc
     for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
         text = _flat(doc)
@@ -1084,3 +1087,29 @@ def test_supersedes_marker_rule_and_its_limit_documented():
     assert "`post D<n> first`" in para and "**never checked against ADO** in this release" in para and "a hand-computed marker passes" in para
     assert "that rejected line keeps blocking" in para and "prints a `notice`" in para and "its id is part of the hash" in para
     assert "post D<n> first" in _flat("AGENTS.md") and "never checked against ADO" in _flat("CHANGELOG.md")
+
+
+def test_whole_delta_fixes_documented():
+    """M1 (`--allow-override`), M2 (`ado update` and the done state), S1 (`record-command-mismatch`)."""
+    for doc in ("README.md", "AGENTS.md", "rules/hitl.md", "docs/configuration.md", "CHANGELOG.md"):
+        assert "`override-in-force`" in _flat(doc) and "`--allow-override`" in _flat(doc), doc
+    for doc in ("README.md", "AGENTS.md", "docs/configuration.md", "CHANGELOG.md"):
+        assert "`record-command-mismatch`" in _flat(doc), doc
+    assert "[--record\\|--no-record] [--allow-override] [--base REF]" in _flat("README.md")
+    for doc in ("README.md", "rules/hitl.md", "CHANGELOG.md", "AGENTS.md"):
+        assert "`ado done <id>`" in _flat(doc), doc
+    assert "`update <id> --state <done_state>`" in _flat("README.md") and "is refused with exit 2, nothing sent" in _flat("README.md")
+    for doc, key in (("docs/ci-github.md", "transition-state"), ("docs/ci-azure-pipelines.md", "transitionState"), ("pipelines/README.md", "transitionState")):
+        text = _flat(doc)
+        assert f"`{key}` equal to `done_state` is refused" in text and "closeStory: true" in text.replace("close-story: true", "closeStory: true"), doc
+        assert "`allow-override`" in text or "`allowOverride`" in text, doc
+    assert "retry the state change" in _flat("commands/done.md") and "refuses the done state" in _flat("commands/done.md")
+
+
+def test_squash_recovery_for_a_changed_test_command_documented():
+    for doc in ("README.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        text = _flat(doc)
+        assert "changes after a squash merge, `done` reports `record-command-mismatch`" in text, doc
+        assert "re-run `ado strict verify <id>` on the merge result in a checkout of the target branch" in text, doc
+        assert "or record an `l2` override" in text and "post it (`ado decisions <id> --post`)" in text, doc
+    assert "'done_state' must be a non-empty string" in _flat("CHANGELOG.md")

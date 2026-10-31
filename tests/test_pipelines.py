@@ -160,7 +160,7 @@ def test_strict_verify_template_runs_the_exact_command_after_the_mode_and_the_id
     (script,) = [s for s in scripts("ado-strict-verify") if "strict verify" in s]
     mode = 'ado strict mode --base "origin/${TARGET_BRANCH#refs/heads/}" > "$AGENT_TEMPDIRECTORY/mode.json"'
     ident = 'ado branch --id-from="$branch" --base "origin/${TARGET_BRANCH#refs/heads/}"'
-    verify = 'env -u ADO_TOKEN ado strict verify "$id" --no-record --base "origin/${TARGET_BRANCH#refs/heads/}" > "$AGENT_TEMPDIRECTORY/verify.json"'
+    verify = 'env -u ADO_TOKEN ado strict verify "$id" --no-record --base "origin/${TARGET_BRANCH#refs/heads/}" $allow > "$AGENT_TEMPDIRECTORY/verify.json"'
     checkout = 'git checkout --quiet --detach "$HEAD_SHA"'
     assert script.index(checkout) < script.index(mode)  # the PR head first, before any ado call (as the gate's --head)
     assert script.index(mode) < script.index(ident) < script.index(verify) and len(re.findall(r"(?m)^\s*(?:env -u ADO_TOKEN )?ado strict verify ", script)) == 1
@@ -170,6 +170,10 @@ def test_strict_verify_template_runs_the_exact_command_after_the_mode_and_the_id
         assert f': "${{{var}:?' in script
     (step,) = [s for s in load("ado-strict-verify")["steps"] if "strict verify" in s.get("script", "")]
     assert step["env"] == {"SOURCE_BRANCH": "$(System.PullRequest.SourceBranch)", "TARGET_BRANCH": "$(System.PullRequest.TargetBranch)",
-                           "HEAD_SHA": "$(System.PullRequest.SourceCommitId)"}
+                           "HEAD_SHA": "$(System.PullRequest.SourceCommitId)",
+                           "ALLOW_OVERRIDE": "${{ parameters.allowOverride }}"}
     assert ': "${HEAD_SHA:?' in script
-    assert [p["name"] for p in load("ado-strict-verify")["parameters"]] == ["repoPath"]
+    assert [p["name"] for p in load("ado-strict-verify")["parameters"]] == ["repoPath", "allowOverride"]
+    (allow,) = [p for p in load("ado-strict-verify")["parameters"] if p["name"] == "allowOverride"]
+    assert allow["type"] == "boolean" and allow["default"] is False  # an override fails the re-run unless the caller accepts it
+    assert 'case "$ALLOW_OVERRIDE" in [Tt]rue) allow=--allow-override ;; esac' in script

@@ -3,7 +3,8 @@ name: ADO strict verify (reusable, optional, secret-free)
 # Call from a consumer repo on the pull_request event only (never the privileged PR event), e.g.:
 #   uses: praveenlavu/spec-kit-ado/.github/workflows/ado-strict-verify.yml@v0
 # It declares no secret and holds no token. It re-runs `ado strict verify --no-record` (the red commit must fail, the green commit must pass) on the PR's code,
-# so editing the ledger alone cannot satisfy it (it does not show that a test is meaningful: the PR still writes the tests at those commits). SECURITY: it runs the project's test command on the PR's code: no secret to steal, but a hostile PR can still run
+# so a hand-written record cannot satisfy it: it re-runs the tests at the recorded commits under the target branch's command; it fails while an `l2` or `test-command` override is in force
+# unless `allow-override` is set; it does not show a test is meaningful (the PR still writes the tests at those commits). SECURITY: it runs the project's test command on the PR's code: no secret to steal, but a hostile PR can still run
 # arbitrary code on the runner (network, resources). Use fork-PR approval gates and ephemeral runners.
 # It does nothing unless the TARGET branch's ado.config.json says mode: strict (read by `ado strict mode`): under any other target the test command would come from the PR.
 on:
@@ -13,6 +14,10 @@ on:
         description: "Ref of praveenlavu/spec-kit-ado to install"
         type: string
         default: "v0"
+      allow-override:
+        description: "Accept an override in force (an `l2` or `test-command` override skips the run this job exists for). Default false: the job fails while one is in force."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -84,6 +89,7 @@ jobs:
         env:
           STORY_ID: ${{ steps.story.outputs.id }}
           BASE_REF: ${{ github.base_ref }}
+          ALLOW_OVERRIDE: ${{ inputs.allow-override }}
         run: |
           : "${RUNNER_TEMP:?RUNNER_TEMP is not set - refusing to write scratch files into the checkout}"
           : "${STORY_ID:?STORY_ID is not set - the story id step did not run}"
@@ -91,7 +97,8 @@ jobs:
           ann() { python3 -I -c 'import re,sys;t=re.sub("[\x00-\x1f\x7f-\x9f\u2028\u2029]"," ",sys.stdin.buffer.read().decode("utf-8","replace"));sys.stdout.buffer.write(t[:300].encode())'; }
           rm -f "$RUNNER_TEMP/verify.json" "$RUNNER_TEMP/verify.err"  # a stale file must never be this run's verdict
           code=0
-          ado strict verify "$STORY_ID" --no-record --base "origin/${BASE_REF}" > "$RUNNER_TEMP/verify.json" 2> "$RUNNER_TEMP/verify.err" || code=$?
+          allow=; case "$ALLOW_OVERRIDE" in [Tt]rue) allow=--allow-override ;; esac
+          ado strict verify "$STORY_ID" --no-record --base "origin/${BASE_REF}" $allow > "$RUNNER_TEMP/verify.json" 2> "$RUNNER_TEMP/verify.err" || code=$?
           if [ -s "$RUNNER_TEMP/verify.err" ]; then echo "ado strict verify: $(ann < "$RUNNER_TEMP/verify.err")"; fi
           if [ "$code" -eq 0 ]; then echo "spec-kit-ado: strict verify passed."; exit 0; fi
           rules=$(python3 -I -c 'import json,re,sys;print(" ".join(re.sub("[^A-Za-z0-9_-]","",str(x["rule"]))[:40] for x in json.load(open(sys.argv[1]))["findings"][:20]))' "$RUNNER_TEMP/verify.json" 2>/dev/null) || rules=

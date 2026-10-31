@@ -376,6 +376,7 @@ def _evidence(c):
 _V_HEADING = re.compile(r"^### Verification\b[^\r\n]*", re.M)
 _V_HEAD = re.compile(r"### Verification — (\d{4}-\d{2}-\d{2}) @ ([0-9a-f]{7,40})")
 _V_AC = re.compile(r"- (AC-\d+): red ([0-9a-f]{12}) exit (\d{1,3}) · green ([0-9a-f]{12}) exit (\d{1,3}) · L1 ok")
+_V_COMMAND = re.compile(r"- command-sha256: ([0-9a-fA-F]{12})")
 _V_HEADLINE = re.compile(r"- head: ([0-9a-f]{12}) exit (\d{1,3})")
 _SUPERSEDED = " (superseded)"
 _PR_HEAD = re.compile(rf"(?<![0-9A-Za-z])PR head[\s:]+({_HEX})(?![0-9A-Za-z])", re.I)
@@ -424,7 +425,7 @@ def _record_stale(repo, head, recorded, dod_path, spec_dir, story_id):
     return "later commits change files other than the ledger, the decisions file and tasks.md"
 
 
-def validate_record(ledger_md, rows, repo, head, dod_path, spec_dir, story_id, base=None, squash_ok=False):
+def validate_record(ledger_md, rows, repo, head, dod_path, spec_dir, story_id, base=None, squash_ok=False, command=False):
     """Findings for the latest live `### Verification` block of ledger section 4 (a block in a fence or comment is not
     one): `record-missing`, `record-stale`, `record-incomplete`, `record-failed`, and `not-in-range` with `base`. It runs
     no test and reads only the ledger and git. `squash_ok` (the `done` phase, after a squash merge the red and green
@@ -437,14 +438,19 @@ def validate_record(ledger_md, rows, repo, head, dod_path, spec_dir, story_id, b
         return [_finding("record-missing", "ledger section 4 has no verification record (a `### Verification — <date> @ <sha>` block)", redo)]
     rest = log[live[-1].end():]
     nxt = re.search(r"^#{1,3} ", rest, re.M)
-    found, heads = {}, []
+    found, heads, shas = {}, [], []
     for line in (rest[:nxt.start()] if nxt else rest).splitlines():
+        if m := _V_COMMAND.fullmatch(line.strip()):
+            shas.append(m[1].lower())
         m = _V_AC.fullmatch(line.strip())
         if m:
             found.setdefault(m[1], []).append(m.groups()[1:])
         if m := _V_HEADLINE.fullmatch(line.strip()):
             heads.append(m.groups())
     out = []
+    if command is not False and shas != [_command_hash(command)]:  # `command`: the test command in force (None = unset); False = not judged
+        out.append(_finding("record-command-mismatch", "the verification record was not made with the test command in force (the "
+                            "target branch's in CI): a weaker command could have passed it", redo))
     if not squash_ok:
         if why := _record_stale(repo, head, head_m[2], dod_path, spec_dir, story_id):
             return [_finding("record-stale", f"the verification record is stale: {why}", redo)]
@@ -473,16 +479,23 @@ def validate_record(ledger_md, rows, repo, head, dod_path, spec_dir, story_id, b
     return out
 
 
+def _command_hash(command):
+    """The 12 hex a record's `- command-sha256:` line holds; unset (None) has none."""
+    return hashlib.sha256(command.encode()).hexdigest()[:12] if command else None
+
+
 def _record(c):
     if c.ledger is None:
         return []  # reported by _ledger
-    return validate_record(c.ledger, gate.parse_section3(c.ledger), c.repo, c.rev, c.cfg.dod_path, c.spec_dir, c.id)
+    return validate_record(c.ledger, gate.parse_section3(c.ledger), c.repo, c.rev, c.cfg.dod_path, c.spec_dir, c.id,
+                           command=c.cfg.strict.get("test_command"))
 
 
 def _record_done(c):
     if c.ledger is None:
         return []
-    return validate_record(c.ledger, gate.parse_section3(c.ledger), c.repo, "HEAD", c.cfg.dod_path, c.spec_dir, c.id, squash_ok=True)
+    return validate_record(c.ledger, gate.parse_section3(c.ledger), c.repo, "HEAD", c.cfg.dod_path, c.spec_dir, c.id, squash_ok=True,
+                           command=c.cfg.strict.get("test_command"))
 
 
 # ---- decisions and review (D§6, §7): the rules `pr` and `done` add ----
@@ -669,7 +682,7 @@ PHASES = {
 # ---- override (D§7): `skip <rule>` lines of kind override; only these findings, never L1 or a missing spec/plan/tasks ----
 _COVERS = {"test-command": ("test-command",),
            "l2": ("test-command", "record-missing", "record-stale", "record-incomplete", "record-failed", "head-fails", "green-fails", "red-passes",
-                  "timeout", "runner-error"),
+                  "timeout", "runner-error", "record-command-mismatch"),
            "open-question": ("open-question",),
            "placeholder": ("placeholder",)}
 
@@ -895,10 +908,10 @@ def _write_record(path, repo, old, heading, lines):
         raise ValueError(f"cannot write the ledger ({e.__class__.__name__}); nothing written")
 
 
-def verify(client, story_id, record=True, base=None, repo="."):
+def verify(client, story_id, record=True, base=None, repo=".", allow_override=False):
     """L1 for every AC, then the test command at each AC's red commit (must exit non-zero) and green commit (must exit 0),
     once per distinct commit. Strict mode only. With `record` and a pass, appends the verification record to ledger
-    section 4. Returns `{"mode","ok","findings","recorded",...}`; nothing is returned or logged from the tests' output."""
+    section 4. With `record` False (CI) an override in force is the finding `override-in-force` unless `allow_override`. Returns `{"mode","ok","findings","recorded",...}`; nothing is returned or logged from the tests' output."""
     mode = client.config.mode
     if mode != "strict":
         return {"mode": mode, "ok": True, "findings": [], "note": "mode is advisory"}
@@ -911,10 +924,15 @@ def verify(client, story_id, record=True, base=None, repo="."):
         findings += _range_findings(rows, repo, _resolve_base(repo, base))  # the same resolver as `check`: never a tag
     cover, used = overrides(c), set()  # like `check`: the findings an override covers are dropped and the entry reported
     findings = [f for f in findings if f["rule"] not in cover or used.add(cover[f["rule"]])]
+    skipped = "test-command" in cover or "record-missing" in cover  # an `l2` / `test-command` override: no run, and no record to fake
+    if skipped and not findings:
+        used |= {cover[r] for r in ("test-command", "record-missing") if r in cover}
+    if used and not record and not allow_override:  # the CI re-run: an override would skip the very run it exists for
+        findings.append(_finding("override-in-force", f"the override(s) {', '.join(_used(used))} would let this re-run pass without it",
+                                 "remove the override line, or pass --allow-override (the template input `allow-override`) to accept it"))
     if findings:
         return {"mode": mode, "ok": False, "findings": findings, "recorded": False, "overrides_used": _used(used)}
-    if "test-command" in cover or "record-missing" in cover:  # an `l2` / `test-command` override: no run, and no record to fake
-        used |= {cover[r] for r in ("test-command", "record-missing") if r in cover}
+    if skipped:
         return {"mode": mode, "ok": True, "findings": [], "recorded": False, "overrides_used": _used(used),
                 "note": "verification skipped: overridden"}
     head = (_out(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}") or b"").decode().strip()
@@ -968,7 +986,7 @@ def verify(client, story_id, record=True, base=None, repo="."):
            "overrides_used": _used(used)}
     if findings or not record:
         return out
-    cmd = hashlib.sha256(c.cfg.strict["test_command"].encode()).hexdigest()[:12]
+    cmd = _command_hash(c.cfg.strict["test_command"])
     _write_record(Path(repo) / dod.dod_file(c.cfg.dod_path, story_id), repo, c.ledger,
                   f"### Verification — {date.today().isoformat()} @ {head[:12]}",
                   [*lines, f"- head: {head[:12]} exit {runs[head]['exit']}", f"- command-sha256: {cmd}", f"- seconds: {seconds}"])

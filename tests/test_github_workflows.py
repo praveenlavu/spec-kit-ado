@@ -1275,9 +1275,9 @@ VERIFY_GH = WF_DIR / "ado-strict-verify.yml"
 VERIFY_AZ = ROOT / "pipelines" / "ado-strict-verify.yml"
 VERIFY_IF = "steps.mode.outputs.rerun == 'yes'"
 VERIFY_MODE_ENV = {"BASE_REF": "main", "EVENT_NAME": "pull_request"}
-VERIFY_STEP_ENV = {"STORY_ID": "1001", "BASE_REF": "main"}
-VERIFY_CMD_GH = 'ado strict verify "$STORY_ID" --no-record --base "origin/${BASE_REF}"'
-VERIFY_CMD_AZ = 'env -u ADO_TOKEN ado strict verify "$id" --no-record --base "origin/${TARGET_BRANCH#refs/heads/}"'
+VERIFY_STEP_ENV = {"STORY_ID": "1001", "BASE_REF": "main", "ALLOW_OVERRIDE": "false"}
+VERIFY_CMD_GH = 'ado strict verify "$STORY_ID" --no-record --base "origin/${BASE_REF}" $allow'
+VERIFY_CMD_AZ = 'env -u ADO_TOKEN ado strict verify "$id" --no-record --base "origin/${TARGET_BRANCH#refs/heads/}" $allow'
 STRICT_TARGET = '{"mode": "strict", "source": "target branch"}'
 FORBIDDEN = ("ADO_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "System.AccessToken", "SYSTEM_ACCESSTOKEN", "secrets.", "github.token", "pull_request_target")
 
@@ -1295,7 +1295,8 @@ def test_github_verify_workflow_is_secret_free_and_least_privilege():
     wf = load(VERIFY_WF)
     call = triggers(wf)
     assert list(call) == ["workflow_call"] and list(call["workflow_call"]) == ["inputs"]  # no `secrets:` block at all
-    assert list(call["workflow_call"]["inputs"]) == ["toolkit-ref"] and call["workflow_call"]["inputs"]["toolkit-ref"]["default"] == "v0"
+    assert list(call["workflow_call"]["inputs"]) == ["toolkit-ref", "allow-override"] and call["workflow_call"]["inputs"]["toolkit-ref"]["default"] == "v0"
+    assert call["workflow_call"]["inputs"]["allow-override"]["type"] == "boolean" and call["workflow_call"]["inputs"]["allow-override"]["default"] is False
     assert wf["permissions"] == {"contents": "read"} and "env" not in wf
     (job,) = wf["jobs"].values()
     assert "env" not in job and "permissions" not in job and "secrets" not in job and "needs" not in job
@@ -1315,11 +1316,12 @@ def test_github_verify_steps_run_in_order_and_use_exactly_the_verify_command():
     assert set(mode["env"]) == {"BASE_REF", "EVENT_NAME"} and mode["env"]["EVENT_NAME"] == "${{ github.event_name }}"
     assert 'ado strict mode --base "origin/${BASE_REF}" > "$RUNNER_TEMP/mode.json"' in mode["run"]
     assert "if" not in mode and story["if"] == VERIFY_IF and verify["if"] == VERIFY_IF
-    assert set(story["env"]) == {"PR_TITLE", "PR_BODY"} and set(verify["env"]) == {"STORY_ID", "BASE_REF"}
+    assert set(story["env"]) == {"PR_TITLE", "PR_BODY"} and set(verify["env"]) == {"STORY_ID", "BASE_REF", "ALLOW_OVERRIDE"}
     assert verify["env"]["STORY_ID"] == "${{ steps.story.outputs.id }}" and verify["env"]["BASE_REF"] == "${{ github.base_ref }}"
     assert VERIFY_CMD_GH in verify["run"] and len(re.findall(r"(?m)^\s*ado strict verify ", verify["run"])) == 1  # one call, nothing else
     assert not re.search(r"(?m)^\s*ado strict verify ", mode["run"] + story["run"])  # only the last step runs the project's tests
-    assert 'ado strict verify "$STORY_ID" --no-record --base "origin/${BASE_REF}" >' in verify["run"]  # nothing is appended to the command
+    assert verify["env"]["ALLOW_OVERRIDE"] == "${{ inputs.allow-override }}"
+    assert 'ado strict verify "$STORY_ID" --no-record --base "origin/${BASE_REF}" $allow >' in verify["run"]  # only the flag is appended
 
 
 def test_github_verify_guards_and_story_id_rule_match_the_gate():
@@ -1344,7 +1346,7 @@ def _v_ado(tmp_path, *, mode=STRICT_TARGET, mode_rc=0, id_rc=0, verify_rc=0, ver
             'esac\nexit 0\n')
 
 
-def _verify_job(tmp_path, ado, *, title="AB#1001 fix", body="", event="pull_request"):
+def _verify_job(tmp_path, ado, *, title="AB#1001 fix", body="", event="pull_request", allow="false"):
     """The three GitHub steps in order, sharing one GITHUB_OUTPUT, with the `if:` of the later steps applied (pinned above)."""
     rc, out = _gh_run(tmp_path, _gh(VERIFY_WF, "mode"), {**VERIFY_MODE_ENV, "EVENT_NAME": event}, ado=ado)
     outputs = lambda: dict(l.split("=", 1) for l in _gho(tmp_path).splitlines())
@@ -1354,19 +1356,19 @@ def _verify_job(tmp_path, ado, *, title="AB#1001 fix", body="", event="pull_requ
     out += o
     if rc:
         return rc, out
-    rc, o = _gh_run(tmp_path, _gh(VERIFY_WF, "verify"), {"STORY_ID": outputs()["id"], "BASE_REF": "main"}, ado=ado)
+    rc, o = _gh_run(tmp_path, _gh(VERIFY_WF, "verify"), {"STORY_ID": outputs()["id"], "BASE_REF": "main", "ALLOW_OVERRIDE": allow}, ado=ado)
     return rc, out + o
 
 
 def _run_az_verify(tmp_path, ado, *, branch="feature/ab1001-x", target="refs/heads/main", temp=True, with_ado=True, head_sha=SHA, git_rc=0,
-                   extra_env=None):
+                   extra_env=None, allow="False"):
     """The Azure template's one script, whole, as the agent runs it (`bash --noprofile --norc`, no -e unless a test asks)."""
     step = next(s for s in yaml.safe_load(VERIFY_AZ.read_text())["steps"] if "strict verify" in s.get("script", ""))
-    assert set(step["env"]) == {"SOURCE_BRANCH", "TARGET_BRANCH", "HEAD_SHA"}  # no token of any kind
+    assert set(step["env"]) == {"SOURCE_BRANCH", "TARGET_BRANCH", "HEAD_SHA", "ALLOW_OVERRIDE"}  # no token of any kind
     (tmp_path / "at").mkdir(exist_ok=True)
     git = f'echo "$*" >> "{tmp_path}/git.log"\nexit {git_rc}\n'  # a fake git: the template's checkout of the PR head, logged apart from the `ado` calls
     env = {"PATH": f"{_bin(tmp_path, git=git, **({'ado': ado} if with_ado else {}))}:/usr/bin:/bin", "HOME": str(tmp_path), "CALLS": str(tmp_path / "calls.log"),
-           "SOURCE_BRANCH": branch, "TARGET_BRANCH": target, "HEAD_SHA": head_sha, **(extra_env or {})}
+           "SOURCE_BRANCH": branch, "TARGET_BRANCH": target, "HEAD_SHA": head_sha, "ALLOW_OVERRIDE": allow, **(extra_env or {})}
     if temp:
         env["AGENT_TEMPDIRECTORY"] = str(tmp_path / "at")
     (tmp_path / "step.sh").write_text(step["script"])
@@ -1401,6 +1403,14 @@ def test_verify_job_strict_target_runs_the_exact_command_and_passes(tmp_path, jo
     rc, out = run(tmp_path, _v_ado(tmp_path, verify_doc={"ok": True, "findings": []}))
     assert rc == 0 and not [l for l in out.splitlines() if l.startswith("::error::")] and "type=error" not in out, out
     assert _verify_calls(tmp_path, kind) == [CALL_MODE, CALL_VERIFY]  # no token reached either call, and nothing else ran
+
+
+@pytest.mark.parametrize("allow,flag", [("false", ""), ("False", ""), ("", ""), ("true", " --allow-override"), ("True", " --allow-override")])
+def test_verify_job_adds_allow_override_only_when_asked(tmp_path, job, allow, flag, shell_flags):
+    kind, run = job
+    rc, out = run(tmp_path, _v_ado(tmp_path, verify_doc={"ok": True, "findings": []}), allow=allow)
+    assert rc == 0, out
+    assert _verify_calls(tmp_path, kind) == [CALL_MODE, CALL_VERIFY.replace(" | ", f"{flag} | ", 1)]
 
 
 def test_verify_job_exit_2_fails_the_job_and_lists_sanitised_rule_ids_only(tmp_path, job, shell_flags):

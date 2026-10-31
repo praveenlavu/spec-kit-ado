@@ -87,7 +87,7 @@ From the JSON output:
   the error; offer a re-run (new preview, new yes).
 - `error` with `state: null` → the ledger was attached but the state change failed. Say
   exactly that, so nobody attaches it twice; offer to retry the state change with
-  `ado update <id> --state <done_state>` behind its own ⛔ yes.
+  `ado update <id> --state <done_state>` behind its own ⛔ yes (in strict mode `ado update` refuses the done state: re-run `ado done <id>` instead).
 
 ## HITL checkpoints
 
