@@ -416,7 +416,7 @@ def test_documented_ado_verbs_and_flags_exist_in_the_cli():
                         continue
                     if words[0].startswith("-"):
                         cmd, given = "", words
-                    elif words[0] in ("pr", "strict") and len(words) > 1 and re.fullmatch(r"[a-z]+", words[1]):
+                    elif words[0] in ("pr", "strict", "stack") and len(words) > 1 and re.fullmatch(r"[a-z]+", words[1]):
                         cmd, given = f"{words[0]} {words[1]}", words[2:]
                     elif re.fullmatch(r"[a-z]+", words[0]):
                         cmd, given = words[0], words[1:]
@@ -1205,3 +1205,26 @@ def test_cli_version_requirement_and_release_bump_documented():
         text = _flat(doc)
         assert "'CLI 0.3.0 or later' is satisfied once the release bump to 0.3.0 happens" in text, doc
     assert "the CLI reports 0.2.0 until then" in _flat("workflows/ado-lifecycle/README.md")
+
+
+def test_stack_detect_documented_read_only_with_fixed_texts():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `stack detect"))
+    for needle in ("Read-only, local", "files tracked at `HEAD`", "`note: \"commit first\"`", "`<path #n>`", "never makes `outcome` `detected`",
+                   "a symlink or larger file is never read", "cannot read git history here", "`too many files to inspect`", "byte-identical", "| none |"):
+        assert needle in row, needle
+    docs = _flat("docs/stack-kits.md")
+    for needle in ("## Detection", "`sfdx-project.json` absorbs the `package.json` beside it", "`typescript` replaces `node`", "`hints.pega: true`",
+                   "Pega and Appian are `unknown`", "not a security boundary", "`domain_hints` lists `media`", "at most 3 path segments deep"):
+        assert needle in docs, needle
+    assert "`ado stack detect`" in _flat("AGENTS.md") and "`ado stack detect` (read-only, local" in _flat("rules/hitl.md")
+    log = _flat("CHANGELOG.md")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack detect [--repo DIR]`") < log.index("## 0.2")
+
+
+def test_stack_detect_folding_incomplete_note_and_git_environment_documented():
+    docs, row, log = _flat("docs/stack-kits.md"), _flat("README.md"), _flat("CHANGELOG.md")
+    for needle in ("Nested roots of the same stack are one stack", "npm workspaces, Maven multi-module, Gradle multi-project and Cargo",
+                   "`\"note\": \"hints incomplete\"`", "Only SHA-1 repositories are read", "`safe.directory` works"):
+        assert needle in docs, needle
+    assert "folds into its nearest ancestor root as extra evidence" in row and "`note: \"hints incomplete\"`" in row and "SHA-1 repositories only" in row
+    assert "fold into their nearest ancestor root as evidence" in log and "`note: \"hints incomplete\"`" in log

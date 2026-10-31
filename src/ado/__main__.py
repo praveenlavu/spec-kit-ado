@@ -6,7 +6,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, attachments, branch, comments, decisions, dod, done, gate, prs, push, questions, strict, tasks, workitems
+from . import __version__, attachments, branch, comments, decisions, dod, done, gate, prs, push, questions, stack, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid
@@ -550,6 +550,12 @@ def main(argv=None):
     q.add_argument("pr_id", type=int)
     q.add_argument("--body-file", required=True, metavar="F")
 
+    p = sub.add_parser("stack", help="Which stacks the repository holds (read-only, local): `stack detect` reads the files tracked at HEAD")
+    stsub = p.add_subparsers(dest="stack_command", required=True)
+    q = stsub.add_parser("detect", help="Detect the stack(s) from the files committed at HEAD (never the working tree) and show why: JSON "
+                         "{outcome, stacks, domain_hints}; no commit yet is `unknown` with a note; exit 2 when git cannot be read")
+    q.add_argument("--repo", default=".", metavar="DIR", help="the repository (default: the current directory)")
+
     p = sub.add_parser("strict", help="Strict SDD+TDD mode: phase checks (read-only) and `verify` (runs the tests, records the result)")
     ssub = p.add_subparsers(dest="strict_command", required=True)
     q = ssub.add_parser("check", help="Check the strict-mode rules of a phase (read-only; exit 2 lists the findings as JSON)")
@@ -624,6 +630,8 @@ def main(argv=None):
             out = _add_decision(args)
         elif args.command == "decisions" and args.resolve:  # local only: no token, no request
             out = _resolve_decision(args)
+        elif args.command == "stack":  # local only: no token, no request, no config
+            out = stack.detect(args.repo)
         elif args.command == "strict" and args.strict_command == "override":  # local only: no token, no request
             out = _override(args)
         elif args.command == "strict" and args.strict_command == "mode":  # local only: no token, no request
