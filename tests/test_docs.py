@@ -1243,7 +1243,7 @@ def test_stack_init_documented_as_a_local_draft_write():
     assert "ado stack init (--from .ado/FILE | --seed NAME [--root R]) [--stack ID] [--apply] [--force]" in _flat("AGENTS.md")
     assert "`ado stack init --apply`: a local write with no ADO call and no gate" in _flat("rules/hitl.md")
     assert "which needs the human's explicit yes: the agent passes the flag itself, so it must ask first" in _flat("rules/hitl.md")
-    assert "the agent passes the flag itself, so it must ask first" in _flat("AGENTS.md") and "PLACEHOLDERS" in docs and "is kept on any failure" not in docs
+    assert "the agent passes the flag itself, so it must ask first" in _flat("AGENTS.md") and "All three shipped seeds are researched drafts" in docs and "PLACEHOLDERS" not in docs and "`org_only`" in docs and "is kept on any failure" not in docs
     log = _flat("CHANGELOG.md")
     assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack init (--from FILE | --seed NAME [--root R]) [--stack ID] [--apply] [--force]`") < log.index("## 0.2")
 
