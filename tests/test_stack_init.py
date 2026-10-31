@@ -13,8 +13,8 @@ import pytest
 
 from ado import decisions, stack
 from ado.__main__ import main
-from tests.conftest import git, write_files
-from tests.test_stack_show import MARKER, approve, profile
+from tests.conftest import approve, git, profile, write_files
+from tests.test_stack_show import MARKER
 
 ROOT = Path(__file__).resolve().parent.parent
 

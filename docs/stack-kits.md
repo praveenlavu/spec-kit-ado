@@ -505,6 +505,8 @@ the files judged are the ones git **tracks** at the PR head:
 is never `kit-unpinned`, and `ado kits pin ado` is refused. Its files are reviewed as code like any other file of the repository; a PR that replaces its
 directory with a symlink or submodule is outside these rules. A case or Unicode variant (`ADO`) is no id and is still reported as `kit-unpinned` (`#<n>`).
 
+**A PR can rewrite the toolkit's own files, and nothing checks them.** The commands, rules and templates under `.specify/extensions/ado/` are prompts the agent follows after merge. A PR can change any of them, or replace the directory with a symlink or a submodule, and neither CI nor `ado kits verify` looks at that directory. Today's mitigation is to review `.specify/extensions/ado/` as code in every PR that touches it. CI still judges the results (evidence, tests, gates), so a hostile prompt alone cannot get a PR through. A digest check of this directory is a candidate for v0.4.
+
 A locked kit with **no tracked files** at the head is a warning, `kit not in the repository: checked locally only (<ids>)`, not a finding (a
 repository that commits no kit dirs is legitimate); that includes a PR that deletes the whole kit dir, so review a PR that removes tracked kit
 files. A tracked `.specify/extensions/<valid-id>/` directory with no tracked `extension.yml` that the lockfile does not list is not a loadable kit: it is the

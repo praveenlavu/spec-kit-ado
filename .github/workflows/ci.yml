@@ -18,6 +18,10 @@ jobs:
           python-version: "3.11"
       - name: Install package + dev deps
         run: pip install --quiet ".[dev]"
+      # Real-repo tests (tests/test_ci_speckit_repo.py) need the Spec Kit CLI; pinned by commit to upstream release v1.2.1
+      # (9dca9bf42a031765ee5e5f2371137f2f26967e11), because tags can move. Bump on purpose, not by drift. With CI=true they fail rather than skip.
+      - name: Install Spec Kit CLI (pinned)
+        run: pip install --quiet "git+https://github.com/github/spec-kit.git@9dca9bf42a031765ee5e5f2371137f2f26967e11"
       - name: Run the test suite
         run: pytest -q
 

@@ -12,8 +12,8 @@ from ado.__main__ import main
 from ado.client import AdoError
 from ado.config import Config
 from ado.dod import SECTION2
-from tests.conftest import FakeClient, commit, git, review_md, write_files
-from tests.test_stack_show import approve, profile, put
+from tests.conftest import FakeClient, approve, commit, git, profile, review_md, write_files
+from tests.test_stack_show import put
 
 SPEC = "specs/001-members"
 TASKS = "- [ ] T001 Count members\n- [ ] T002 List members\n"

@@ -19,8 +19,8 @@ import pytest
 from ado import decisions, stack
 from ado.__main__ import main
 from ado.config import Config
-from tests.conftest import TypedStdin, git, run_in_pty, shown_code, terminal
-from tests.test_stack_show import MARKER, approve, profile, put
+from tests.conftest import TypedStdin, approve, git, profile, run_in_pty, shown_code, terminal
+from tests.test_stack_show import MARKER, put
 
 ROOT = Path(__file__).resolve().parent.parent
 TODAY = datetime.date(2026, 10, 31)

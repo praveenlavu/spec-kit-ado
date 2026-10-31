@@ -1,3 +1,4 @@
+import copy
 import json
 import os
 import pty
@@ -11,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from ado import dod
+from ado import dod, stack
 from ado.config import Config
 
 
@@ -51,9 +52,40 @@ def cfg():
     return Config(organization="contoso", project="Fabrikam")
 
 
+def profile(**over):
+    p = {"schema": 1, "version": 2, "status": "draft",
+         "stacks": [{"id": "python", "root": ".",
+                     "detected": {"confidence": "high", "evidence": ["pyproject.toml"]},
+                     "commands": {"test": {"run": "PYTHONPATH=src python3 -m pytest -q", "source": "S1"},
+                                  "lint": {"run": "ruff check .", "source": "unverified"},
+                                  "org_only": [{"run": "sf apex run test --wait 10", "source": "S2"}]},
+                     "conventions": [{"rule": "Test files are named test_*.py", "source": "S1"},
+                                     {"rule": "Keep modules small", "source": "unverified"}],
+                     "dod": [{"item": "No new lint findings", "source": "S1"}]}],
+         "sources": {"S1": {"kind": "official", "url": "https://docs.pytest.org/en/stable/", "retrieved": "2026-01-15",
+                            "evidence": "Run tests with python -m pytest."},
+                     "S2": {"kind": "repo", "path": "package.json", "retrieved": "2026-01-15", "evidence": "scripts.test"}}}
+    p.update(over)
+    return p
+
+
+def approve(p, **over):
+    """`p` as a human's approval records it: status approved and the hash of everything but `approval`."""
+    p = copy.deepcopy(p)
+    p["status"] = "approved"
+    p["approval"] = {"by": "tech lead", "date": "2026-01-16", "sha256": "0" * 64}
+    p["approval"]["sha256"] = stack.profile_hash(p)
+    p["approval"].update(over)
+    return p
+
+
 # ---- real temp git repos for the review_block_on checks (F11) ----
+_IDENTITY = {f"GIT_{k}_{f}": v for k in ("AUTHOR", "COMMITTER") for f, v in (("NAME", "Test"), ("EMAIL", "test@example.invalid"))}
+
+
 def git(repo, *a):
-    return subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True).stdout.strip()
+    # a commit needs an identity even in a bare container (no global git config); an identity already in the environment wins
+    return subprocess.run(["git", "-C", str(repo), *a], check=True, capture_output=True, text=True, env={**_IDENTITY, **os.environ}).stdout.strip()
 
 
 def write_files(root, files):
@@ -217,16 +249,21 @@ provides:
 """
 
 
+def require_specify():
+    """Path of the `specify` CLI. Missing: skip locally, but fail under CI (GitHub sets `CI=true`) so the real-repo tests cannot vanish silently."""
+    specify = shutil.which("specify")
+    if specify is None:
+        (pytest.fail if os.environ.get("CI") else pytest.skip)("the specify CLI is not installed")
+    return specify
+
+
 @pytest.fixture(scope="session")
 def speckit_template(tmp_path_factory):
     """Path of a committed Spec Kit repository on `main`: strict `ado.config.json`, an approved `ado.stack.json`, and an
     `ado.kits.lock.json` pinning `contoso-kit` to its committed files (the toolkit's `ado` is tracked and unpinned, as in a normal install).
     Skipped when the `specify` CLI is not on PATH."""
-    specify = shutil.which("specify")
-    if specify is None:
-        pytest.skip("the specify CLI is not installed")
+    specify = require_specify()
     from ado import kits  # noqa: PLC0415
-    from tests.test_stack_show import approve, profile  # noqa: PLC0415
     root = tmp_path_factory.mktemp("speckit-template")
     repo, kit_src, ext_src = root / "repo", root / "kit-src", root / "ext-src"
     for d in (repo, kit_src / "commands", ext_src):

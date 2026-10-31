@@ -227,6 +227,10 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   confined as the gate does (real path under the working tree, 1 MiB, UTF-8) and exits 2 before any request when one is
   not, so a committed link cannot make CI upload another file.
 
+### Known limits
+
+- A PR can rewrite the toolkit's own files under `.specify/extensions/ado/` (commands, rules and templates are prompts the agent follows after merge), and neither CI nor `ado kits verify` checks that directory. Review it as code; CI still judges the results (evidence, tests, gates), so a hostile prompt alone cannot pass a PR. A digest check is a candidate for v0.4.
+
 ### Advisory-mode additions in 0.3.0
 
 An advisory project (`mode` absent or `"advisory"`) keeps every v0.2 output except these seven additions, which the release owner accepted:

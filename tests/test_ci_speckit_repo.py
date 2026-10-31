@@ -9,7 +9,7 @@ import pytest
 from ado import __main__ as m
 from ado import strict
 from ado.__main__ import main
-from tests.conftest import SPECKIT_KIT, FakeClient, commit, git
+from tests.conftest import SPECKIT_KIT, FakeClient, commit, git, require_specify
 from tests.test_strict import _kids, _project
 
 KIT = f".specify/extensions/{SPECKIT_KIT}"
@@ -236,3 +236,15 @@ def test_adoption_notes_unit(speckit_repo, monkeypatch):
 def _strict_cfg():
     from ado.config import Config
     return Config(organization="contoso", project="Fabrikam", mode="strict")
+
+
+def test_missing_specify_skips_locally_and_fails_under_ci(monkeypatch):
+    monkeypatch.setattr("shutil.which", lambda name: None)
+    monkeypatch.delenv("CI", raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        require_specify()
+    monkeypatch.setenv("CI", "true")  # what GitHub Actions sets: the 28 tests must not vanish silently
+    with pytest.raises(pytest.fail.Exception):
+        require_specify()
+    monkeypatch.setattr("shutil.which", lambda name: "/bin/specify")
+    assert require_specify() == "/bin/specify"

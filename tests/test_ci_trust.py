@@ -12,8 +12,7 @@ from ado import __main__ as m
 from ado import decisions, kits, strict
 from ado.__main__ import main
 from ado.dod import SECTION2
-from tests.conftest import FakeClient, commit, git
-from tests.test_stack_show import approve, profile
+from tests.conftest import FakeClient, approve, commit, git, profile
 from tests.test_strict import CMD, LEDGER, MARK, RED_NOTE, STACK_CMD, _d, _kids, _ledger_rows, _pair, _project, _repo
 from tests.test_strict_wire import _full, _wire
 

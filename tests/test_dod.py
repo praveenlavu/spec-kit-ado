@@ -518,8 +518,8 @@ import copy
 
 from ado import done, stack
 from ado.dod import stack_dod_items
-from tests.conftest import FakeClient
-from tests.test_stack_show import approve, profile, put
+from tests.conftest import FakeClient, approve, profile
+from tests.test_stack_show import put
 
 _FIVE = ["- [ ] every AC mapped to a passing real test", "- [ ] coverage meets the project's bar", "- [ ] no assertion-free tests",
          "- [ ] all assumptions / questions / edge cases resolved", "- [ ] gates green"]

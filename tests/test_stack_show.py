@@ -11,36 +11,9 @@ import pytest
 
 from ado import stack
 from ado.__main__ import main
-from tests.conftest import git, write_files
+from tests.conftest import approve, git, profile, write_files
 
 MARKER = "ZZ-UNTRUSTED"
-
-
-def profile(**over):
-    p = {"schema": 1, "version": 2, "status": "draft",
-         "stacks": [{"id": "python", "root": ".",
-                     "detected": {"confidence": "high", "evidence": ["pyproject.toml"]},
-                     "commands": {"test": {"run": "PYTHONPATH=src python3 -m pytest -q", "source": "S1"},
-                                  "lint": {"run": "ruff check .", "source": "unverified"},
-                                  "org_only": [{"run": "sf apex run test --wait 10", "source": "S2"}]},
-                     "conventions": [{"rule": "Test files are named test_*.py", "source": "S1"},
-                                     {"rule": "Keep modules small", "source": "unverified"}],
-                     "dod": [{"item": "No new lint findings", "source": "S1"}]}],
-         "sources": {"S1": {"kind": "official", "url": "https://docs.pytest.org/en/stable/", "retrieved": "2026-01-15",
-                            "evidence": "Run tests with python -m pytest."},
-                     "S2": {"kind": "repo", "path": "package.json", "retrieved": "2026-01-15", "evidence": "scripts.test"}}}
-    p.update(over)
-    return p
-
-
-def approve(p, **over):
-    """`p` as a human's approval records it: status approved and the hash of everything but `approval`."""
-    p = copy.deepcopy(p)
-    p["status"] = "approved"
-    p["approval"] = {"by": "tech lead", "date": "2026-01-16", "sha256": "0" * 64}
-    p["approval"]["sha256"] = stack.profile_hash(p)
-    p["approval"].update(over)
-    return p
 
 
 def put(root, p, name=stack.PROFILE_FILE):

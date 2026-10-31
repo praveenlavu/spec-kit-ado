@@ -1760,3 +1760,15 @@ def test_real_repo_kit_fixes_and_adoption_notes_documented():
         assert needle in log, needle
     for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
         assert "carries the trust notes" in _flat(doc), doc
+
+
+# ---- P2-17b: CI installs Spec Kit; the toolkit's own files are said to be unchecked ----
+def test_toolkit_own_files_unchecked_and_specify_in_ci_documented():
+    kits, readme, log, contrib = _flat("docs/stack-kits.md"), _flat("README.md"), _flat("CHANGELOG.md"), _flat("CONTRIBUTING.md")
+    for text in (kits, readme, log):
+        assert "`.specify/extensions/ado/`" in text and "neither CI nor `ado kits verify`" in text and "hostile prompt alone cannot" in text
+        assert "candidate for v0.4" in text and "review" in text
+    assert "### Known limits" in (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text()
+    assert "need the Spec Kit CLI (`specify`)" in contrib and "CI installs it" in contrib
+    ci = (Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml").read_text()
+    assert "git+https://github.com/github/spec-kit.git@9dca9bf42a031765ee5e5f2371137f2f26967e11" in ci and "v1.2.1" in ci

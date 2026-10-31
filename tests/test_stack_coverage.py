@@ -6,9 +6,9 @@ import pytest
 
 from ado import gate, stack
 from ado.__main__ import main
-from tests.conftest import commit, git
+from tests.conftest import approve, commit, git, profile
 from tests.test_ci_trust import ORG, STRICT, _ci, _gate, _gate_pr, _md, _rules_of, _run
-from tests.test_stack_show import approve, config, profile, put
+from tests.test_stack_show import config, put
 from tests.test_docs import _flat
 from tests.test_strict import _impl, _only, _rules, _stk
 

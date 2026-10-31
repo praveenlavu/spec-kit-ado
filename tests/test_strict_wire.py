@@ -471,7 +471,7 @@ def test_pr_create_head_must_be_the_checked_out_commit(tmp_path, monkeypatch, ca
 @pytest.mark.parametrize("draft", [False, True], ids=["missing", "draft"])
 def test_pr_create_and_done_strict_refuse_a_missing_or_draft_stack_profile(tmp_path, monkeypatch, capsys, git_env, draft):
     from ado import stack
-    from tests.test_stack_show import profile
+    from tests.conftest import profile
     mod, fake, sent, s = _wire(tmp_path, monkeypatch, git_env)
     if draft:
         (tmp_path / "ado.stack.json").write_text(json.dumps(profile()))

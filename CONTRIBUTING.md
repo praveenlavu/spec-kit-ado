@@ -15,6 +15,8 @@
   .venv/bin/pytest -q -n auto
   ```
 
+  The 28 real-repo tests in `tests/test_ci_speckit_repo.py` need the Spec Kit CLI (`specify`); install it to run them (they skip locally without it; CI installs it and fails if it is missing).
+
 - **No third-party runtime dependencies.** The `ado` CLI is Python standard library
   only; `pytest`, `pytest-xdist` (parallel runs, about 3x faster) and `pyyaml` stay in the `dev` extra.
 - **No secrets, no client data.** Never commit a token, an `ado.config.json` with real
