@@ -104,7 +104,11 @@ untracked, staged-only and working-tree changes are ignored. A repository with n
 - **Pega and Appian are `unknown`:** the application lives in the platform's rule database, not in files, so no file marker is
   shipped for them. The one hint-only guess: a `package.json` that depends on an `@pega/*` package (a Constellation front end) sets
   `hints.pega: true` on its `node` or `typescript` stack and `pega` in `domain_hints`. It is a guess to confirm, not a detection;
-  name the stack yourself.
+  name the stack yourself. **Where the hint comes from:** the rule is in `stack.py` (any dependency or devDependency name that starts
+  with `@pega/`), and the one repository it was checked against is `pegasystems/react-sdk`: on 2026-10-31 its `package.json` (commit
+  `65be5f2`, committed 2026-10-21) lists `@pega/*` packages (for example `@pega/react-sdk-components`) and `ado stack detect` on that
+  checkout printed `typescript` with `pega: true`. That is one repository, a Constellation front end; nothing shows the scope marks every
+  Pega project, and a Pega rule-base application has no such file.
 - **Untrusted paths:** in CI a PR controls every path, so a root or evidence path is printed only when it is 1 to 200 characters of
   `A-Za-z0-9._/-`; anything else (a space, a control character, a non-UTF-8 byte, a longer path) is printed as `<path #n>`. Ids,
   evidence and hints come from the marker table and fixed words, never from file contents. A manifest is read only from the commit,
@@ -174,6 +178,31 @@ file is kept when the write fails; a failed read-back after the rename is report
 agent's file. Replacing a profile that is `approved`, `changed-since-approval`, or hand-broken but still marked approved needs `--force` (a symlinked `ado.stack.json` is always refused), and `--force` over an approved profile needs the human's explicit yes: the agent passes the flag itself, so it must ask first. Exit 0 for a preview or a write, 2 for a
 refusal or an invalid profile. Seed `python-pytest` is researched: 12 official sources (pytest, Python, packaging.python.org, ruff, pytest-cov, pip-audit, PEP 8), every URL re-fetched on 2026-10-31, status `draft` (a human approves it per project). Its test command is `PYTHONPATH=src python3 -m pytest -q`; set `strict.test_timeout` >= 900, because each run has an empty temporary `HOME`. The package and its test tools must already be installed in the active environment (the run installs nothing). Seed `node-typescript` is researched too: 10 official sources (docs.npmjs.com, typescriptlang.org, nodejs.org, eslint.org), every URL re-fetched on 2026-10-31, status `draft`, npm only (pnpm and yarn go through research). Its test command is `npm ci --ignore-scripts && npm test`; set `strict.test_timeout` >= 900, because the npm cache starts empty and every run needs the network. Trade-off: `--ignore-scripts` also skips the project's OWN `package.json` lifecycle scripts (for example `prepare` and `postinstall`), so a TypeScript project that compiles in `prepare` will fail or run stale code and must set its own test command; dependency install scripts do not run either, so a package that needs a postinstall build step may fail (the npm docs say `--ignore-scripts` outranks allowing dependency install scripts; that every dependency script is skipped is a local observation, marked unverified in the seed). The `--audit-level=high` level is an unverified design choice. It ships `npm audit --audit-level=high` (which sends a description of the dependencies to the registry), no lint or type-check command (no authoritative generic one), and needs the project's own test dependencies in `package-lock.json`. Seed `salesforce` is researched too: 13 sources (help.salesforce.com, github.com/salesforce, github.com/salesforcecli and github.com/forcedotcom, docs.npmjs.com, the Code Analyzer GitHub Action page, and two files of the dreamhouse-lwc sample app as `implementation` sources), every URL re-fetched on 2026-10-31; developer.salesforce.com refused automated fetches (HTTP 403), so none of its pages is cited, and a claim only that site could support is marked `unverified`. Status `draft`. Its test command is `npm ci --ignore-scripts && npm run test:unit` (LWC Jest only); set `strict.test_timeout` >= 900, because the npm cache starts empty and every run needs the network. Trade-off: `--ignore-scripts` also skips the project's OWN lifecycle scripts, so a repo that installs git hooks from `prepare` (the sample app runs husky there) gets none in the strict clone, and a project that builds in `postinstall` must set its own test command; dependency install scripts are skipped too (unverified on every npm version). Apex tests and deploys need a live org, so `sf apex run test ...` and `sf project deploy start --dry-run ...` sit in `org_only`: `strict verify` never runs them, and the agent shows one and runs it only after the human's explicit yes for that run. Strict L2 therefore covers LWC Jest, not Apex. The seed also ships `coverage` (`npm run test:unit:coverage`, LWC only) and Salesforce Code Analyzer as `security` (`sf code-analyzer run --severity-threshold 2`; the plugin must already be installed, and the flag, the level and any run-time download are unverified). It ships no `lint` or `format_check` command (no general one exists); one convention, from a single sample app and unverified for other projects, says to run the project's own `lint` and `prettier:verify` scripts if it defines them. It does not set `kit`. All three shipped seeds are researched drafts; the next step after any init is the human's review and approval. This is process enforcement, not a security boundary.
 
+## Seed profiles
+
+Three researched seeds ship as package data in `src/ado/seeds/` (`ado stack init --seed <name>`). All are `draft`: nothing is trusted
+until a human approves the profile for the project. Every source URL was re-fetched on the retrieval date below; the dates, counts and
+kinds are read from the seed files.
+
+| Seed | Stack id | Sources (kinds) | Retrieved | `unverified` in the approval count | Other claims marked unverified only in a `why` or in the text |
+|---|---|---|---|---|---|
+| `python-pytest` | `python` | 12 (12 official) | 2026-10-31 | 0 | `commands.test.why`: the `-q` flag, and that dependencies and test tools must already be installed |
+| `node-typescript` | `typescript` | 10 (10 official) | 2026-10-31 | 0 | `commands.test.why`: that every dependency script is skipped (seen once); `commands.security[0].why`: the `high` audit level |
+| `salesforce` | `salesforce` | 13 (11 official, 2 implementation) | 2026-10-31 | 1 (`conventions[10]`) | `commands.test.why`; `commands.security[0].why` (the flag, the level, run-time fetches); `commands.org_only[0].why` and `[1].why` (the wait, the format, dry runs on production); `conventions[1].rule`; `dod[4].item` |
+
+**The `unverified` count is a lower bound.** The approval preview counts only items whose source is the literal `unverified`. A claim a
+seed marks as unverified inside a `why` is not counted, and the preview prints a `why` only for a command whose `run` is `null`; for a
+command that has a `run` the `why` is in the file only. So before you approve a profile, open `ado.stack.json` and read every `why`
+(and the `rule` and `item` texts, which the preview does print) for the words "unverified" and "design choice". The counts of 0 and 1 in
+the table hide the open claims in each seed. This is a limit of the preview, documented rather than fixed in this release.
+
+The seeds in one line each: `python-pytest` runs `PYTHONPATH=src python3 -m pytest -q`, with ruff, pytest-cov and pip-audit commands;
+`node-typescript` runs `npm ci --ignore-scripts && npm test` (npm only) with `npm audit --audit-level=high`; `salesforce` runs the LWC Jest
+tests (`npm ci --ignore-scripts && npm run test:unit`), keeps Apex tests and deploy validation in `org_only`, and sets no `kit`. The
+details, trade-offs and `strict.test_timeout` advice are under "Creating a profile" above. Flutter, Java, Go, Rust, .NET, C/C++, Pega
+and Appian have no seed: `speckit.ado.stack` researches a cited draft, `unverified` where it cannot cite. This is process enforcement,
+not a security boundary.
+
 ## Approving a profile
 
 `ado stack approve` is the human's step: it records the approval and is the only place `strict.test_command` is written once a profile
@@ -187,6 +216,9 @@ exists. It changes what strict CI runs, so the agent never runs it: after `ado s
   Control characters and escape sequences are stripped before printing, and the text is printed, never stored in a file or log. Without a
   terminal on stdin, or with the output piped or redirected, it prints counts, the unverified count and the command's length only: the profile's text came from untrusted
   research and is not handed to an agent's shell. The command never fetches a URL, and nobody checked that a page supports a note: you are the check.
+  **The `UNVERIFIED` count is a lower bound.** It counts only items whose source is the literal `unverified`. A claim marked unverified
+  inside a command's `why` is not counted, and the preview prints a `why` only for a command whose `run` is `null`. Open `ado.stack.json`
+  and read every `why` before you approve (the shipped seeds each have such claims: see "Seed profiles").
 - **`--apply`** refuses (exit 2, fixed text) unless stdin is a terminal, before it reads any file or the config, and refuses when
   `ADO_CONFIG` is set. It sets `status: approved`, raises `version` by 1 and writes `approval {by, date, sha256, decision}`: `--by` is a
   role (letters, digits and spaces with at least one letter or digit, at most 40, default `tech lead`; the validator also refuses any other `approval.by`), `sha256` is the
@@ -322,7 +354,7 @@ each, and `ado kits verify` compares the installed kits with it. `ado kits pin` 
 `ado kits verify` (local, read-only, no token, no network) prints `{"kits": [{"id", "state"}], "findings": [...]}` for every kit in the registry, **disabled ones included** (`specify extension disable` only flips `enabled`; the agent copies stay on disk and invocable):
 `pinned`, `unpinned` (not in the lock), `changed` (a digest or the version differs, or a file could not be read; `reason` is one of
 `symlink`, `unreadable`, `empty`, `control-char`, `attributes`) or `stale` (locked but no longer in the registry; a pinned kit whose registry entry is removed while the registry file exists and the kit's files remain on disk is reported `stale` with `reason: "files-remain"` and a `kit-changed` finding, locally and in strict mode; with no registry file it is only `stale`). Exit 2 on any `unpinned` or `changed`
-kit (or a `stale` one whose files remain), or when the registry cannot be trusted. Output carries kit ids (which match `[a-z0-9-]{1,40}`) and fixed words only, never kit text.
+kit (or a `stale` one whose files remain), or when the registry cannot be trusted. Output carries kit ids (which match `[a-z0-9-]{1,40}`) and fixed words only, never kit prose.
 `kits.dir_digest_at(repo, commit, id)` computes the same digest from the files of a commit (what CI will use; a symlink or submodule entry
 gives the value `"changed"`). This is process enforcement, not a security boundary: a digest says a kit is unchanged since someone
 looked, not that it is safe, and anyone who can edit both the kit and the lockfile can re-pin.
@@ -332,7 +364,8 @@ script files it names, with confined, size-capped, no-symlink reads, and returns
 the number of commands and scripts, hook events as `<event> (optional)` or `<event>`, `requires.tools` names, and for five flags
 (`network`, `installs`, `writes`, `secrets`, `allowed_tools`) a count plus `<relpath>:<line>` locations (paths relative to the kit
 dir, at most 50 listed). Hook names are shown only if they match `[a-z_]{1,40}` and tool names only if they match `[A-Za-z0-9._-]{1,40}`,
-else as `<other>`; no kit text is ever printed. A manifest, command or script file that is missing, a symlink, oversized or named by an
+else as `<other>`; no kit prose is ever printed (the strings that do come from the kit are hook names, tool names and kit-relative
+paths, each limited to a fixed pattern, so they cannot hold a space, a newline or an escape character, but they are kit-chosen and not fixed text). A manifest, command or script file that is missing, a symlink, oversized or named by an
 unsafe path sets `"unreadable": true` (the scan is then incomplete, not clean). **The scan is a heuristic aid for the human reviewer, not
 a security verdict:** fixed text patterns miss obfuscation and a block of YAML it does not parse, so a count of 0 proves nothing, and the
 things only a person can judge (prompt text that steers the agent, scripts that do more than their names say, the maintainer, licence)
@@ -417,6 +450,24 @@ with no finding (`ado kits verify` exits 0), and the local check has nothing to 
 Agent copies are checked on a machine that has the registry and the copies (a developer's); CI sees only the tracked kit dirs. With more than 5 kits the finding lists five ids and the count. Process
 enforcement, not a security boundary: a digest says a kit is unchanged since a human looked, and anyone who can edit the target branch's
 kits and lockfile can re-pin.
+
+## Adopting profiles and kits: the two-PR flow
+
+In a strict project the target branch decides what CI accepts, so a new stack, profile or kit goes in two steps. Do not combine them.
+
+1. **The trust PR.** Add `ado.stack.json` (a human ran `ado stack approve --apply`, which also set `strict.test_command`) and, for each
+   kit, `ado.kits.lock.json` (a human ran `ado kits pin <id> --apply`). When the target branch has no profile or lockfile yet, CI cannot
+   judge the PR against one, so the stack and kit rules are notes for this PR and it carries the flagged note
+   `trust-introducing PR: review ado.stack.json as code` (for the first lockfile, `trust-introducing PR: review ado.kits.lock.json as code`). **The note
+   means the reviewer reads the file as code**: what runs in CI after the merge is the command in the profile. The head files must still be
+   sound (valid, approved, consistent with `strict.test_command`; a lockfile that can be read), so merging cannot lock the repository.
+2. **Feature PRs.** Once the profile and lockfile are on the target branch the rules bind: a new high-confidence root is
+   `stack-unprofiled`, an unpinned kit is `kit-unpinned`, a changed one `kit-changed`, and a PR that edits the profile, the lockfile or
+   `strict.test_command` does not change its own verdict (the target's copies judge it) and carries the note again. A new root or a
+   new kit therefore takes two PRs: the profile or lock first, then the code or kit.
+
+An admin-bypass merge is the recovery for a bad profile or lockfile already on the target. Protect both files with branch rules or
+`CODEOWNERS` like `ado.config.json`. This is process enforcement, not a security boundary: whoever can merge to the target branch can change what runs.
 
 ## Kits that do not write `tasks.md`
 

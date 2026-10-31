@@ -67,7 +67,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
 - `kits.scan(root, id)`: facts for the human who reviews a kit before pinning, from `extension.yml` (line scanner over fixed keys, no YAML
   library) and the command and script files it names: command and script counts, hooks with `optional`, `requires.tools`, and counts with
   `<relpath>:<line>` of fixed network, install, write, secret-name and `allowed-tools` patterns. Hook and tool names are shown only when they
-  match a fixed pattern (else `<other>`), no kit text is printed, and an unreadable manifest or file gives `unreadable: true`. A heuristic
+  match a fixed pattern (else `<other>`), no kit prose is printed (hook names, tool names and kit-relative paths are kit-chosen but pattern-limited), and an unreadable manifest or file gives `unreadable: true`. A heuristic
   aid, not a security verdict. Shown by `ado kits pin`. See `docs/stack-kits.md` "Pinning kits".
 - `ado kits pin <id> [--by ROLE] [--apply]` (a human's approval record in `ado.kits.lock.json`; process enforcement, not a sandbox):
   `kits.plan_pin`, `kits.apply_pin`, `kits.CHECKLIST`. The preview prints the digests, the scan facts and a fixed five-line checklist, and no
@@ -102,6 +102,17 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   lockfile on the target there is no finding and, when the PR adds the first one, the warning `trust-introducing PR: review ado.kits.lock.json as
   code` (`strict check` `warnings`; `gate` comment line and JSON key `kits_trust_note`). Advisory mode only reports (`ado kits verify`).
   The first lockfile carries its own note instead of the stack one. Process enforcement, not a security boundary. See `docs/stack-kits.md` "Kit rules, local and CI".
+- Docs for piece 2 (stack detection, profiles, kit pinning): the README section "What this does and does not do" (Azure DevOps Boards only and
+  no adapter interface; stack kits optional; third-party kits pinned and vetted by a human; process enforcement, not a security boundary;
+  not a sandbox; Spec Kit engine limits); `docs/stack-kits.md` gains "Seed profiles" (the three seeds with sources, kinds and retrieval date
+  2026-10-31, read from the seed files), "Adopting profiles and kits: the two-PR flow" (the trust PR carries `trust-introducing PR: review
+  ado.stack.json as code`, then feature PRs) and the source of the `pega` hint (any `@pega/` dependency, checked on one repository,
+  `pegasystems/react-sdk`, on 2026-10-31); `docs/configuration.md` names `ado.stack.json` and `ado.kits.lock.json` and the exit codes of the
+  `ado stack` and `ado kits` verbs. **The `unverified` count at approval is a lower bound**: it counts only the literal `unverified`, a claim
+  marked unverified inside a `why` is not counted and the preview prints a `why` only for a command whose `run` is `null`, so read every
+  `why` in `ado.stack.json` before approving (the shipped seeds each have such claims). Corrected: earlier text claimed that nothing from a kit is printed by the pin preview and `kits.scan`; hook names, tool names and kit-relative paths come from the kit and are only pattern-limited.
+  `tests/test_docs.py` pins every verb, flag, finding id, file name, exit code and boundary phrase; `tests/test_advisory_regression.py`
+  compares every pre-existing verb's output with baseline a0b3c9e on a project without `ado.stack.json` or a lockfile.
 - **Upgrade note (strict projects):** a strict project with no `ado.stack.json` now fails `strict check`. That includes link-on-merge
   `ado done` (merged tree, local config), which refuses `stack-profile-missing` for existing strict projects until the profile PR merges:
   run `ado stack init --seed <name>` (or `speckit.ado.stack`, once installed), then a human runs `ado stack approve --apply`, and merge it first.

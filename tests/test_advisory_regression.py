@@ -1,0 +1,144 @@
+"""Advisory regression (P2-15): on a project with no `ado.stack.json` and no lockfile, every verb that existed in piece 1's baseline
+(main a0b3c9e) prints the same stdout, the same stderr and exits with the same code as it did there.
+
+The baseline `src/` is exported with `git archive` into a temp dir (no worktree metadata is touched, so parallel test workers are safe) and
+both trees run the same verbs (the only normalised difference: the top-level argparse usage line names the new `kits` and `stack` verbs), in the same fixture path, with the venv's bin directory hidden from PATH. Skipped when the baseline commit is
+not in this clone (a shallow CI checkout)."""
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+import io
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+BASELINE = "a0b3c9e"
+LEDGER = """# DoD — 1001
+
+- **Spec dir:** specs/001-x
+
+## 1. Story
+
+### Acceptance criteria
+1. A member count is shown.
+
+## 2. Brainstorm & plan
+
+- Approach: count active members.
+- [ ] Q1: Which states count? → _(open)_ · owner: PO
+
+## 3. AC → test traceability
+
+| AC | Test | Status |
+|----|------|--------|
+| AC-1 | tests/test_app.py::test_count | pending |
+
+## 4. Gate & review log  (appended by speckit.ado.gate and speckit.ado.review)
+
+## 5. Checklist
+- [ ] x
+"""
+CONFIG = ('{"organization": "contoso", "project": "Fabrikam", "api_version": "7.1", "dod_path": "dod", "gate": {"tests": {}, "block": []},'
+          ' "attachments_allow": [".md", ".svg", ".txt"], "review_block_on": [], "active_state": "Active", "task_type": "Task",'
+          ' "repo_host": "github", "repository": "", "branch_prefix": "feature/", "stack": {"kit": "", "phases": {}}}\n')
+# every verb of the baseline CLI (setup is interactive and left out); network verbs stop at "no token" before any request
+VERBS = [
+    ["--version"], ["strict", "mode"], ["strict", "mode", "--base", "origin/main"],
+    ["strict", "check", "1001", "--phase", "implement"], ["strict", "check", "1001", "--phase", "pr"], ["strict", "check", "1001", "--phase", "done"],
+    ["strict", "verify", "1001"], ["strict", "override", "1001", "test-command", "--reason", "twenty characters or more here"],
+    ["gate", "1001", "--offline"], ["gate", "1001", "--offline", "--changed"], ["gate", "1001", "--offline", "--base", "main"],
+    ["questions", "1001"], ["decisions", "1001"],
+    ["decisions", "1001", "--add", "Use the nightly build", "--kind", "decision", "--why", "fixture"], ["decisions", "1001"],
+    ["decisions", "1001", "--post"], ["questions", "1001", "--post"],
+    ["branch", "--id-from", "feature/ab1001-count-active-members"], ["branch", "--id-from", "main"],
+    ["dod", "1001"], ["dod", "1001", "--refresh"], ["done", "1001"], ["push", "1001"], ["branch", "1001"], ["branch", "1001", "--link"],
+    ["pr", "create", "1001"], ["pr", "create", "1001", "--title", "x", "--body-file", "dod/DoD_1001.md", "--base", "main", "--head", "main"],
+    ["pr", "comment", "1", "--body-file", "dod/DoD_1001.md"],
+    ["get", "1001"], ["query", "SELECT [System.Id] FROM WorkItems"], ["create", "--type", "Task", "--title", "x"], ["update", "1001", "--state", "Active"],
+    ["comment", "1001", "x"], ["comments", "1001"], ["link", "1001", "--to", "1002"], ["attach", "1001", "dod/DoD_1001.md"],
+    ["attachments", "1001"],
+]
+HELPS = [[v, "--help"] for v in ("get", "query", "create", "update", "comment", "comments", "link", "attach", "attachments", "branch", "dod",
+                                 "questions", "decisions", "gate", "push", "done")] + [["pr", "--help"], ["strict", "--help"], ["strict", "check", "--help"],
+                                 ["strict", "verify", "--help"], ["strict", "override", "--help"], ["strict", "mode", "--help"]]
+
+
+def _have_baseline():
+    r = subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", f"{BASELINE}^{{commit}}"], capture_output=True)
+    return r.returncode == 0
+
+
+def _env(home, src):
+    path = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep) if ".venv" not in p and "/venv/" not in p)
+    return {"PATH": path, "HOME": str(home), "PYTHONPATH": str(src), "PYTHONHASHSEED": "0", "PYTHONDONTWRITEBYTECODE": "1", "LC_ALL": "C",
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "Dana Fictional", "GIT_COMMITTER_NAME": "Dana Fictional",
+            "GIT_AUTHOR_EMAIL": "dana@example.invalid", "GIT_COMMITTER_EMAIL": "dana@example.invalid",
+            "GIT_AUTHOR_DATE": "2026-10-01T10:00:00+00:00", "GIT_COMMITTER_DATE": "2026-10-01T10:00:00+00:00", "TERM": "dumb"}
+
+
+def _git(proj, env, *a):
+    subprocess.run(["git", "-C", str(proj), *a], check=True, capture_output=True, env=env)
+
+
+def _fixture(proj, env):
+    """A fresh advisory project: no ado.stack.json, no ado.kits.lock.json, two commits, a ledger and a spec dir. Deterministic."""
+    shutil.rmtree(proj, ignore_errors=True)
+    proj.mkdir(parents=True)
+    _git(proj, env, "init", "-q", "-b", "main")
+    files = {"ado.config.json": CONFIG, "dod/DoD_1001.md": LEDGER, "specs/001-x/spec.md": "# Spec\n", "specs/001-x/plan.md": "# Plan\n",
+             "specs/001-x/tasks.md": "- [ ] T001 Count members\n", "src/app.py": "def count():\n    return 0\n",
+             "tests/test_app.py": "from src.app import count\n\n\ndef test_count():\n    assert count() == 0\n"}
+    for rel, text in files.items():
+        (proj / rel).parent.mkdir(parents=True, exist_ok=True)
+        (proj / rel).write_text(text)
+    _git(proj, env, "add", "-A")
+    _git(proj, env, "commit", "-q", "-m", "AB#1001 first")
+    (proj / "src/app.py").write_text("def count():\n    return 1\n")
+    _git(proj, env, "add", "-A")
+    _git(proj, env, "commit", "-q", "-m", "AB#1001 second")
+    assert not (proj / "ado.stack.json").exists() and not (proj / "ado.kits.lock.json").exists()
+
+
+def _run_all(src, proj, home, argvs):
+    env = _env(home, src)
+    out = subprocess.run([sys.executable, "-c", "import ado; print(ado.__file__)"], capture_output=True, text=True, env=env, cwd=str(proj.parent))
+    assert out.stdout.strip().startswith(str(src)), out.stdout + out.stderr  # the tree under test, not an installed copy
+    _fixture(proj, env)
+    results = []
+    for argv in argvs:
+        r = subprocess.run([sys.executable, "-m", "ado", *argv], capture_output=True, text=True, env=env, cwd=str(proj), stdin=subprocess.DEVNULL, timeout=120)
+        results.append((argv, r.returncode, r.stdout, r.stderr))
+    results.append((["<files>"], 0, "\n".join(sorted(str(p.relative_to(proj)) for p in proj.rglob("*") if ".git" not in p.parts and p.is_file())), ""))
+    results.append((["<ledger>"], 0, (proj / "dod/DoD_1001.md").read_text(), ""))
+    results.append((["<decisions>"], 0, (proj / "dod/Decisions_1001.md").read_text() if (proj / "dod/Decisions_1001.md").exists() else "", ""))
+    return results
+
+
+def compare(tmp_path):
+    """Returns (verbs compared, list of differences) between the baseline export and the working tree."""
+    tar = subprocess.run(["git", "-C", str(ROOT), "archive", "--format=tar", BASELINE, "src"], check=True, capture_output=True).stdout
+    base = tmp_path / "baseline"
+    base.mkdir()
+    with tarfile.open(fileobj=io.BytesIO(tar)) as t:
+        t.extractall(base)
+    argvs = VERBS + HELPS
+    proj, home = tmp_path / "proj", tmp_path / "home"
+    home.mkdir()
+    old = _run_all(base / "src", proj, home, argvs)
+    new = _run_all(ROOT / "src", proj, home, argvs)
+    # The one listed addition: argparse's top-level usage line names the two new verbs.
+    new = [(a, rc, o.replace("pr,kits,stack,strict", "pr,strict"), e.replace("pr,kits,stack,strict", "pr,strict")) for a, rc, o, e in new]
+    diffs = [f"{a[0]}: rc {a[1]}->{b[1]}, stdout same {a[2] == b[2]}, stderr same {a[3] == b[3]}" for a, b in zip(old, new) if a != b]
+    return len(argvs), diffs, old
+
+
+@pytest.mark.skipif(not _have_baseline(), reason=f"baseline commit {BASELINE} is not in this clone")
+def test_pre_existing_verbs_are_byte_identical_to_the_baseline_without_a_profile_or_lockfile(tmp_path):
+    n, diffs, old = compare(tmp_path)
+    assert n >= 50 and not diffs, "\n".join(diffs)
+    # the comparison is not vacuous: the fixture ran real verbs (a gate summary, decisions, an advisory note), not only usage errors
+    text = "\n".join(o[2] for o in old)
+    assert '"mode": "advisory"' in text and "D1" in text and old[[a[0] for a in old].index(["gate", "1001", "--offline"])][1] in (0, 1)

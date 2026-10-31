@@ -121,6 +121,19 @@ never fails it: no ledger, an unreadable ledger, or ADO being unreachable or the
 not evaluated, with a note that says why) each produce a note and exit 0. Test files that match no glob are not
 scanned for assertions; add a `tests` entry for your language to cover them.
 
+## Stack profile and kits lockfile
+
+Two more files sit at the repository root, next to `ado.config.json`, and are committed. Neither is a config key: no key was added.
+
+| File | Written by | What it is |
+|---|---|---|
+| `ado.stack.json` | `ado stack init` (a draft), then `ado stack approve --apply` (a human, in a terminal) | The stack profile: per stack the commands, conventions and definition of done, each with a cited source or `unverified`. At most 256 KiB. |
+| `ado.kits.lock.json` | `ado kits pin <id> --apply` (a human, in a terminal) | The kits a human reviewed, with digests of their files and agent copies. At most 256 KiB. |
+
+In strict mode both are read from the **target branch** in CI, like the config (see "CI trust" below), and an unreadable or invalid one
+fails closed. Advisory mode only reports. Read the details in [stack-kits.md](stack-kits.md); the boundaries (what this does not do,
+including "not a sandbox") are in the README section "What this does and does not do". This is process enforcement, not a security boundary.
+
 ## Credentials
 
 The token is not part of this file. The CLI looks for it in this order:
@@ -142,4 +155,4 @@ through `gh`, so no Code scope is needed.
 `0` success; `1` an ADO/HTTP error, a failed item in a batch, a blocking gate, or a DoD
 checklist that is not ready (`ado branch --id-from` also exits 1 when the branch names no story); `2` a config, credential or
 argument problem, or a plan that changed since approval (`--expect-plan`); `3` only for `ado gate`,
-`ado branch --id-from` and `ado strict mode`: `ado.config.json` is present but invalid (CI fails on it).
+`ado branch --id-from` and `ado strict mode`: `ado.config.json` is present but invalid (CI fails on it). The `ado stack` and `ado kits` verbs use only `0` (success, or a preview) and `2` (a refusal, an invalid profile or lockfile, a missing terminal for `--apply`, a usage error); `ado stack show --check` and `ado kits verify` also exit `2` on a finding (in advisory mode `--check` always exits `0`).

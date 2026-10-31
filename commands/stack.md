@@ -116,7 +116,8 @@ names an `S<n>` or `"unverified"`.
 
 Then run `ado stack init --from .ado/stack-draft.json` (the preview: validation errors by field path and counts,
 never the profile text). Fix every error it names and run it again. Show the counts and how many items are
-`unverified`. Run `--apply` only after the human's explicit yes (`ado stack init --from .ado/stack-draft.json --apply`):
+`unverified`, and say that this count is a lower bound: it counts only items whose source is the literal `unverified`,
+so mark any claim you could not cite in the item's own source, not only in a `why`. Run `--apply` only after the human's explicit yes (`ado stack init --from .ado/stack-draft.json --apply`):
 it writes `ado.stack.json` as a `draft` (a validated copy, not your file) and deletes the draft file. An
 approved profile needs `--force`, which also needs the yes.
 
@@ -129,7 +130,9 @@ ado stack approve
 ado stack approve --apply
 ```
 
-(`--story <id>` records the decision for the product owner). The `!` shell prefix (`! ado stack approve`, then
+(`--story <id>` records the decision for the product owner). Tell the human that the `unverified` count shown at approval is a lower
+bound: a claim marked unverified only inside a command's `why` is not counted, and the preview prints a `why` only for a command whose `run`
+is `null`, so they should open `ado.stack.json` and read every `why` before approving. The `!` shell prefix (`! ado stack approve`, then
 `! ado stack approve --apply`) is only a shortcut and is not verified to give a terminal: `ado stack approve`
 prints every command in full only when stdin and stdout are both terminals, and `--apply` checks stdin only, so a `!`
 shell with piped output could apply after a counts-only preview. Say

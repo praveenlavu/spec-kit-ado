@@ -1398,7 +1398,7 @@ def test_kits_verify_documented():
 def test_kits_scan_documented_as_a_heuristic_aid_not_a_verdict():
     docs = _flat("docs/stack-kits.md")
     assert docs.index("## Pinning kits") < docs.index("**Scan facts.**")
-    for phrase in ("`kits.scan(root, id)`", "line scanner over fixed keys", "`[a-z_]{1,40}`", "`[A-Za-z0-9._-]{1,40}`", "`<other>`", "no kit text is ever printed",
+    for phrase in ("`kits.scan(root, id)`", "line scanner over fixed keys", "`[a-z_]{1,40}`", "`[A-Za-z0-9._-]{1,40}`", "`<other>`", "no kit prose is ever printed",
                    "`\"unreadable\": true`", "`<relpath>:<line>`", "a heuristic aid for the human reviewer, not a security verdict", "a count of 0 proves nothing"):
         assert phrase in docs, phrase
     log = _flat("CHANGELOG.md")
@@ -1496,3 +1496,169 @@ def test_stack_command_documented_everywhere():
     log = _flat("CHANGELOG.md")
     assert log.index("## 0.3.0 — unreleased") < log.index("`speckit.ado.stack`") < log.index("## 0.2")
     assert "13 `speckit.ado.*` commands" in _flat("bundle/README.md") and "12 `speckit.ado" not in _flat("bundle/README.md")
+
+
+# ---- P2-15: boundaries, seed list, two-PR flow, flags/ids/files/exit codes pinned to the code ----
+_P2_VERBS = {("stack", "detect"): "stack detect", ("stack", "show"): "stack show", ("stack", "init"): "stack init",
+             ("stack", "approve"): "stack approve", ("kits", "verify"): "kits verify", ("kits", "pin"): "kits pin"}
+
+
+def _readme_row(verb):
+    return next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith(f"| `{verb}"))
+
+
+def test_every_stack_and_kits_verb_and_flag_of_the_cli_is_in_the_readme_row_and_agents():
+    top = _help("stack")
+    assert set(re.search(r"\{([^}]*)\}", top).group(1).split(",")) == {"detect", "show", "init", "approve"}  # a new verb must be documented here
+    assert set(re.search(r"\{([^}]*)\}", _help("kits")).group(1).split(",")) == {"verify", "pin"}
+    agents = _flat("AGENTS.md")
+    for (group, verb), name in _P2_VERBS.items():
+        row = _readme_row(name)
+        flags = set(re.findall(r"--[a-z][a-z-]*", _help(group, verb))) - {"--help"}
+        assert flags or verb in ("verify",), verb
+        for f in flags:
+            assert f in row, f"README row `{name}` lacks {f}"
+            assert f in agents, f"AGENTS.md lacks {f} ({name})"
+        assert f"ado {name}" in agents, name
+    for seed in ("python-pytest", "node-typescript", "salesforce"):
+        assert f"`{seed}`" in _readme_row("stack init") and f"`{seed}`" in _flat("docs/stack-kits.md"), seed
+
+
+def test_finding_ids_files_and_exit_codes_of_piece_2_are_documented_and_match_the_code():
+    from ado import kits, stack
+    src = (ROOT / "src/ado/strict.py").read_text(encoding="utf-8") + (ROOT / "src/ado/kits.py").read_text(encoding="utf-8")
+    ids = _STACK_RULES + ("kit-unpinned", "kit-changed")
+    for rid in ids:
+        assert f'"{rid}"' in src, rid  # the code still emits it
+    for doc in ("README.md", "AGENTS.md", "docs/stack-kits.md", "CHANGELOG.md"):
+        text = _flat(doc)
+        for rid in ids:
+            assert f"`{rid}`" in text, f"{doc}: {rid}"
+    assert stack.PROFILE_FILE == "ado.stack.json" and kits.LOCK_FILE == "ado.kits.lock.json"
+    for doc in ("README.md", "AGENTS.md", "docs/stack-kits.md", "docs/configuration.md", "CHANGELOG.md"):
+        text = _flat(doc)
+        assert "ado.stack.json" in text and "ado.kits.lock.json" in text, doc
+    # exit codes, per verb, in the README rows and in the configuration doc
+    for name, needle in (("stack detect", "exit 2 with `error: cannot read git history here`"), ("stack show", "`--check`: in strict mode exit 2"),
+                         ("stack init", "Exit 2 for a refusal or an invalid profile"), ("stack approve", "refuses (exit 2) unless stdin is a terminal"),
+                         ("kits verify", "Exit 2 on any unpinned or changed kit"), ("kits pin", "refuses (exit 2) unless stdin and stdout are both terminals")):
+        assert needle in " ".join(_readme_row(name).split()), name
+    assert "use only `0` (success, or a preview) and `2`" in _flat("docs/configuration.md")
+
+
+def test_documented_exit_codes_of_the_stack_and_kits_verbs_hold(tmp_path):
+    import os
+    import subprocess
+    import sys
+    env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+    env.pop("ADO_CONFIG", None)
+
+    def rc(*argv):
+        return subprocess.run([sys.executable, "-m", "ado", *argv], capture_output=True, text=True, env=env, cwd=str(tmp_path), stdin=subprocess.DEVNULL).returncode
+
+    assert rc("stack", "detect") == 2  # not a git repository: "cannot read git history here"
+    assert rc("stack", "show") == 0 and rc("stack", "show", "--check") == 0  # no profile, advisory: always 0
+    assert rc("stack", "approve") == 2  # no valid profile to approve
+    ident = {**env, "GIT_AUTHOR_NAME": "Dana Fictional", "GIT_COMMITTER_NAME": "Dana Fictional",
+             "GIT_AUTHOR_EMAIL": "dana@example.invalid", "GIT_COMMITTER_EMAIL": "dana@example.invalid"}
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, env=ident)
+    subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "--allow-empty", "-m", "x"], check=True, env=ident)
+    assert rc("stack", "detect") == 0  # a repository with a commit and no marker: `unknown`, exit 0
+    assert rc("stack", "init", "--seed", "nope") == 2 and rc("stack", "init", "--seed", "python-pytest") == 0  # a preview writes nothing
+    assert rc("stack", "approve", "--apply") == 2  # no terminal
+    assert rc("kits", "verify") == 0 and rc("kits", "pin", "sf") == 2 and rc("kits", "pin", "sf", "--apply") == 2
+    assert not list(tmp_path.glob("ado.*.json"))  # none of the above wrote a profile or a lockfile
+
+
+def test_readme_boundaries_section_is_honest_and_complete():
+    raw = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "## What this does and does not do" in raw
+    section = " ".join(raw.split("## What this does and does not do")[1].split("\n## ")[0].split())
+    for needle in ("**It will:**", "**It will not:**", "detect your stack from the files committed at `HEAD`", "cites a source or says `unverified`",
+                   "only the test command string a human approved", "throwaway clone with a reduced environment",
+                   "`stack-profile-*`, `stack-unprofiled`, `kit-unpinned`, `kit-changed`",
+                   "install a kit", "fetch a web page from the CLI", "decide your stack silently", "vouch that a cited page says what the profile claims",
+                   "`org_only`", "**not a sandbox**", "process enforcement, not a security boundary", "the strict check CI re-runs against the target branch",
+                   "**Azure DevOps Boards only.**", "Jira and GitHub Issues are not supported", "There is no adapter interface", "no adapter is built",
+                   "**Stack kits are optional.**", "**Third-party kits are code the agent runs.**", "`ado kits pin`", "a heuristic aid, not a verdict",
+                   "**Spec Kit engine limits.**", "`manifest_hash` covers only a kit's `extension.yml`", "cannot be pinned", "defaults to 300 s"):
+        assert needle in section, needle
+    assert "adapter is built or planned" not in section and "will sandbox" not in section  # no overclaim, no unbacked promise
+
+
+def test_not_a_sandbox_and_process_enforcement_wording_in_every_user_doc():
+    for doc in ("README.md", "docs/stack-kits.md", "docs/configuration.md", "AGENTS.md", "CHANGELOG.md", "commands/stack.md", "rules/hitl.md"):
+        text = _flat(doc).lower()
+        assert "not a sandbox" in text or "not a security boundary" in text, doc
+        assert "process enforcement" in text or doc == "AGENTS.md", doc
+    for doc in ("README.md", "docs/stack-kits.md", "docs/configuration.md"):
+        assert "not a sandbox" in _flat(doc).lower(), doc
+    for doc in ("README.md", "docs/stack-kits.md", "commands/stack.md"):
+        assert "process enforcement, not a security boundary" in _flat(doc).lower(), doc
+
+
+def test_seed_list_matches_the_shipped_seed_files():
+    import json
+    from ado import stack
+    docs = (ROOT / "docs/stack-kits.md").read_text(encoding="utf-8")
+    assert "## Seed profiles" in docs
+    table = [x for x in docs.split("## Seed profiles")[1].split("\n## ")[0].splitlines() if x.startswith("| `")]
+    assert len(table) == len(stack.SEEDS) == 3
+    for name in stack.SEEDS:
+        seed = json.loads((ROOT / "src/ado/seeds" / f"{name}.json").read_text(encoding="utf-8"))
+        row = " ".join(next(x for x in table if x.startswith(f"| `{name}`")).split())
+        srcs = seed["sources"]
+        kinds = {}
+        for s in srcs.values():
+            kinds[s["kind"]] = kinds.get(s["kind"], 0) + 1
+        dates = {s["retrieved"] for s in srcs.values()}
+        assert len(dates) == 1, name  # one retrieval day per seed; the table names it
+        literal = json.dumps(seed).count('"unverified"')
+        assert f"| {len(srcs)} (" in row and all(f"{n} {k}" in row for k, n in kinds.items()), name
+        assert f"| {dates.pop()} |" in row and f"| `{seed['stacks'][0]['id']}` |" in row, name
+        assert f"| {literal} " in row, name  # the count the approval preview shows
+        assert seed["status"] == "draft"
+    for needle in ("**The `unverified` count is a lower bound.**", "Flutter, Java, Go, Rust, .NET, C/C++, Pega", "and Appian have no seed"):
+        assert needle in " ".join(docs.split()), needle
+
+
+def test_unverified_count_is_a_lower_bound_everywhere_and_the_preview_really_hides_why_texts():
+    import json
+    from ado import stack
+    for doc in ("docs/stack-kits.md", "AGENTS.md", "CHANGELOG.md", "commands/stack.md"):
+        text = _flat(doc)
+        assert "lower bound" in text and "`why`" in text, doc
+    assert "prints a `why` only for a command whose `run` is `null`" in _flat("docs/stack-kits.md")
+    assert "read every `why`" in _flat("docs/stack-kits.md") and "lower bound" in _flat("README.md")
+    # behaviour behind the sentence: a `why` on a command that has a `run` is not in the terminal preview, a `why` of a null `run` is
+    seed = json.loads((ROOT / "src/ado/seeds/python-pytest.json").read_text(encoding="utf-8"))
+    hidden = seed["stacks"][0]["commands"]["test"]["why"]
+    assert "Unverified design choices" in hidden
+    text = stack.preview_text(seed, stack.compose_test_command(seed), None, 1, None, "tech lead")
+    assert "Unverified design choices" not in text and "UNVERIFIED item(s)" in text
+    seed["stacks"][0]["commands"]["build"] = {"run": None, "why": "no build step for this fixture"}
+    assert "no build step for this fixture" in stack.preview_text(seed, stack.compose_test_command(seed), None, 1, None, "tech lead")
+    # the corrected overclaim is gone
+    for doc in ("README.md", "AGENTS.md", "docs/stack-kits.md", "CHANGELOG.md", "commands/stack.md"):
+        assert "no kit text is ever printed" not in _flat(doc) and "no kit text is printed" not in _flat(doc), doc
+    assert "kit-chosen but pattern-limited" in _flat("README.md") and "they are kit-chosen and not fixed text" in _flat("docs/stack-kits.md")
+
+
+def test_two_pr_flow_and_the_trust_introducing_note_documented():
+    raw = (ROOT / "docs/stack-kits.md").read_text(encoding="utf-8")
+    assert "## Adopting profiles and kits: the two-PR flow" in raw
+    section = " ".join(raw.split("## Adopting profiles and kits: the two-PR flow")[1].split("\n## ")[0].split())
+    for needle in ("**The trust PR.**", "**Feature PRs.**", _TRUST_NOTE, "trust-introducing PR: review ado.kits.lock.json as code",
+                   "means the reviewer reads the file as code", "the profile or lock first, then the code or kit", "does not change its own verdict",
+                   "admin-bypass merge", "`stack-unprofiled`", "`kit-unpinned`", "`kit-changed`", "process enforcement, not a security boundary"):
+        assert needle in section, needle
+    assert "a new root takes two PRs: the profile first, then the code" in _flat("docs/ci-github.md")
+
+
+def test_pega_hint_source_is_cited_and_matches_the_detection_rule():
+    code = (ROOT / "src/ado/stack.py").read_text(encoding="utf-8")
+    assert 'd.startswith("@pega/")' in code and 'hints["pega"] = True' in code
+    docs = _flat("docs/stack-kits.md")
+    for needle in ("**Where the hint comes from:**", "`stack.py`", "starts with `@pega/`", "`pegasystems/react-sdk`", "2026-10-31", "`65be5f2`",
+                   "That is one repository", "nothing shows the scope marks every Pega project"):
+        assert needle in docs, needle
