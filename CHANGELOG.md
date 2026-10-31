@@ -53,6 +53,11 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   `kits.read_lock` (`source` and `version` validated, else null). A symlink, control character in a path, empty kit dir or `--dev` install
   is refused, as is a kit path with `ident`, `filter` or `working-tree-encoding` set by `.gitattributes`; disabled kits are judged like enabled ones. Exit 2 on an unpinned or changed kit. `ado kits pin` and the strict kit rules are not in this release yet. See
   `docs/stack-kits.md` "Pinning kits".
+- `kits.scan(root, id)`: facts for the human who reviews a kit before pinning, from `extension.yml` (line scanner over fixed keys, no YAML
+  library) and the command and script files it names: command and script counts, hooks with `optional`, `requires.tools`, and counts with
+  `<relpath>:<line>` of fixed network, install, write, secret-name and `allowed-tools` patterns. Hook and tool names are shown only when they
+  match a fixed pattern (else `<other>`), no kit text is printed, and an unreadable manifest or file gives `unreadable: true`. A heuristic
+  aid, not a security verdict. Not wired to a verb yet. See `docs/stack-kits.md` "Pinning kits".
 - Strict stack rules (`strict check`, phases `implement`, `pr`, `done`; not overridable): `stack-profile-missing`, `stack-profile-invalid`,
   `stack-profile-draft`, `stack-profile-changed`, `stack-profile-drift` (only when the approved profile composes a test command and
   `strict.test_command` differs) and `stack-unprofiled` (a high-confidence `ado stack detect` root at the head commit that no profile stack

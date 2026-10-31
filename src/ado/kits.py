@@ -325,3 +325,184 @@ def verify(root, lock):
     out += [{"id": k, "state": "stale"} for k in lock["kits"] if k not in seen]
     out.sort(key=lambda r: (r["id"] is None, r["id"] or "", r.get("n", 0)))
     return {"kits": out, "findings": findings}
+
+
+# ---- scan: facts for the human who reviews a kit before pinning (a heuristic aid, not a security verdict) ----
+MAX_MANIFEST = 1 << 20  # bytes
+MAX_BODY = 1 << 20      # bytes per command body or script
+MAX_BODIES = 200
+MAX_LINE = 1000         # characters; a longer line is skipped unscanned and flags the file unreadable (keeps every regex input small)
+MAX_LISTED = 50         # entries per list or `at` (counts stay exact)
+_HOOK = re.compile(r"[a-z_]{1,40}")
+_TOOL = re.compile(r"[A-Za-z0-9._-]{1,40}")
+_RELFILE = re.compile(r"[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*")
+_SHELL_LANGS = ("", "bash", "sh", "shell", "zsh", "console", "powershell", "pwsh", "ps1")
+_FLAGS = {  # fixed patterns of the design; only `network` has a second, shell-only pattern
+    "network": re.compile(r"\b(?:curl|wget)\b|Invoke-WebRequest"),
+    "installs": re.compile(r"\bpip3?\s+install\b|\bnpm\s+install\b|\bsf\s+plugins\s+install\b|\bbrew\b"),
+    "writes": re.compile(r"\bgit\s+push\b|--apply\b|\bgh\s+pr\s+create\b|\brm\s+-(?:rf|fr)\b|\bsudo\b"),
+    "secrets": re.compile(r"TOKEN|PASSWORD|_KEY"),
+}
+_URL = re.compile(r"https?://")
+_ALLOWED = re.compile(r"allowed-tools\s*:")
+
+
+def _scalar(v):
+    """A YAML scalar's text: quotes removed, a trailing ` # comment` dropped; '' when unterminated."""
+    v = (v or "").strip()
+    if v[:1] in ("'", '"'):
+        end = v.find(v[0], 1)
+        return v[1:end] if end > 0 else ""
+    return v.split(" #", 1)[0].strip()
+
+
+def _key(s):
+    """(key, value text) when `s` is `key: value` or `key:` (a quoted key may hold anything), else None. No regex: linear in len(s)."""
+    if s[:1] in ("'", '"'):
+        end = s.find(s[0], 1)
+        rest = s[end + 1:].lstrip() if end > 0 else ""
+        key, i = s[1:end], 0
+        if not rest.startswith(":"):
+            return None
+    else:
+        i = s.find(":")
+        key, rest = (s[:i].rstrip(), s[i:]) if i > 0 else ("", "")
+        if not key or key[0] == "#":
+            return None
+    val = rest[1:]
+    return (key, val.strip()) if not val or val[0].isspace() else None
+
+
+def _manifest_facts(text):
+    """Line scanner over the fixed keys of `extension.yml`: `requires.tools[].name`, `provides.commands[]`/`scripts[]` (count and `file`)
+    and `hooks.<event>` with its `optional`. Not a YAML parser: a block scalar's lines are skipped, nothing else is interpreted. A line
+    over MAX_LINE characters or starting with a tab is skipped unseen; returns `bad` True for the first kind."""
+    top = sub = event = None
+    key_ind = item_ind = skip = None
+    tools, files, hooks = [], [], {}
+    counts = {"commands": 0, "scripts": 0}
+    bad = False
+    for raw in text.split("\n"):
+        if len(raw) > MAX_LINE:
+            bad = True
+            continue
+        line = raw.rstrip()
+        s = line.lstrip(" ")
+        if not s or s.startswith(("#", "\t")):
+            continue
+        ind = len(line) - len(s)
+        if skip is not None and ind > skip:
+            continue
+        skip = None
+        dash = s.startswith("-") and (len(s) == 1 or s[1] in " \t")
+        if dash:
+            s = s[1:].strip()
+        m = _key(s) if s else None
+        if ind == 0 and not dash:
+            top, sub, event, key_ind, item_ind = (m[0] if m else None), None, None, None, None
+            continue
+        if top is None or m is None:
+            continue
+        key, val = m
+        if val[:1] in ("|", ">"):
+            skip = ind
+        if key_ind is None and not dash:
+            key_ind = ind
+        if top == "hooks":
+            if not dash and ind == key_ind:
+                event = key
+                hooks.setdefault(event, False)
+            elif event in hooks and key == "optional" and _scalar(val).lower() == "false":
+                hooks[event] = True  # True: at least one hook of the event is not optional
+        elif top in ("provides", "requires"):
+            if not dash and ind == key_ind:
+                sub, item_ind = key, None
+            elif sub in ("commands", "scripts", "tools"):
+                if dash and (item_ind is None or ind == item_ind):
+                    item_ind = ind
+                    if sub != "tools":
+                        counts[sub] += 1
+                if key == "file" and sub in ("commands", "scripts") and item_ind is not None and ind >= item_ind:
+                    files.append(_scalar(val))
+                elif key == "name" and sub == "tools" and item_ind is not None and ind >= item_ind and dash:
+                    tools.append(_scalar(val))
+    return counts, tools, files, hooks, bad
+
+
+def _body_hits(rel, text, flags):
+    """Add the line hits of one command body (`.md`: frontmatter and fences are tracked) or script to `flags`. A line over MAX_LINE
+    characters is skipped unseen; returns True if there was one. A leading `---` with no closing `---` is not frontmatter: all is scanned."""
+    is_md = rel.endswith(".md")
+    lines = text.split("\n")
+    front = is_md and lines[0].strip() == "---" and any(ln.strip() == "---" for ln in lines[1:])
+    fence, bad = None, False
+    for n, line in enumerate(lines, 1):
+        if len(line) > MAX_LINE:
+            bad = True
+            continue
+        shell = not is_md
+        if front:
+            if n > 1 and line.strip() == "---":
+                front = False
+            elif _ALLOWED.match(line):
+                flags["allowed_tools"].append(n)
+            continue
+        if is_md:
+            t = line.lstrip()
+            if fence is None and t[:3] in ("```", "~~~"):
+                fence = (t[0], (t[3:].split() or [""])[0].strip("{}.").lower() in _SHELL_LANGS)
+                continue
+            if fence is not None and t.startswith(fence[0] * 3):
+                fence = None
+                continue
+            shell = fence is not None and fence[1]
+        for name, pat in _FLAGS.items():
+            if pat.search(line) or (name == "network" and shell and _URL.search(line)):
+                flags[name].append(n)
+    return bad
+
+
+def _cap(items):
+    return items if len(items) <= MAX_LISTED else items[:MAX_LISTED] + ["<more>"]
+
+
+def scan(root, kit_id):
+    """Facts about `.specify/extensions/<kit_id>/` for the human reviewer: `{"commands", "hooks", "scripts", "tools", "flags":
+    {network, installs, writes, secrets, allowed_tools: {"count", "at": ["<relpath>:<line>"]}}}` plus `"unreadable": true` when the
+    manifest, or a command or script file it names, could not be read (missing, symlink, oversized, odd path): the scan is then
+    incomplete, never a pass. Output holds counts, kit-relative paths through `stack.safe_path`, and a hook (`[a-z_]{1,40}`) or tool
+    name (`[A-Za-z0-9._-]{1,40}`) only when it matches, else `<other>`: never kit text. A heuristic aid, not a security verdict."""
+    hits = {k: [] for k in (*_FLAGS, "allowed_tools")}
+    out = {"commands": 0, "hooks": [], "scripts": 0, "tools": [], "flags": {}}
+    paths = {}  # relpath -> its line hits
+    try:
+        base = f".specify/extensions/{_check_id(kit_id)}/"
+        counts, tools, files, hooks, bad = _manifest_facts(_read_regular(root, base + "extension.yml", MAX_MANIFEST).decode("utf-8", "replace"))
+    except KitError:
+        counts, tools, files, hooks, bad = {"commands": 0, "scripts": 0}, [], [], {}, True
+    out.update(counts)
+    out["tools"] = _cap([t if _TOOL.fullmatch(t) else "<other>" for t in tools])
+    out["hooks"] = _cap([(e if _HOOK.fullmatch(e) else "<other>") + ("" if req else " (optional)") for e, req in hooks.items()])
+    for attempt, rel in enumerate(dict.fromkeys(files), 1):
+        if attempt > MAX_BODIES:  # attempts, not only reads: a manifest naming thousands of missing files stops here too
+            bad = True
+            break
+        if len(rel) > 200 or not _RELFILE.fullmatch(rel) or ".." in rel.split("/") or "." in rel.split("/"):
+            bad = True
+            continue
+        try:
+            text = _read_regular(root, base + rel, MAX_BODY).decode("utf-8", "replace")
+        except KitError:
+            bad = True
+            continue
+        found = {k: [] for k in hits}
+        bad = _body_hits(rel, text, found) or bad
+        paths[rel] = found
+    for n, (rel, found) in enumerate(paths.items(), 1):
+        shown = stack.safe_path(rel, n)
+        for k, lines in found.items():
+            hits[k] += [f"{shown}:{ln}" for ln in lines]
+    out["flags"] = {k: {"count": len(v), "at": v[:MAX_LISTED]} for k, v in hits.items()}
+    if bad:
+        out["unreadable"] = True
+    return out

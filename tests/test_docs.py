@@ -1393,3 +1393,14 @@ def test_kits_verify_documented():
                    "`*-config.local.yml`", "**disabled ones included**", "`working-tree-encoding`", "reported `stale`", "process enforcement, not a security boundary", "`ado kits pin`"):
         assert phrase in kits, phrase
     assert "not in this release yet" in _flat("README.md") and "not in this release yet" in _flat("CHANGELOG.md")
+
+
+def test_kits_scan_documented_as_a_heuristic_aid_not_a_verdict():
+    docs = _flat("docs/stack-kits.md")
+    assert docs.index("## Pinning kits") < docs.index("**Scan facts.**")
+    for phrase in ("`kits.scan(root, id)`", "line scanner over fixed keys", "`[a-z_]{1,40}`", "`[A-Za-z0-9._-]{1,40}`", "`<other>`", "no kit text is ever printed",
+                   "`\"unreadable\": true`", "`<relpath>:<line>`", "a heuristic aid for the human reviewer, not a security verdict", "a count of 0 proves nothing"):
+        assert phrase in docs, phrase
+    log = _flat("CHANGELOG.md")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`kits.scan(root, id)`") < log.index("## 0.2")
+    assert "heuristic aid, not a security verdict" in log and "`unreadable: true`" in log

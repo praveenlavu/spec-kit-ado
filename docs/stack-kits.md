@@ -297,6 +297,17 @@ kit, or when the registry cannot be trusted. Output carries kit ids (which match
 gives the value `"changed"`). This is process enforcement, not a security boundary: a digest says a kit is unchanged since someone
 looked, not that it is safe, and anyone who can edit both the kit and the lockfile can re-pin.
 
+**Scan facts.** `kits.scan(root, id)` reads `extension.yml` with a line scanner over fixed keys (no YAML library) and the command and
+script files it names, with confined, size-capped, no-symlink reads, and returns `{"commands", "hooks", "scripts", "tools", "flags"}`:
+the number of commands and scripts, hook events as `<event> (optional)` or `<event>`, `requires.tools` names, and for five flags
+(`network`, `installs`, `writes`, `secrets`, `allowed_tools`) a count plus `<relpath>:<line>` locations (paths relative to the kit
+dir, at most 50 listed). Hook names are shown only if they match `[a-z_]{1,40}` and tool names only if they match `[A-Za-z0-9._-]{1,40}`,
+else as `<other>`; no kit text is ever printed. A manifest, command or script file that is missing, a symlink, oversized or named by an
+unsafe path sets `"unreadable": true` (the scan is then incomplete, not clean). **The scan is a heuristic aid for the human reviewer, not
+a security verdict:** fixed text patterns miss obfuscation and a block of YAML it does not parse, so a count of 0 proves nothing, and the
+things only a person can judge (prompt text that steers the agent, scripts that do more than their names say, the maintainer, licence)
+stay with the reviewer.
+
 ## Kits that do not write `tasks.md`
 
 `ado push` reads one format: the Spec Kit `tasks.md` checklist (`- [ ] T001 [P] ...`). If
