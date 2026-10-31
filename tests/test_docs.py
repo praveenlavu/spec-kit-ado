@@ -8,7 +8,7 @@ REQUIRED = [
     "README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "VERSIONING.md", "CHANGELOG.md",
     "LICENSE", "rules/hitl.md",
     "docs/configuration.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md",
-    "docs/stack-kits.md", "docs/catalog-submission.md",
+    "docs/stack-kits.md", "docs/catalog-submission.md", "docs/business-rules.md",
 ]
 _LINK = re.compile(r"\]\(([^)\s]+)\)")
 _SKIP_DIRS = {".git", ".venv", ".pytest_cache", ".superpowers", "node_modules"}
@@ -1779,3 +1779,22 @@ def test_toolkit_own_files_unchecked_and_specify_in_ci_documented():
     assert "need the Spec Kit CLI (`specify`)" in contrib and "CI installs it" in contrib
     ci = (Path(__file__).resolve().parent.parent / ".github/workflows/ci.yml").read_text()
     assert "git+https://github.com/github/spec-kit.git@9dca9bf42a031765ee5e5f2371137f2f26967e11" in ci and "v1.2.1" in ci
+
+
+# ---- V3 piece 3 (P3-3): the PO's guide to business rules ----
+
+def test_business_rules_doc_pins():
+    from ado import rules
+    text = _flat("docs/business-rules.md")
+    for key in rules.ISSUES:
+        assert f"`{key}`" in text, key  # every problem key the parser can raise is explained
+    for word in ("Business rules", "Rule <n>:", "Never renumber", "`Status: retired`", "Only `approved` rules bind developers",
+                 "treated as `draft`", "`Owner:` is a role", "STATUS: APPROVED", "Status : Approved", "`€5 off` stays `€5 off`",
+                 "process enforcement, not a security boundary", '"rules": {"enabled": true}', "`Status quo applies` is ordinary text",
+                 "Put the section **last**", "A table of rules is **not** read", "is kept as typed", "is reported as `bad-rule-line`",
+                 "do not change the fingerprint"):
+        assert word in text, word
+    for b in rules.BULLETS:
+        assert f"`{b}`" in text, b  # the tolerated bullet set is documented in full
+    assert "`BR-<work item id>-<your number>`" in text and "[configuration](configuration.md)" in text
+    assert "2,000 characters" in text and "64 KiB" in text and "100 rules" in text and "1 MiB" in text
