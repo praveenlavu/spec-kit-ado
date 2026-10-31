@@ -13,6 +13,7 @@ import re
 import shlex
 import unicodedata
 import urllib.parse
+from pathlib import Path
 
 from .config import _has_control
 
@@ -735,3 +736,129 @@ def show_md(result, approved):
                           "Counts: " + ", ".join(f"{k} {v}" for k, v in c.items()) + ".",
                           *[f"- {e['path']}: {e['error']}" for e in result["errors"]]])
     return body + ("\n\n## Notes\n\n" + "\n".join(f"- {x}" for x in result["notes"]) if result["notes"] else "")
+
+
+# ---- `ado stack init` (D§5, D§8): the DRAFT profile from a seed or from a file the agent wrote under `.ado/`. A local write (no ADO call, no
+# gate): the draft is not trusted until a human approves it. The preview and the apply output carry counts and fixed error texts only, never
+# profile text. Process enforcement, not a security boundary.
+
+SEEDS = ("python-pytest", "node-typescript", "salesforce")
+SEEDS_DIR = Path(__file__).resolve().parent / "seeds"  # package data (`seeds/*.json`); tests point it elsewhere
+DRAFT_FILE = os.path.join(".ado", "stack-draft.json")
+_E_FROM = "--from must name a regular, single-link, non-symlink UTF-8 file of at most 256 KiB inside .ado/"
+_E_SEED = "unknown seed; it must be one of: " + ", ".join(SEEDS)
+_E_SEED_FILE = "the seed profile is not installed or cannot be read"
+_E_ROOTS = "more than one detected root fits this seed; pass --root"
+_E_ONE = "--stack needs a profile with exactly one stack"
+_E_APPROVED = "ado.stack.json is or was approved (approved, changed since approval, or carries an approval); pass --force to replace it"
+_E_LINK = "ado.stack.json is a symlink; remove it first"
+_E_WRITE = "ado.stack.json could not be written; nothing was changed"
+_E_BACK = "ado.stack.json could not be read back identical; check the file"
+
+
+def seed_for(detected):
+    """The seed name for one `detect` stack (a fixed table), else None: python -> python-pytest; typescript or node with the npm lockfile
+    hint -> node-typescript (pnpm, yarn and an ambiguous lockfile go through research); salesforce -> salesforce."""
+    sid, hints = detected.get("id"), detected.get("hints")
+    if sid == "python":
+        return "python-pytest"
+    if sid in ("typescript", "node") and _d(hints).get("package_manager") == "npm":
+        return "node-typescript"
+    return "salesforce" if sid == "salesforce" else None
+
+
+def read_source(root, path):
+    """The bytes of the `--from` file: a regular, non-symlink file under `<root>/.ado/` (a symlinked `.ado` is refused too), read through
+    `gate._read` (UTF-8, at most 1 MiB; `parse_json` then caps it at 256 KiB). ValueError with a fixed text otherwise."""
+    from . import gate  # local: gate imports siblings that import config
+    ado = os.path.join(root, ".ado")
+    full, text = os.path.join(root, path), None
+    try:  # a hard link (more than one name) is refused too: it may be the same inode as a file outside `.ado/`
+        single = bool(path) and os.lstat(full).st_nlink == 1
+    except OSError:
+        single = False
+    if single and not os.path.islink(ado) and os.path.isdir(ado):
+        text = gate._read(full, ado, set())
+    if text is None:
+        raise ValueError(_E_FROM)
+    return text.encode("utf-8")
+
+
+def _read_seed(name):
+    if not isinstance(name, str) or name not in SEEDS:
+        raise ValueError(_E_SEED)
+    try:  # the file name comes from SEEDS, never from the input
+        return (Path(SEEDS_DIR) / f"{SEEDS[SEEDS.index(name)]}.json").read_bytes()
+    except OSError:
+        raise ValueError(_E_SEED_FILE) from None
+
+
+def plan_init(source, root=".", stack_id=None, seed_root=None):
+    """`{"ok", "errors", "counts", "profile"}` for a new draft. `source` is the bytes of a profile (`--from`) or a seed name from `SEEDS`
+    (anything else: ValueError). `status` is forced to `draft` and `approval` dropped. For a seed, every stack's root is set to
+    `seed_root` (None: the one detected root at HEAD that fits the seed, else `.`; several: ValueError); `stack_id` renames a
+    single-stack profile. The result is validated AFTER those edits, so nothing about them is trusted; `profile` is None unless ok."""
+    if isinstance(source, str):
+        raw = _read_seed(source)
+        if seed_root is None:
+            roots = [s["root"] for s in detect(root)["stacks"] if seed_for(s) == source]
+            if len(roots) > 1:
+                raise ValueError(_E_ROOTS)
+            seed_root = roots[0] if roots else "."
+    else:
+        raw, seed_root = source, None
+    try:
+        data = parse_json(raw, MAX_PROFILE)
+    except ValueError as e:  # fixed texts
+        return {"ok": False, "errors": [{"path": "profile", "error": str(e)}], "counts": _counts(None), "profile": None}
+    errors = []
+    if isinstance(data, dict):
+        data = {k: v for k, v in data.items() if k != "approval"}
+        data["status"] = "draft"
+        stacks = _l(data.get("stacks"))
+        for st in stacks if seed_root is not None else ():
+            if isinstance(st, dict):
+                st["root"] = seed_root
+        if stack_id is not None:
+            if len(stacks) == 1 and isinstance(stacks[0], dict):
+                stacks[0]["id"] = stack_id
+            else:
+                errors.append({"path": "stacks", "error": _E_ONE})
+    errors += validate(data)
+    return {"ok": not errors, "errors": errors, "counts": _counts(data), "profile": data if not errors else None}
+
+
+def _was_approved(path):
+    """True when the existing file parses as a JSON object that says `approved` or has an `approval` key, even if it no longer validates
+    (a hand edit that broke it must not make it replaceable without `--force`)."""
+    try:
+        data = parse_json(path.read_bytes(), 1 << 20)
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and (data.get("status") == "approved" or "approval" in data)
+
+
+def apply_init(root, plan, force=False):
+    """Write `plan["profile"]` as `<root>/ado.stack.json` (draft) through `decisions._atomic_write` (temp file in the same directory +
+    `os.replace`), then read it back and compare. An existing profile that is `approved`, `changed-since-approval` or has an `approval` (also an invalid one) needs `force`; a symlink is refused always. ValueError
+    with a fixed text on any refusal or doubt; a failure before the replace leaves the existing file as it was."""
+    if not plan.get("ok") or not isinstance(plan.get("profile"), dict):
+        raise ValueError("the profile is invalid; nothing was written")
+    path = Path(root) / PROFILE_FILE
+    if path.is_symlink():  # os.replace would swap the link, but the approved file behind it must not be judged by its link
+        raise ValueError(_E_LINK)
+    if not force and (read_profile(root)["status"] in ("approved", "changed-since-approval") or _was_approved(path)):
+        raise ValueError(_E_APPROVED)
+    from . import decisions  # local: decisions imports siblings that import config
+    text = json.dumps(plan["profile"], indent=2, ensure_ascii=False) + "\n"
+    back = text.encode("utf-8")
+    if parse_json(back, MAX_PROFILE) != plan["profile"] or validate(plan["profile"]):  # the text must say what was validated
+        raise ValueError(_E_BACK)
+    try:
+        decisions._atomic_write(path, text)
+        ok = path.read_bytes() == back and not path.is_symlink()
+    except (OSError, UnicodeError):
+        raise ValueError(_E_WRITE) from None
+    if not ok:
+        raise ValueError(_E_BACK)
+    return {"written": PROFILE_FILE, "status": "draft", "counts": plan["counts"]}

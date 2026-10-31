@@ -25,6 +25,14 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   high-confidence root; in advisory mode drift and unprofiled roots are `notes` and the exit is 0. Commands in a profile are shell code that
   a human approves; the validator is a tripwire, not a sandbox. Nothing else acts on the profile yet; advisory behaviour is unchanged.
   See `docs/stack-kits.md` "The stack profile".
+- `ado stack init (--from FILE | --seed NAME [--root R]) [--stack ID] [--apply] [--force]`: creates the draft profile `ado.stack.json` from a
+  seed (package data `src/ado/seeds/*.json`: `python-pytest`, `node-typescript`, `salesforce`; the name is matched against `stack.SEEDS`
+  only, never joined into a path; `stack.seed_for` is a fixed table) or from a file under `.ado/` (a regular, non-symlink file). The
+  profile is validated, `status` is forced to `draft` and `approval` dropped; a seed's root becomes `--root` or the detected root, then
+  is validated again. A local write (no ADO call, no gate: the draft is not trusted until approved): a preview by default that prints
+  `{ok, errors, counts}` only, `--apply` writes atomically with a read-back, an approved or changed profile (or one that still carries an approval) needs `--force`, and a symlinked `ado.stack.json` is refused.
+  `stack.plan_init` and `stack.apply_init`. The seeds shipped so far are placeholders for tests; the researched seeds replace them.
+  See `docs/stack-kits.md` "Creating a profile".
 - Config: `mode` (`"advisory"` default, or `"strict"`) and the `strict` object (`test_command`,
   `test_timeout`); in strict mode the effective `gate.block` and `review_block_on` are the
   project's lists plus the strict floor. Invalid values are a config error.

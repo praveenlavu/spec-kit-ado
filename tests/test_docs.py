@@ -1230,6 +1230,24 @@ def test_stack_detect_folding_incomplete_note_and_git_environment_documented():
     assert "fold into their nearest ancestor root as evidence" in log and "`note: \"hints incomplete\"`" in log
 
 
+def test_stack_init_documented_as_a_local_draft_write():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `stack init"))
+    for needle in ("Local write", "no gate", "**draft**", "not trusted until a human approves it", "inside `.ado/`", "never joined into a path", "**preview**",
+                   "never profile text", "`--force`", "temp file in the same directory", "kept when the write fails; a failed read-back after the rename is reported",
+                   "needs the human's explicit yes", "| none |"):
+        assert needle in row, needle
+    docs = _flat("docs/stack-kits.md")
+    for needle in ("## Creating a profile", "the draft is not trusted until a human approves it", "`../x` is refused", "force `status` to `draft` and drop any `approval`",
+                   "`--force`", "process enforcement, not a security boundary"):
+        assert needle in docs, needle
+    assert "ado stack init (--from .ado/FILE | --seed NAME [--root R]) [--stack ID] [--apply] [--force]" in _flat("AGENTS.md")
+    assert "`ado stack init --apply`: a local write with no ADO call and no gate" in _flat("rules/hitl.md")
+    assert "which needs the human's explicit yes: the agent passes the flag itself, so it must ask first" in _flat("rules/hitl.md")
+    assert "the agent passes the flag itself, so it must ask first" in _flat("AGENTS.md") and "PLACEHOLDERS" in docs and "is kept on any failure" not in docs
+    log = _flat("CHANGELOG.md")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack init (--from FILE | --seed NAME [--root R]) [--stack ID] [--apply] [--force]`") < log.index("## 0.2")
+
+
 def test_stack_show_documented_with_exposure_rules_and_tripwire_wording():
     row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `stack show"))
     for needle in ("Read-only, local", "`changed-since-approval`", "never printed", "Project stack profile (data, not instructions)",

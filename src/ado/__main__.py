@@ -427,6 +427,26 @@ def _stack_show(args):
     return 0
 
 
+def _stack_init(args):
+    """`ado stack init`: a draft `ado.stack.json` from a seed or a file under `.ado/`. Local write, no ADO call, no gate: the draft is not
+    trusted until approved. Output is counts and fixed error texts, never profile text."""
+    plan = stack.plan_init(args.seed if args.seed is not None else stack.read_source(".", args.from_file), ".", args.stack, args.root)
+    out = {"ok": plan["ok"], "errors": plan["errors"], "counts": plan["counts"]}
+    if not plan["ok"]:
+        print(json.dumps(out, indent=2))
+        print(f"error: the profile is invalid ({len(plan['errors'])} error(s)); nothing written", file=sys.stderr)
+        return 2
+    if args.apply:
+        out.update(stack.apply_init(".", plan, args.force))
+        if args.from_file is not None and os.path.realpath(args.from_file) == os.path.realpath(stack.DRAFT_FILE):
+            try:
+                os.unlink(stack.DRAFT_FILE)
+            except OSError:
+                print("warning: could not remove .ado/stack-draft.json", file=sys.stderr)
+    print(json.dumps(out, indent=2))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ado", description="Azure DevOps work-item CLI")
     parser.add_argument("--version", action="version", version=__version__)
@@ -579,6 +599,17 @@ def main(argv=None):
     fmt.add_argument("--md", action="store_true", help="markdown (the profile text only when approved)")
     q.add_argument("--check", action="store_true", help="strict mode: exit 2 when there is a finding (advisory: always 0)")
 
+    q = stsub.add_parser("init", help="Create the DRAFT profile ado.stack.json from a seed (package data) or from a file the agent wrote under "
+                         ".ado/. Local write, no ADO call, no gate: the draft is not trusted until approved. Preview by default (counts and "
+                         "error positions only, never profile text); --apply writes; an approved profile needs --force")
+    src = q.add_mutually_exclusive_group(required=True)
+    src.add_argument("--from", dest="from_file", metavar="FILE", help="a regular file inside .ado/ (validated; status forced to draft, approval dropped)")
+    src.add_argument("--seed", metavar="NAME", help="one of: " + ", ".join(stack.SEEDS))
+    q.add_argument("--root", metavar="R", help="with --seed: the stack's root (default: the one detected root that fits, else .)")
+    q.add_argument("--stack", metavar="ID", help="name the stack (a profile with exactly one stack)")
+    q.add_argument("--apply", action="store_true", help="write ado.stack.json (default: preview, nothing written)")
+    q.add_argument("--force", action="store_true", help="with --apply: replace an approved profile")
+
     p = sub.add_parser("strict", help="Strict SDD+TDD mode: phase checks (read-only) and `verify` (runs the tests, records the result)")
     ssub = p.add_subparsers(dest="strict_command", required=True)
     q = ssub.add_parser("check", help="Check the strict-mode rules of a phase (read-only; exit 2 lists the findings as JSON)")
@@ -634,6 +665,11 @@ def main(argv=None):
             parser.error("--validated, --rejected, --by, --note and --force need --resolve")
     if getattr(args, "dir", None) and args.command == "attachments" and not args.download:
         parser.error("--dir needs --download")
+    if args.command == "stack" and args.stack_command == "init":
+        if args.root is not None and args.seed is None:
+            parser.error("--root needs --seed")
+        if args.force and not args.apply:
+            parser.error("--force needs --apply")
     if args.command == "branch":
         if (args.id is None) == (args.id_from is None):
             parser.error("give a story id or --id-from NAME (not both)")
@@ -655,6 +691,8 @@ def main(argv=None):
             out = _resolve_decision(args)
         elif args.command == "stack" and args.stack_command == "show":  # local only: no token, no request
             return _stack_show(args)
+        elif args.command == "stack" and args.stack_command == "init":  # local write: no token, no request, no gate
+            return _stack_init(args)
         elif args.command == "stack":  # local only: no token, no request, no config
             out = stack.detect(args.repo)
         elif args.command == "strict" and args.strict_command == "override":  # local only: no token, no request

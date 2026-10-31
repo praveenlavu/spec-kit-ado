@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "version": 1,
+  "status": "draft",
+  "stacks": [
+    {
+      "id": "python",
+      "root": ".",
+      "commands": {
+        "test": {
+          "run": "PYTHONPATH=src python3 -m pytest -q",
+          "source": "unverified"
+        }
+      },
+      "conventions": [
+        {
+          "rule": "PLACEHOLDER seed for tests only: not researched or verified; P2-11, P2-12 and P2-13 replace it",
+          "source": "unverified"
+        }
+      ]
+    }
+  ]
+}

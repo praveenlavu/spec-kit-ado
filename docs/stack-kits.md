@@ -153,6 +153,28 @@ validator (one line of printable ASCII, a word list that refuses `sudo`, `curl`,
 is a tripwire for accidents and copied fetch-and-run lines, not a sandbox: it does not make a command safe. This is process
 enforcement, not a security boundary.
 
+## Creating a profile
+
+`ado stack init` writes the **draft** `ado.stack.json`. It is a local write: no ADO call, no token, no gate, because the draft is not
+trusted until a human approves it (and nothing reads a draft's text to the agent: see "What the agent may see").
+
+- `ado stack init --from .ado/stack-draft.json`: the agent writes its researched profile under `.ado/` (gitignored). The file must be a
+  regular file inside `.ado/`: a symlink or hard link (also a symlinked `.ado`), a path outside `.ado/`, a non-UTF-8 file or one over 256 KiB is refused.
+- `ado stack init --seed python-pytest|node-typescript|salesforce [--root R]`: a profile that ships with the CLI as package data
+  (`src/ado/seeds/*.json`). The name is matched against the fixed list only and never joined into a path (`../x` is refused). The
+  stack's root is rewritten to `--root`, or to the one detected root that fits the seed (python: `python-pytest`; typescript or node with
+  an npm lockfile: `node-typescript`; salesforce: `salesforce`), else `.`; two fitting roots need `--root`. The rewritten profile goes
+  through the validator again.
+- `--stack ID` names the stack of a single-stack profile (for example a stack detect cannot name).
+
+Both forms validate the profile like `ado stack show`, force `status` to `draft` and drop any `approval`. Without `--apply` the command
+is a preview: it prints `{ok, errors, counts}` (an error is a rule and a position such as `stacks[0].root`, never a value) and writes
+nothing. `--apply` writes `ado.stack.json` atomically (a temp file in the same directory, then a rename, then a read-back; an existing
+file is kept when the write fails; a failed read-back after the rename is reported) and removes `.ado/stack-draft.json` when it was the source: the validated copy is the profile, not the
+agent's file. Replacing a profile that is `approved`, `changed-since-approval`, or hand-broken but still marked approved needs `--force` (a symlinked `ado.stack.json` is always refused), and `--force` over an approved profile needs the human's explicit yes: the agent passes the flag itself, so it must ask first. Exit 0 for a preview or a write, 2 for a
+refusal or an invalid profile. The shipped seeds are PLACEHOLDERS (valid, unresearched drafts for tests) until the seed tasks P2-11 to P2-13 replace them with cited,
+re-fetched ones; the next step after any init is the human's review and approval. This is process enforcement, not a security boundary.
+
 ## Kits that do not write `tasks.md`
 
 `ado push` reads one format: the Spec Kit `tasks.md` checklist (`- [ ] T001 [P] ...`). If
