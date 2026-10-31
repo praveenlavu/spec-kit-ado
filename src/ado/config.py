@@ -95,6 +95,7 @@ class Config:
         self.branch_prefix = branch_prefix
         self.mode = mode
         self.strict = {**STRICT_DEFAULTS, **(strict or {})}
+        self.source_commit = None  # the 40-hex target commit load_from_ref resolved; None for a config read from disk
         self.from_target = False  # True when CI took this config from the PR's target branch (`ado gate --base`)
 
     def _effective(self, project_list, floor):
@@ -225,27 +226,18 @@ class Config:
         commit = strict._resolve_base(repo, ref) if isinstance(ref, str) else ""
         if not commit:
             raise fail("the base ref is not a commit in this repository (or git could not be run); fetch it (fetch-depth: 0)")
-        spec = f"{commit}:ado.config.json"
-        listed = strict._git(repo, "ls-tree", "-l", "--full-tree", "--end-of-options", commit, "--", "ado.config.json")
-        if listed is None or listed.returncode:
-            raise fail("git could not read the tree")
-        if not listed.stdout.strip():
+        raw = strict._blob_at(repo, commit, "ado.config.json", MAX_REF_CONFIG, REF_LABEL)
+        if raw is None:
             return None  # the path does not exist at that commit
-        meta = listed.stdout.decode("utf-8", "replace").split("\t", 1)[0].split()
-        if len(meta) != 4 or meta[0] not in ("100644", "100755") or meta[1] != "blob" or not meta[3].isdigit():
-            raise fail("the file is not a regular file")
-        if int(meta[3]) > MAX_REF_CONFIG:
-            raise fail("the file is larger than 1 MiB")
-        shown = strict._git(repo, "show", "--no-textconv", "--end-of-options", spec)
-        if shown is None or shown.returncode or len(shown.stdout) > MAX_REF_CONFIG:
-            raise fail("git could not read the file")
         try:
-            data = json.loads(shown.stdout.decode("utf-8"))
+            data = json.loads(raw.decode("utf-8"))
         except ValueError as e:  # includes UnicodeDecodeError
             raise fail(f"invalid JSON: {e}")
         except RecursionError:
             raise fail("nested too deeply") from None
-        return cls._from_data(data, REF_LABEL)
+        cfg = cls._from_data(data, REF_LABEL)
+        cfg.source_commit = commit
+        return cfg
 
     @classmethod
     def load(cls, start_dir=None):

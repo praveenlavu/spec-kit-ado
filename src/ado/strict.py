@@ -21,6 +21,7 @@ from pathlib import Path
 from . import decisions, dod, gate, prs, push, questions, tasks
 from .auth import AuthError
 from .client import AdoError
+from .config import ConfigInvalid
 
 _PLACEHOLDER = re.compile(r"_\(\s*fill\s+in", re.I)
 _BULLETS = (("Approach", "Approach"), ("Assumptions", "Assumptions"), ("Use cases & edge cases", "Use cases"))
@@ -232,6 +233,32 @@ def _out(repo, *args, **kw):
     """stdout (bytes) of a successful git run, else None."""
     r = _git(repo, *args, **kw)
     return r.stdout if r is not None and r.returncode == 0 else None
+
+
+def _blob_at(repo, commit, path, cap, label):
+    """The bytes of regular file `path` at the already-resolved 40-hex `commit` (ValueError otherwise), or None when the path does
+    not exist there. Anything else (git missing or failing, a symlink, submodule or directory, more than `cap` bytes) raises
+    ConfigInvalid(f"{label}: ...") with a fixed text that never echoes the path or the commit: CI fails closed."""
+    if not (isinstance(commit, str) and re.fullmatch(r"[0-9a-fA-F]{40}", commit)):
+        raise ValueError("commit must be a resolved 40-hex commit id")
+
+    def fail(why):
+        return ConfigInvalid(f"{label}: {why}")
+    listed = _git(repo, "ls-tree", "-l", "--full-tree", "--end-of-options", commit, "--", path)
+    if listed is None or listed.returncode:
+        raise fail("git could not read the tree")
+    if not listed.stdout.strip():
+        return None
+    meta = listed.stdout.decode("utf-8", "replace").split("\t", 1)[0].split()
+    if len(meta) != 4 or meta[0] not in ("100644", "100755") or meta[1] != "blob" or not meta[3].isdigit():
+        raise fail("the file is not a regular file")
+    limit = f"{cap // 1048576} MiB" if cap % 1048576 == 0 else f"{cap} bytes"
+    if int(meta[3]) > cap:
+        raise fail(f"the file is larger than {limit}")
+    shown = _git(repo, "show", "--no-textconv", "--end-of-options", f"{commit}:{path}")
+    if shown is None or shown.returncode or len(shown.stdout) > cap:
+        raise fail("git could not read the file")
+    return shown.stdout
 
 
 def _commit(repo, sha, **kw):
