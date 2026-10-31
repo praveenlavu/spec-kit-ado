@@ -172,7 +172,7 @@ is a preview: it prints `{ok, errors, counts}` (an error is a rule and a positio
 nothing. `--apply` writes `ado.stack.json` atomically (a temp file in the same directory, then a rename, then a read-back; an existing
 file is kept when the write fails; a failed read-back after the rename is reported) and removes `.ado/stack-draft.json` when it was the source: the validated copy is the profile, not the
 agent's file. Replacing a profile that is `approved`, `changed-since-approval`, or hand-broken but still marked approved needs `--force` (a symlinked `ado.stack.json` is always refused), and `--force` over an approved profile needs the human's explicit yes: the agent passes the flag itself, so it must ask first. Exit 0 for a preview or a write, 2 for a
-refusal or an invalid profile. The shipped seeds are PLACEHOLDERS (valid, unresearched drafts for tests) until the seed tasks P2-11 to P2-13 replace them with cited,
+refusal or an invalid profile. Seed `python-pytest` is researched: 12 official sources (pytest, Python, packaging.python.org, ruff, pytest-cov, pip-audit, PEP 8), every URL re-fetched on 2026-10-31, status `draft` (a human approves it per project). Its test command is `PYTHONPATH=src python3 -m pytest -q`; set `strict.test_timeout` >= 900, because each run has an empty temporary `HOME`. The package and its test tools must already be installed in the active environment (the run installs nothing). The shipped `node-typescript` and `salesforce` seeds are still PLACEHOLDERS (valid, unresearched drafts for tests) until P2-12 and P2-13 replace them with cited,
 re-fetched ones; the next step after any init is the human's review and approval. This is process enforcement, not a security boundary.
 
 ## Approving a profile

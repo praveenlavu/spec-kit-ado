@@ -45,7 +45,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   profile is validated, `status` is forced to `draft` and `approval` dropped; a seed's root becomes `--root` or the detected root, then
   is validated again. A local write (no ADO call, no gate: the draft is not trusted until approved): a preview by default that prints
   `{ok, errors, counts}` only, `--apply` writes atomically with a read-back, an approved or changed profile (or one that still carries an approval) needs `--force`, and a symlinked `ado.stack.json` is refused.
-  `stack.plan_init` and `stack.apply_init`. The seeds shipped so far are placeholders for tests; the researched seeds replace them.
+  `stack.plan_init` and `stack.apply_init`. The `python-pytest` seed is researched (12 official sources re-fetched on 2026-10-31; test command `PYTHONPATH=src python3 -m pytest -q`, set `strict.test_timeout` >= 900); `node-typescript` and `salesforce` are still placeholders for tests.
   See `docs/stack-kits.md` "Creating a profile".
 - `ado stack approve [--story ID] [--by ROLE] [--apply]`: a human approves the profile and sets what strict CI runs. `--apply` refuses
   (exit 2) unless stdin is a terminal, before any file or the config is read, and when `ADO_CONFIG` is set; a terminal check stops
