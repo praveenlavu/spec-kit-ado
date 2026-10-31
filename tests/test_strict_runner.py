@@ -362,3 +362,12 @@ def test_only_standard_lc_names_pass():
     out = strict.scrubbed_env(env, home="/h")
     assert out["LC_ALL"] == "C" and out["LC_CTYPE"] == "C"
     assert not [k for k in out if k.startswith("LC_") and k not in ("LC_ALL", "LC_CTYPE")]
+
+
+def test_checkout_step_has_no_end_of_options_and_takes_a_full_hex_id(repo, monkeypatch):
+    """git 2.39 (Debian bookworm) rejects `checkout --detach --end-of-options`; the id is git's own 40-hex output, so none is needed."""
+    seen, real = [], strict._git
+    monkeypatch.setattr(strict, "_git", lambda where, *a, **kw: (seen.append(a), real(where, *a, **kw))[1])
+    strict.run_at(str(repo), git(repo, "rev-parse", "HEAD")[:12], "true", 30)
+    co = [a for a in seen if "checkout" in a]
+    assert len(co) == 1 and "--end-of-options" not in co[0] and len(co[0][-1]) == 40 and set(co[0][-1]) <= set("0123456789abcdef")

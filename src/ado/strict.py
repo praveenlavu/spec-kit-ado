@@ -1248,7 +1248,7 @@ def run_at(repo, sha, command, timeout):
         no_hooks = ["-c", f"core.hooksPath={os.devnull}"]  # a post-checkout hook would run with the environment
         steps = [(top, "clone", "--shared", "--no-checkout", "--quiet", "--end-of-options", top, wt),
                  (wt, "remote", "remove", "origin"),
-                 (wt, "checkout", "--quiet", "--detach", "--end-of-options", f"{full}^{{commit}}")]
+                 (wt, "checkout", "--quiet", "--detach", full)]  # `full` is git's own 40-hex output; checkout --detach rejects --end-of-options before git 2.4x
         for where, *args in steps:
             r = _git(where, *no_hooks, *args, env=genv, timeout=120)
             if r is None or r.returncode != 0:

@@ -177,6 +177,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
 
 ### Fixed
 
+- Strict mode: the test runner's `git checkout --detach` no longer passes `--end-of-options`, which git 2.39 (Debian bookworm images) rejects, so `ado strict verify` failed with `runner-error` there.
 - The `ado decisions --post` preview says `D1 gets` for one line and `D1, D2 get` for several (it printed `get` for one).
 - `done_state` must be a non-empty string, like `story_type` and `removed_state` (a `null`, a number or `""` was never valid and made `ado update` crash or refuse in the new strict check): an invalid value is now a config error with the fixed text `'done_state' must be a non-empty string`.
 
