@@ -33,6 +33,15 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   `{ok, errors, counts}` only, `--apply` writes atomically with a read-back, an approved or changed profile (or one that still carries an approval) needs `--force`, and a symlinked `ado.stack.json` is refused.
   `stack.plan_init` and `stack.apply_init`. The seeds shipped so far are placeholders for tests; the researched seeds replace them.
   See `docs/stack-kits.md` "Creating a profile".
+- `ado stack approve [--story ID] [--by ROLE] [--apply]`: a human approves the profile and sets what strict CI runs. `--apply` refuses
+  (exit 2) unless stdin is a terminal, before any file or the config is read, and when `ADO_CONFIG` is set; a terminal check stops
+  accidents, it is not a security boundary. The preview prints every command verbatim when stdin and stdout are both terminals (stripped of control characters, never
+  stored, with the current status and a warning when `ADO_CONFIG` is set) and counts only otherwise; a Ctrl-C between writes puts every earlier write back. `--apply` sets `status: approved`, raises `version`, writes `approval {by, date, sha256, decision}` and
+  sets or removes `strict.test_command` in `ado.config.json` (parsed values and key order of every other key unchanged, indent, line
+  terminator and trailing newline kept, atomic, read back; refused for an invalid, symlinked or non-regular config or a composed command
+  over 500 characters); `--story` adds one decision line; a failed step puts earlier writes back. `stack.validate` now limits
+  `approval.by` to a role (`[A-Za-z0-9 ]{1,40}`). Once a profile exists, `strict.test_command` comes only from this verb; `ado setup` never
+  writes it. `stack.plan_approve`, `stack.apply_approve`, `stack.preview_text`. See `docs/stack-kits.md` "Approving a profile".
 - Config: `mode` (`"advisory"` default, or `"strict"`) and the `strict` object (`test_command`,
   `test_timeout`); in strict mode the effective `gate.block` and `review_block_on` are the
   project's lists plus the strict floor. Invalid values are a config error.

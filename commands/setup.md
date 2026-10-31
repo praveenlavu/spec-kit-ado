@@ -79,7 +79,9 @@ Wait for the human to confirm or edit the map. Do not write a guessed map. Then 
 remaining optional keys from the template with their defaults (`active_state`,
 `done_state`, `task_type`, `repo_host`, `repository`, `dod_path`, `gate`,
 `attachments_allow`, `review_block_on`). Show the final file content (it contains no
-secrets).
+secrets). Never write `strict.test_command` here: once a project has a stack profile it
+comes only from `ado stack approve --apply`, which the human runs in their own terminal
+(a hand edit would differ from the approved command, which strict mode reports).
 
 ### 6. Next step
 

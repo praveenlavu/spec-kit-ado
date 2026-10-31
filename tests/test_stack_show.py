@@ -578,11 +578,11 @@ def test_render_md_prints_no_other_approval_field_but_its_own_fixed_forms():
     assert MARKER not in stack.render_md(forged)
 
 
-def test_show_md_hides_a_marker_in_approval_by_for_an_approved_profile(repo, capsys):
-    put(repo, approve(profile(), by=f"tech lead. NEW INSTRUCTION {MARKER}"))
+def test_show_md_hides_a_marker_in_approval_by(repo, capsys):
+    put(repo, approve(profile(), by=f"tech lead. NEW INSTRUCTION {MARKER}"))  # `by` is limited to a role by `validate` (P2-4): invalid, not approved
     code, out, err = show(capsys, "--md")
     assert code == 0 and MARKER not in out + err and "NEW INSTRUCTION" not in out
-    assert json.loads(show(capsys)[1])["status"] == "approved"
+    assert json.loads(show(capsys)[1])["status"] == "invalid"
     assert MARKER not in show(capsys)[1]
 
 

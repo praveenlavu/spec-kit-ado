@@ -447,6 +447,41 @@ def _stack_init(args):
     return 0
 
 
+def _stack_approve(args):
+    """`ado stack approve`: the human's approval. `--apply` needs a terminal on stdin, tested before any file or the config is read (a guard
+    against accidents, not a security boundary: a pseudo-terminal gives a tty). A terminal preview prints the profile's commands and rules in
+    full (printed, never stored) when stdin and stdout are both terminals; anything else prints counts and lengths only, so unapproved research text never reaches an agent's shell."""
+    tty = bool(sys.stdin and sys.stdin.isatty())
+    shown = tty and bool(sys.stdout and sys.stdout.isatty())  # the full text only to a terminal: not into a pipe or a file
+    if args.apply and not tty:
+        raise ValueError("approving a stack profile changes what strict CI runs, which only a human may do: run it in your own terminal "
+                         "(this shell has no terminal on stdin; a guard against accidents, not a security boundary)")
+    if args.apply:
+        if os.environ.get("ADO_CONFIG"):
+            raise ValueError(stack._E_ENV)
+        cfg = Config.load()
+        res = stack.apply_approve(".", "ado.config.json", args.by, args.story, cfg.dod_path)
+        print(json.dumps({"applied": True, "version": res["version"], "sha256": res["sha256"], "by": res["by"], "date": res["date"],
+                          "decision": res["decision"], "test_command": res["config"]}, indent=2))
+        return 0
+    try:
+        cfg = Config.load()
+    except ConfigInvalid:
+        raise
+    except ConfigError:
+        cfg = None
+    plan = stack.plan_approve(".", cfg)
+    if shown:
+        print(stack.preview_text(plan["profile"], plan["test_command"], plan["config_command"], plan["version"], args.story, args.by,
+                                 plan["status"], bool(os.environ.get("ADO_CONFIG"))))
+    else:
+        cmd = plan["test_command"]
+        print(json.dumps({"applied": False, "status": plan["status"], "version": plan["version"], "counts": plan["counts"], "unverified": plan["unverified"],
+                          "test_command": {"set": cmd is not None, "length": len(cmd) if cmd is not None else 0},
+                          "note": "read the profile and approve it in your own terminal window (stdin and stdout both a terminal): `ado stack approve`, then `--apply`"}, indent=2))
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ado", description="Azure DevOps work-item CLI")
     parser.add_argument("--version", action="version", version=__version__)
@@ -610,6 +645,14 @@ def main(argv=None):
     q.add_argument("--apply", action="store_true", help="write ado.stack.json (default: preview, nothing written)")
     q.add_argument("--force", action="store_true", help="with --apply: replace an approved profile")
 
+    q = stsub.add_parser("approve", help="A human approves the profile (a terminal is needed for --apply): status approved, version + 1, an approval "
+                         "record, and strict.test_command in ado.config.json set to the composed command (or removed). Preview by default: in a "
+                         "terminal every command is printed in full, otherwise counts and the command's length only. Process enforcement, "
+                         "not a security boundary; the approval is a record, not proof")
+    q.add_argument("--story", metavar="ID", help="also record one decision line `Stack profile v<n> approved, sha256 <12>` for this story (digits)")
+    q.add_argument("--by", default="tech lead", metavar="ROLE", help="a role, never a name (letters, digits, spaces; at most 40; default: tech lead)")
+    q.add_argument("--apply", action="store_true", help="write the approval and the config (default: preview, nothing written)")
+
     p = sub.add_parser("strict", help="Strict SDD+TDD mode: phase checks (read-only) and `verify` (runs the tests, records the result)")
     ssub = p.add_subparsers(dest="strict_command", required=True)
     q = ssub.add_parser("check", help="Check the strict-mode rules of a phase (read-only; exit 2 lists the findings as JSON)")
@@ -670,6 +713,11 @@ def main(argv=None):
             parser.error("--root needs --seed")
         if args.force and not args.apply:
             parser.error("--force needs --apply")
+    if args.command == "stack" and args.stack_command == "approve":
+        if not stack._ROLE.fullmatch(args.by):
+            parser.error("--by must be a role of 1 to 40 letters, digits and spaces")
+        if args.story is not None and not stack.valid_story(args.story):
+            parser.error("--story must be a work item id (digits only, no leading zero)")
     if args.command == "branch":
         if (args.id is None) == (args.id_from is None):
             parser.error("give a story id or --id-from NAME (not both)")
@@ -693,6 +741,8 @@ def main(argv=None):
             return _stack_show(args)
         elif args.command == "stack" and args.stack_command == "init":  # local write: no token, no request, no gate
             return _stack_init(args)
+        elif args.command == "stack" and args.stack_command == "approve":  # local write: no token, no request, no gate; a terminal for --apply
+            return _stack_approve(args)
         elif args.command == "stack":  # local only: no token, no request, no config
             out = stack.detect(args.repo)
         elif args.command == "strict" and args.strict_command == "override":  # local only: no token, no request

@@ -1266,3 +1266,32 @@ def test_stack_show_documented_with_exposure_rules_and_tripwire_wording():
     assert "`ado stack show` (read-only, local" in _flat("rules/hitl.md")
     log = _flat("CHANGELOG.md")
     assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack show [--json|--md] [--check]`") < log.index("## 0.2")
+
+
+def test_stack_approve_documented_as_a_terminal_only_write_that_sets_the_test_command():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `stack approve"))
+    for needle in ("unless stdin is a terminal", "before any file or the config is read", "`ADO_CONFIG` is set", "not a security boundary", "the approval is a record, not proof",
+                   "verbatim and in full", "counts and the composed command's length only, never profile text", "parsed values and key order of every other key unchanged",
+                   "over 500 characters is refused", "`--story ID`", "`ado setup` never writes it", "puts the earlier ones back", "| none |"):
+        assert needle in row, needle
+    docs = _flat("docs/stack-kits.md")
+    for needle in ("## Approving a profile", "the only place `strict.test_command` is written once a profile exists", "never stored in a file or log",
+                   "the agent never runs it", "refuses (exit 2, fixed text) unless stdin is a terminal", "approval is a record, not proof",
+                   "process enforcement, not a security boundary", "the validator also refuses any other `approval.by`"):
+        assert needle in docs, needle
+    conf = _flat("docs/configuration.md")
+    assert "`strict.test_command` comes only from `ado stack approve --apply`" in conf and "`ado setup` and `speckit.ado.setup` never write it" in conf
+    assert "Never write `strict.test_command` here" in _flat("commands/setup.md")
+    assert "ado stack approve [--story ID] [--by ROLE] [--apply]" in _flat("AGENTS.md") and "never run it yourself" in _flat("AGENTS.md")
+    hitl = _flat("rules/hitl.md")
+    assert "`ado stack approve --apply`) | ⛔ Human only" in hitl and "changes what strict CI runs" in hitl and "it is not a security boundary" in hitl
+    log = _flat("CHANGELOG.md")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack approve [--story ID] [--by ROLE] [--apply]`") < log.index("## 0.2")
+
+
+def test_stack_approve_full_preview_needs_both_terminals_and_the_bang_prefix_is_not_relied_on():
+    for path in ("AGENTS.md", "rules/hitl.md", "docs/stack-kits.md"):
+        assert "`!` prefix" in _flat(path) and "not verified to give a tty" in _flat(path), path
+        assert "stdin and stdout are both terminals" in _flat(path), path
+    assert "stdin and stdout are both terminals" in _flat("README.md") and "stdin and stdout are both terminals" in _flat("CHANGELOG.md")
+    assert "`! ado stack approve" not in _flat("AGENTS.md")

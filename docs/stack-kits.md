@@ -175,6 +175,37 @@ agent's file. Replacing a profile that is `approved`, `changed-since-approval`, 
 refusal or an invalid profile. The shipped seeds are PLACEHOLDERS (valid, unresearched drafts for tests) until the seed tasks P2-11 to P2-13 replace them with cited,
 re-fetched ones; the next step after any init is the human's review and approval. This is process enforcement, not a security boundary.
 
+## Approving a profile
+
+`ado stack approve` is the human's step: it records the approval and is the only place `strict.test_command` is written once a profile
+exists. It changes what strict CI runs, so the agent never runs it: after `ado stack init --apply` it tells the human to run
+`ado stack approve` and then `ado stack approve --apply` in their own terminal window (not the `!` prefix: it is not verified to give a tty).
+
+- **Preview** (no `--apply`). When stdin and stdout are both terminals it prints the current status (draft, a re-approval of version N, or changed since version N; a warning when `ADO_CONFIG` is set, since the current value shown then comes from that file and `--apply` refuses), then, per stack, every command verbatim and in full in a code block (`org_only` ones
+  flagged: the agent runs one only after your explicit yes for that run, and `strict verify` never does), each rule with its source kind
+  and URL, the count of `UNVERIFIED` items, and the exact `strict.test_command` it will write, or "left unset: no stack defines a test
+  command". With several stacks the command is `( cd ./<root> && sh -c '<run, shell-quoted>' )` joined by ` && `, so read the whole line.
+  Control characters and escape sequences are stripped before printing, and the text is printed, never stored in a file or log. Without a
+  terminal on stdin, or with the output piped or redirected, it prints counts, the unverified count and the command's length only: the profile's text came from untrusted
+  research and is not handed to an agent's shell. The command never fetches a URL, and nobody checked that a page supports a note: you are the check.
+- **`--apply`** refuses (exit 2, fixed text) unless stdin is a terminal, before it reads any file or the config, and refuses when
+  `ADO_CONFIG` is set. It sets `status: approved`, raises `version` by 1 and writes `approval {by, date, sha256, decision}`: `--by` is a
+  role (letters, digits and spaces with at least one letter or digit, at most 40, default `tech lead`; the validator also refuses any other `approval.by`), `sha256` is the
+  hash of the profile as written, `decision` is `US<id> D<n>` when `--story` is given. A draft, a changed or an already approved profile can
+  be approved; each approval is a new version.
+- **The config.** `strict.test_command` becomes the composed command, or is removed when no stack defines `test.run`; a composed command
+  over 500 characters is refused before anything is written (point `test` at a repo script, kind `repo`). The config is parsed and
+  written back with the parsed values and key order of every other key unchanged and its indent, line terminator and trailing newline
+  kept (spacing may change). The new text is read back and checked by the config validator before it replaces the file (atomic, same
+  mode). A missing, invalid, duplicate-key, symlinked or non-regular config is refused and left as it was.
+- **`--story ID`** (digits) adds one decision line, `Stack profile v<n> approved, sha256 <12 hex>`, to `<dod_path>/Decisions_<id>.md`,
+  so the normal decisions post carries it to the PO. The decision, config and profile are written in that order, each checked before it
+  replaces the file, and a failed step puts the earlier ones back.
+
+The terminal check stops accidents; it is not a security boundary (a pseudo-terminal gives a tty, and anyone can edit the files), and the
+approval is a record, not proof: trust comes from reviewing the commit, and in strict CI from the target branch's copy. This is process
+enforcement, not a security boundary.
+
 ## Kits that do not write `tasks.md`
 
 `ado push` reads one format: the Spec Kit `tasks.md` checklist (`- [ ] T001 [P] ...`). If
