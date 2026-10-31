@@ -51,13 +51,20 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   `*-config.local.yml` and `<id>-config.yml`; CRLF and `core.autocrlf` agree with the committed value), `kits.dir_digest_at` (the same from
   a commit; symlink or submodule gives `"changed"`), `kits.agents_sha256` (the Claude agent copies by the exact registered names),
   `kits.read_lock` (`source` and `version` validated, else null). A symlink, control character in a path, empty kit dir or `--dev` install
-  is refused, as is a kit path with `ident`, `filter` or `working-tree-encoding` set by `.gitattributes`; disabled kits are judged like enabled ones. Exit 2 on an unpinned or changed kit. `ado kits pin` and the strict kit rules are not in this release yet. See
+  is refused, as is a kit path with `ident`, `filter` or `working-tree-encoding` set by `.gitattributes`; disabled kits are judged like enabled ones. Exit 2 on an unpinned or changed kit. The strict kit rules are not in this release yet. See
   `docs/stack-kits.md` "Pinning kits".
 - `kits.scan(root, id)`: facts for the human who reviews a kit before pinning, from `extension.yml` (line scanner over fixed keys, no YAML
   library) and the command and script files it names: command and script counts, hooks with `optional`, `requires.tools`, and counts with
   `<relpath>:<line>` of fixed network, install, write, secret-name and `allowed-tools` patterns. Hook and tool names are shown only when they
   match a fixed pattern (else `<other>`), no kit text is printed, and an unreadable manifest or file gives `unreadable: true`. A heuristic
-  aid, not a security verdict. Not wired to a verb yet. See `docs/stack-kits.md` "Pinning kits".
+  aid, not a security verdict. Shown by `ado kits pin`. See `docs/stack-kits.md` "Pinning kits".
+- `ado kits pin <id> [--by ROLE] [--apply]` (a human's approval record in `ado.kits.lock.json`; process enforcement, not a sandbox):
+  `kits.plan_pin`, `kits.apply_pin`, `kits.CHECKLIST`. The preview prints the digests, the scan facts and a fixed five-line checklist, and no
+  kit prose (hook and tool names and kit-relative paths are kit-chosen but pattern-limited; the manifest's repository URL is recorded, not
+  printed); it says when `--apply` would replace an existing pin. A scan with `unreadable: true` is refused (`incomplete-scan`). `--apply` refuses (exit 2) unless stdin and stdout are both terminals,
+  an unknown id exits 2 with a fixed text, and a `--dev` install whose agent copies are symlinks, a symlink and an empty kit dir cannot be pinned.
+  The lock is written atomically (sorted keys, line terminator kept, other kits' entries untouched, an invalid or symlinked existing lock
+  refused and left intact); `--by` is validated as for `stack approve --by`. `<id>-config.yml` is not vetted. See `docs/stack-kits.md` "Pinning kits".
 - Strict stack rules (`strict check`, phases `implement`, `pr`, `done`; not overridable): `stack-profile-missing`, `stack-profile-invalid`,
   `stack-profile-draft`, `stack-profile-changed`, `stack-profile-drift` (only when the approved profile composes a test command and
   `strict.test_command` differs) and `stack-unprofiled` (a high-confidence `ado stack detect` root at the head commit that no profile stack

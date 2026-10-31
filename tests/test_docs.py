@@ -416,7 +416,7 @@ def test_documented_ado_verbs_and_flags_exist_in_the_cli():
                         continue
                     if words[0].startswith("-"):
                         cmd, given = "", words
-                    elif words[0] in ("pr", "strict", "stack") and len(words) > 1 and re.fullmatch(r"[a-z]+", words[1]):
+                    elif words[0] in ("pr", "strict", "stack", "kits") and len(words) > 1 and re.fullmatch(r"[a-z]+", words[1]):
                         cmd, given = f"{words[0]} {words[1]}", words[2:]
                     elif re.fullmatch(r"[a-z]+", words[0]):
                         cmd, given = words[0], words[1:]
@@ -1404,3 +1404,22 @@ def test_kits_scan_documented_as_a_heuristic_aid_not_a_verdict():
     log = _flat("CHANGELOG.md")
     assert log.index("## 0.3.0 — unreleased") < log.index("`kits.scan(root, id)`") < log.index("## 0.2")
     assert "heuristic aid, not a security verdict" in log and "`unreadable: true`" in log
+
+
+# ---- P2-9a: `ado kits pin` ----
+def test_kits_pin_documented_as_a_terminal_only_approval_record():
+    for doc in ("README.md", "AGENTS.md", "rules/hitl.md", "docs/stack-kits.md", "CHANGELOG.md"):
+        assert "ado kits pin" in _flat(doc) or "`kits pin" in _flat(doc), doc
+    kits = _flat("docs/stack-kits.md")
+    for phrase in ("**Pinning: `ado kits pin <id> [--by ROLE] [--apply]`.**", "`human_checklist`", "five fixed lines", "`error: kits pin refused: unknown`",
+                   "**`--apply` refuses (exit 2, fixed text) unless stdin AND stdout are both terminals**", "**`--dev` installs whose registered agent copies are symlinks cannot be pinned**", "`error: kits pin refused: incomplete-scan`", "pins the kit **as it is now**", "**replaces**",
+                   "**`<id>-config.yml` is not vetted**", "human approval record, process enforcement, not a sandbox", "`source_recorded`",
+                   "left byte-identical", "exactly as `ado stack approve --by`"):
+        assert phrase in kits, phrase
+    for doc in ("README.md", "rules/hitl.md", "AGENTS.md"):
+        text = _flat(doc)
+        assert "stdin and stdout" in text.lower() and "not a sandbox" in text or doc == "AGENTS.md", doc
+    assert "never run it yourself" in _flat("AGENTS.md") and "Human only" in _flat("rules/hitl.md")
+    log = _flat("CHANGELOG.md")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`kits.plan_pin`") < log.index("## 0.2")
+    assert "not a sandbox" in log and "`<id>-config.yml` is not vetted" in log

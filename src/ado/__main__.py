@@ -429,6 +429,29 @@ def _kits_verify(args):
     return 0
 
 
+def _kits_pin(args):
+    """`ado kits pin ID [--by ROLE] [--apply]`: a human's approval record of one installed kit in `ado.kits.lock.json`. The preview prints the
+    digests, the scan facts and the fixed checklist only (never kit text, so any output is safe); `--apply` needs a terminal on BOTH stdin
+    and stdout, tested before any file is read (a guard against accidents, not a security boundary: a pseudo-terminal gives a tty)."""
+    if args.apply and not (sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty()):
+        raise ValueError("pinning a kit records that a human reviewed it, which only a human may do: run it in your own terminal "
+                         "(stdin and stdout must both be a terminal, so the full preview is seen; a guard against accidents, not a security boundary)")
+    try:
+        prior = kits.load_lock(".")  # a bad lockfile is refused here too, in the preview as well as at --apply
+        plan = kits.plan_pin(".", args.id)
+        if args.apply:
+            kits.apply_pin(".", plan, args.by)
+    except kits.KitError as e:
+        print(f"error: kits pin refused: {e.reason}", file=sys.stderr)
+        return 2
+    shown = {k: v for k, v in plan.items() if k != "source"}  # the manifest's URL is kit text: it is recorded, not printed
+    out = {"applied": bool(args.apply), **shown, "source_recorded": plan["source"] is not None}
+    if args.id in prior["kits"]:
+        out["note"] = "this kit is already pinned: --apply REPLACES its entry (version, digests, scan, reviewer)"
+    print(json.dumps(out, indent=2))
+    return 0
+
+
 def _stack_show(args):
     """`ado stack show`: the config only supplies the mode and strict.test_command (none is advisory; an invalid one fails closed)."""
     try:
@@ -643,6 +666,13 @@ def main(argv=None):
     ksub = p.add_subparsers(dest="kits_command", required=True)
     ksub.add_parser("verify", help="List the installed kits and whether each is pinned, changed or unpinned (JSON); exit 2 on any kit "
                     "that is unpinned or changed since a human pinned it, or when the registry or a kit file cannot be trusted")
+    q = ksub.add_parser("pin", help="A human pins one installed kit in ado.kits.lock.json (a terminal is needed for --apply): records digests of the kit "
+                        "files and agent copies, the scan facts and who reviewed it. Preview by default: digests, scan counts with file:line and a "
+                        "fixed 5-line checklist, never kit text. A --dev install, a symlink and an empty kit dir cannot be pinned. A human approval "
+                        "record, process enforcement and not a sandbox")
+    q.add_argument("id", help="an installed kit id (a-z, 0-9, -)")
+    q.add_argument("--by", default="tech lead", metavar="ROLE", help="a role, never a name (letters, digits, spaces; at most 40; default: tech lead)")
+    q.add_argument("--apply", action="store_true", help="write the lockfile entry (default: preview, nothing written; both stdin and stdout must be terminals)")
 
     p = sub.add_parser("stack", help="Which stacks the repository holds (read-only, local): `stack detect` reads the files tracked at HEAD")
     stsub = p.add_subparsers(dest="stack_command", required=True)
@@ -736,10 +766,10 @@ def main(argv=None):
             parser.error("--root needs --seed")
         if args.force and not args.apply:
             parser.error("--force needs --apply")
-    if args.command == "stack" and args.stack_command == "approve":
+    if (args.command == "stack" and args.stack_command == "approve") or (args.command == "kits" and args.kits_command == "pin"):
         if not stack._ROLE.fullmatch(args.by):
             parser.error("--by must be a role of 1 to 40 letters, digits and spaces")
-        if args.story is not None and not stack.valid_story(args.story):
+        if getattr(args, "story", None) is not None and not stack.valid_story(args.story):
             parser.error("--story must be a work item id (digits only, no leading zero)")
     if args.command == "branch":
         if (args.id is None) == (args.id_from is None):
@@ -761,7 +791,7 @@ def main(argv=None):
         elif args.command == "decisions" and args.resolve:  # local only: no token, no request
             out = _resolve_decision(args)
         elif args.command == "kits":  # local only: no token, no request, no config
-            return _kits_verify(args)
+            return _kits_pin(args) if args.kits_command == "pin" else _kits_verify(args)
         elif args.command == "stack" and args.stack_command == "show":  # local only: no token, no request
             return _stack_show(args)
         elif args.command == "stack" and args.stack_command == "init":  # local write: no token, no request, no gate

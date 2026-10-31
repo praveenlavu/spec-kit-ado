@@ -261,9 +261,8 @@ merge of the fix. This is process enforcement, not a security boundary.
 ## Pinning kits
 
 A third-party kit is code the agent runs. `ado.kits.lock.json` (repo root, committed) records which kits a human reviewed and a digest of
-each, and `ado kits verify` compares the installed kits with it. This release has the digests and the read-only check; `ado kits pin`
-(which writes the lockfile) and the strict `kit-unpinned` / `kit-changed` rules come in later tasks, so for now a lockfile is written by
-hand and no strict rule reads these digests yet.
+each, and `ado kits verify` compares the installed kits with it. `ado kits pin` (a human, in a terminal) writes the lockfile; the strict `kit-unpinned` /
+`kit-changed` rules are not in this release yet, so no strict rule reads these digests yet.
 
 ```json
 {"schema": 1, "kits": {"sf": {"version": "1.0.0", "source": "https://example.com/contoso/sf", "catalog_sha256": null,
@@ -307,6 +306,32 @@ unsafe path sets `"unreadable": true` (the scan is then incomplete, not clean). 
 a security verdict:** fixed text patterns miss obfuscation and a block of YAML it does not parse, so a count of 0 proves nothing, and the
 things only a person can judge (prompt text that steers the agent, scripts that do more than their names say, the maintainer, licence)
 stay with the reviewer.
+
+**Pinning: `ado kits pin <id> [--by ROLE] [--apply]`.** `<id>` must be an installed kit (a registry entry; anything else, including `ado`, an id
+that does not match `[a-z0-9-]{1,40}` or a kit that is not installed, exits 2 with the fixed text `error: kits pin refused: unknown` and the
+id is never echoed; an incomplete scan, that is `"unreadable": true`, refuses too, as `error: kits pin refused: incomplete-scan`: fix or reinstall the kit first). The **preview** (the default) writes nothing and prints JSON: `applied: false`, the `id`, the registry `version`, the
+two digests, `source_recorded` (whether the manifest's `extension.repository` is an acceptable https URL; the URL is kit text, so it is
+recorded in the lock and not printed), the **scan facts** of `kits.scan` (counts, `<relpath>:<line>` locations, hook and tool names only when
+they match their patterns) and `human_checklist`, five fixed lines (read every command and script; open each flagged file:line; judge the
+maintainer; check licence and process fit; and that the pin is only your approval record, `<id>-config.yml` and local config files are not
+vetted, and a `--dev` install cannot be pinned). The preview prints no prose from the kit. What it does show is kit-chosen but pattern-limited: hook names (`[a-z_]{1,40}`), tool names
+(`[A-Za-z0-9._-]{1,40}`) and kit-relative paths (at most 200 characters of `[A-Za-z0-9._/-]`, else `<path #n>`); none can hold an escape
+character, a space or a newline, but they are not fixed text. Reading the kit is the human's job, not the checklist's. When the kit is already pinned the preview adds a fixed `note` that `--apply` **replaces** that entry. **`--apply` refuses (exit 2, fixed text) unless stdin AND stdout are both
+terminals**, tested before any file is read, so the human has the full output in front of them; the check stops accidents and is not a
+security boundary (a pseudo-terminal gives a tty). Preview and `--apply` are separate runs and nothing binds them (as for `stack approve`): `--apply` recomputes everything and pins the kit **as it is now**, so compare the digests in its output with the ones you saw in the preview. It writes
+the entry `{version, source, catalog_sha256, dir_digest, agents_sha256, reviewed: {by, date}, scan: {commands, hooks, scripts, tools,
+flags: {network, installs, writes, secrets, allowed_tools}}}` (`catalog_sha256` is always `null` for now: Spec Kit's catalog cache is not read). `--by` is a role (letters, digits, spaces, at most
+40; never a name; default `tech lead`), validated exactly as `ado stack approve --by`. The write is atomic (a temp file in the repository
+root and `os.replace`, keys sorted, the file's line terminator kept, read back and checked before the rename); an existing lockfile is
+re-validated first (a symlink, a non-regular file or invalid content refuses) and every other kit's entry is kept as it was; on any
+failure the existing lockfile is left byte-identical. Pinning an already pinned kit replaces its entry: upgrading a kit means reading the
+diff and pinning again.
+
+Limits, stated plainly: **`--dev` installs whose registered agent copies are symlinks cannot be pinned** (usually the case: the pin refuses with `symlink`;
+reinstall without `--dev`; a dev install with no registered copies is not caught by this check), as are a symlinked kit dir, an empty kit dir and a kit with no `.registry` entry. **`<id>-config.yml` is not
+vetted** (it is excluded from `dir_digest`, so a project setting can change without a re-pin). The pin is a **human approval record,
+process enforcement, not a sandbox**: it says someone looked at these bytes, it does not run the kit in isolation, and anyone who can edit
+the lockfile can re-pin.
 
 ## Kits that do not write `tasks.md`
 

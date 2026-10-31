@@ -4,6 +4,7 @@
 control character is refused before any hashing, and errors and findings are fixed texts that carry no kit text. Process enforcement,
 not a security boundary: a local digest says "unchanged since a human looked", not "safe"."""
 import hashlib
+import json
 import os
 import re
 import stat
@@ -16,7 +17,7 @@ REGISTRY = ".specify/extensions/.registry"
 MAX_REGISTRY = 1 << 20   # bytes
 MAX_FILE = 16 << 20      # bytes per kit file or agent copy; larger is refused (fail closed)
 MAX_FILES = 5000         # kit files hashed per kit
-_REASONS = ("symlink", "unreadable", "empty", "control-char", "attributes")
+_REASONS = ("symlink", "unreadable", "empty", "control-char", "attributes", "unknown", "incomplete-scan")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")  # a registered command or skill name: one path component
 _VERSION = re.compile(r"[0-9A-Za-z.+-]{1,40}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
@@ -26,7 +27,7 @@ FIX = "review the kit, then have a human pin it from a terminal"
 
 
 class KitError(Exception):
-    """A kit input that cannot be trusted; `reason` is one of symlink, unreadable, empty, control-char, attributes (the message is that word only)."""
+    """A kit input that cannot be trusted; `reason` is one of symlink, unreadable, empty, control-char, attributes, unknown, incomplete-scan (the message is that word only)."""
 
     def __init__(self, reason):
         assert reason in _REASONS
@@ -506,3 +507,94 @@ def scan(root, kit_id):
     if bad:
         out["unreadable"] = True
     return out
+
+
+# ---- pin: the human's approval record in ado.kits.lock.json (a terminal is checked by the CLI; this is process enforcement, not a sandbox) ----
+CHECKLIST = (  # fixed text, printed in the pin preview; nothing here comes from the kit
+    "Read every command and script of the kit: does any prompt text steer the agent against you, or does a script do more than its name says?",
+    "Open each file:line listed under scan.flags and decide whether that network call, install, write or secret name is justified.",
+    "Judge the maintainer: who publishes the kit, and do you trust them with your repository and your tools?",
+    "Check that the licence and the way the kit works fit your project and your process.",
+    "The pin records your approval, nothing more: <id>-config.yml and local config files are not vetted, and a --dev install cannot be pinned.",
+)
+_E_BY = "--by must be a role of 1 to 40 letters, digits and spaces"
+_E_LOCK = f"{LOCK_FILE} cannot be trusted (a symlink, not a regular file, or invalid); nothing was changed"
+_E_LOCK_BACK = f"{LOCK_FILE} could not be read back identical; check the file"
+_E_CHANGED = "the kit or the lockfile changed since the preview; nothing was changed"
+
+
+def _repository(text):
+    """`extension.repository` of a manifest when it is an acceptable https URL, else None (a line scan, as `scan`)."""
+    in_ext = False
+    for raw in text.split("\n"):
+        s = raw.strip()
+        if len(raw) > MAX_LINE or raw.startswith("\t") or not s or s.startswith("#"):
+            continue
+        m = _key(s)
+        if not raw[0].isspace():
+            in_ext = bool(m and m[0] == "extension")
+        elif in_ext and m and m[0] == "repository":
+            url = _scalar(m[1])
+            return url if len(url) <= stack.CAP_URL and stack._url_error(url) is None else None
+    return None
+
+
+def plan_pin(root, kit_id):
+    """What pinning `kit_id` would record: `{"id", "version", "source", "catalog_sha256", "dir_digest", "agents_sha256", "scan",
+    "human_checklist"}`. `catalog_sha256` is always None (Spec Kit's catalog cache is not read). KitError `unknown` when the id is not an
+    installed kit (the id is never echoed); `symlink`, `empty`, `control-char`, `attributes` or `unreadable` from the digests, so a `--dev`
+    install (symlinked agent copies), a symlinked kit dir and an empty kit dir cannot be pinned."""
+    kit = next((k for k in installed(root) if k["id"] == kit_id), None) if isinstance(kit_id, str) else None
+    if kit is None:
+        raise KitError("unknown")
+    base = f".specify/extensions/{kit_id}/"
+    digest, agents = dir_digest(root, kit_id), agents_sha256(root, kit["registered"])
+    manifest = _read_regular(root, base + "extension.yml", MAX_MANIFEST, missing_ok=True)
+    facts = scan(root, kit_id)
+    if facts.get("unreadable"):  # an incomplete scan is never a pass: fix the kit (or reinstall it), then pin
+        raise KitError("incomplete-scan")
+    return {"id": kit_id, "version": kit["version"], "source": _repository(manifest.decode("utf-8", "replace")) if manifest else None,
+            "catalog_sha256": None, "dir_digest": digest, "agents_sha256": agents, "scan": facts, "human_checklist": list(CHECKLIST)}
+
+
+def _lock_entry(plan, by):
+    sc = plan["scan"]
+    return {"version": plan["version"], "source": plan["source"], "catalog_sha256": plan["catalog_sha256"], "dir_digest": plan["dir_digest"],
+           "agents_sha256": plan["agents_sha256"], "reviewed": {"by": by, "date": stack._today().isoformat()},
+           "scan": {"commands": sc["commands"], "hooks": sc["hooks"], "scripts": sc["scripts"], "tools": sc["tools"],
+                    "flags": {k: v["count"] for k, v in sc["flags"].items()}}}
+
+
+def apply_pin(root, plan, by):
+    """Write `plan` (from `plan_pin`) into `<root>/ado.kits.lock.json` as one kit entry with `reviewed {by, date}` and a compact `scan`,
+    keys sorted, the file's line terminator kept, every other kit entry untouched. Refused with a fixed ValueError and nothing changed:
+    a bad `by` (same rule as `stack approve --by`), a kit or agent copy that no longer matches `plan`, an existing lockfile that is a
+    symlink, not a regular file, invalid, or changed while writing. Written through a temp file in the same directory and `os.replace`."""
+    if not (isinstance(by, str) and stack._ROLE.fullmatch(by)):
+        raise ValueError(_E_BY)
+    fresh = plan_pin(root, plan["id"])
+    if any(fresh[k] != plan[k] for k in ("version", "source", "dir_digest", "agents_sha256", "scan")):
+        raise ValueError(_E_CHANGED)
+    try:
+        old = _read_regular(root, LOCK_FILE, stack.MAX_PROFILE, missing_ok=True)
+        data = {"schema": 1, "kits": {}} if old is None else stack.parse_json(old, stack.MAX_PROFILE)
+        if old is not None:
+            read_lock(old)
+    except (KitError, ValueError, ConfigInvalid):
+        raise ValueError(_E_LOCK) from None
+    data["kits"][plan["id"]] = _lock_entry(fresh, by)
+    eol = (re.search(r"\r\n|\n|\r", old.decode("utf-8")) or ["\n"])[0] if old else "\n"
+    text = json.dumps(data, indent=2, sort_keys=True).replace("\n", eol) + eol
+    path = os.path.join(str(root), LOCK_FILE)
+
+    def check(raw):  # before the rename: the bytes read back from the temp file are a lockfile that holds exactly this entry
+        back = stack.parse_json(raw, stack.MAX_PROFILE)
+        if stack.lock_error(raw) or back != data or read_lock(raw)["kits"][plan["id"]]["dir_digest"] != plan["dir_digest"]:
+            raise ValueError(_E_LOCK)
+        if old is None and os.path.lexists(path):
+            raise ValueError(_E_CHANGED)
+    try:
+        stack._atomic_replace(path, text, check, old)
+    except ValueError as e:
+        raise ValueError(_E_LOCK_BACK if str(e) == stack._E_BACK else str(e)) from None
+    return data["kits"][plan["id"]]
