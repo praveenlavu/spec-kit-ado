@@ -411,6 +411,22 @@ def _config(args):
     return Config.load()
 
 
+def _stack_show(args):
+    """`ado stack show`: the config only supplies the mode and strict.test_command (none is advisory; an invalid one fails closed)."""
+    try:
+        cfg = Config.load()
+    except ConfigInvalid:
+        raise
+    except ConfigError:
+        cfg = None
+    result, approved, findings = stack.show(".", cfg.mode if cfg else "advisory", cfg.strict["test_command"] if cfg else None)
+    print(stack.show_md(result, approved) if args.md else json.dumps(result, indent=2))
+    if args.check and findings:
+        print(f"error: stack check failed: {findings} finding(s)", file=sys.stderr)
+        return 2
+    return 0
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="ado", description="Azure DevOps work-item CLI")
     parser.add_argument("--version", action="version", version=__version__)
@@ -555,6 +571,13 @@ def main(argv=None):
     q = stsub.add_parser("detect", help="Detect the stack(s) from the files committed at HEAD (never the working tree) and show why: JSON "
                          "{outcome, stacks, domain_hints}; no commit yet is `unknown` with a note; exit 2 when git cannot be read")
     q.add_argument("--repo", default=".", metavar="DIR", help="the repository (default: the current directory)")
+    q = stsub.add_parser("show", help="The stack profile `ado.stack.json` as status, counts and fixed error texts (JSON, the default); `--md` prints an "
+                         "APPROVED profile as data for the agent; the text of a draft or changed profile is never printed; `--check` exits 2 in "
+                         "strict mode unless the profile is approved, matches strict.test_command and covers every high-confidence root")
+    fmt = q.add_mutually_exclusive_group()
+    fmt.add_argument("--json", action="store_true", help="JSON (default)")
+    fmt.add_argument("--md", action="store_true", help="markdown (the profile text only when approved)")
+    q.add_argument("--check", action="store_true", help="strict mode: exit 2 when there is a finding (advisory: always 0)")
 
     p = sub.add_parser("strict", help="Strict SDD+TDD mode: phase checks (read-only) and `verify` (runs the tests, records the result)")
     ssub = p.add_subparsers(dest="strict_command", required=True)
@@ -630,6 +653,8 @@ def main(argv=None):
             out = _add_decision(args)
         elif args.command == "decisions" and args.resolve:  # local only: no token, no request
             out = _resolve_decision(args)
+        elif args.command == "stack" and args.stack_command == "show":  # local only: no token, no request
+            return _stack_show(args)
         elif args.command == "stack":  # local only: no token, no request, no config
             out = stack.detect(args.repo)
         elif args.command == "strict" and args.strict_command == "override":  # local only: no token, no request

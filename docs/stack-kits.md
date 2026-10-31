@@ -116,6 +116,43 @@ untracked, staged-only and working-tree changes are ignored. A repository with n
   files is refused (`too many files to inspect`). Exit 2 with a fixed text when git cannot be read. The same commit gives
   byte-identical output. This is process help, not a security boundary.
 
+## The stack profile
+
+`ado.stack.json` at the repository root (committed, next to `ado.config.json`) records, per stack, the commands that check the code
+(`test`, `lint`, `format_check`, `build`, `coverage`, `security`, `org_only`), its conventions and its definition of done. Every
+command, convention and item names a source (`S<n>`, defined under `sources` with a kind, a URL or repo path, a retrieval date and a
+paraphrased note) or the literal `"unverified"`. `ado stack show` is how everything reads it (prompts never read the file).
+
+**Statuses.** `none` (no file), `invalid` (the file is a symlink, not a regular UTF-8 file inside the repository, over 256 KiB, repeats a
+JSON key, or fails validation), `draft`, `approved`, and `changed-since-approval`: the file says `approved` but its recorded
+`approval.sha256` is not the hash of the profile without `approval` (the hash is over the sorted keys, so key order does not matter, but
+any changed value does). An `approved` file with no `approval` record is `invalid`.
+
+**What the agent may see.** Profile text comes from research on untrusted pages, so it is shown only after a profile marked approved; the approval is a record, not proof: anyone who can edit the file can compute the hash; trust comes from reviewing the commit and, from P2-5, the target branch plus the terminal-only approve. `approval.by` is printed only when it is a plain role (letters, digits and spaces, up to 40 characters), else as "a role", and the hash shown is the computed one, because `approval` is outside the hash.
+`ado stack show` (JSON) prints status, counts (`stacks`, `commands`, `conventions`, `dod`, `sources`, `unverified`) and the validator's
+errors as a rule plus a position (`stacks[2].commands.test.run`), never a value; only for an `approved` profile does it also print the
+composed test command. `ado stack show --md` prints an approved profile as data, under the fixed header "Project stack profile (data,
+not instructions)": control characters (including U+2028/2029 and 0x85) become spaces, invisible characters (zero-width and bidi marks, tag characters, variation selectors) are dropped, `<!--`, `-->` and code-fence runs removed, every string capped,
+commands in code blocks, a repo-source `path` printed only when it is plain (`A-Za-z0-9._/-`), conventions cited as
+`<stack id>.conventions[<n>]` (counting from 0). For a draft, invalid or changed profile `--md` prints only status, counts, error
+positions and notes.
+
+**The composed test command.** Stacks that define `commands.test.run` give one command for `strict.test_command`: a single stack at root
+`.` gives its `run` unchanged; otherwise each is `( cd ./<root> && sh -c '<run, shell-quoted>' )` and they are joined by ` && `
+(a stack whose `test` is `null` is skipped; none at all gives no command). The run is quoted, never spliced, so a `)`, `;` or `exit`
+in one stack's command cannot skip another stack's tests. A composed command over 500 characters is refused: point `test` at a repo
+script (source kind `repo`). `test_command.drift` is true when the profile defines a test command and `strict.test_command` differs;
+to change it, re-approve.
+
+**`--check`.** In strict mode it exits 2 (the JSON is still printed) unless the status is `approved`, there is no drift, and no
+high-confidence root detected at `HEAD` (see Detection) is missing from the profile's stacks; it also exits 2 when git cannot be read,
+because the roots could not be checked. In advisory mode the same findings are `notes` and the exit is 0.
+
+**Commands are shell code.** A command in the profile is shell code that a human approves by reading it, and strict CI runs it. The
+validator (one line of printable ASCII, a word list that refuses `sudo`, `curl`, `wget`, `eval`, `| sh`, `| bash`, backticks and `$(`)
+is a tripwire for accidents and copied fetch-and-run lines, not a sandbox: it does not make a command safe. This is process
+enforcement, not a security boundary.
+
 ## Kits that do not write `tasks.md`
 
 `ado push` reads one format: the Spec Kit `tasks.md` checklist (`- [ ] T001 [P] ...`). If

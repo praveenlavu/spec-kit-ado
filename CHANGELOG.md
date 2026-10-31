@@ -15,6 +15,16 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   and `pega` are domain hints, and Pega and Appian projects are otherwise `unknown`. Paths are untrusted: printed only when they match
   `A-Za-z0-9._/-` (1 to 200 characters), else as `<path #n>`. Nested roots of the same stack (npm workspaces, Maven/Gradle modules, Cargo workspaces) fold into their nearest ancestor root as evidence (one stack); roots of different stacks stay separate. `note: "hints incomplete"` when a manifest could not be read as asked (read budget of 32, a `package.json` that is not a JSON object or repeats a key); SHA-1 repositories only. No commit is `unknown` with `note: "commit first"`; git failures are exit 2
   with fixed texts; no verb acts on it yet and advisory behaviour is unchanged. See `docs/stack-kits.md` "Detection".
+- `ado stack show [--json|--md] [--check]`: read-only, local view of the stack profile `ado.stack.json`. `stack.read_profile` (a confined
+  working-tree read, or bytes of a git blob), `stack.load_profile` (the profile only when approved), `stack.profile_hash` (sha256 of the
+  profile without `approval`, sorted keys), `stack.compose_test_command` (one stack at `.`: its `run`; otherwise
+  `( cd ./<root> && sh -c '<quoted run>' )` joined by ` && `, null tests skipped, over 500 characters refused) and `stack.render_md`.
+  Status is `none`, `invalid`, `draft`, `approved` or `changed-since-approval`. The text of a profile that is not approved is never
+  printed (status, counts and fixed error texts only); an approved one is printed by `--md` as data with control characters, `<!--`, `-->` and
+  code fences removed. `--check` exits 2 in strict mode unless the profile is approved, matches `strict.test_command` and covers every
+  high-confidence root; in advisory mode drift and unprofiled roots are `notes` and the exit is 0. Commands in a profile are shell code that
+  a human approves; the validator is a tripwire, not a sandbox. Nothing else acts on the profile yet; advisory behaviour is unchanged.
+  See `docs/stack-kits.md` "The stack profile".
 - Config: `mode` (`"advisory"` default, or `"strict"`) and the `strict` object (`test_command`,
   `test_timeout`); in strict mode the effective `gate.block` and `review_block_on` are the
   project's lists plus the strict floor. Invalid values are a config error.

@@ -1228,3 +1228,23 @@ def test_stack_detect_folding_incomplete_note_and_git_environment_documented():
         assert needle in docs, needle
     assert "folds into its nearest ancestor root as extra evidence" in row and "`note: \"hints incomplete\"`" in row and "SHA-1 repositories only" in row
     assert "fold into their nearest ancestor root as evidence" in log and "`note: \"hints incomplete\"`" in log
+
+
+def test_stack_show_documented_with_exposure_rules_and_tripwire_wording():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `stack show"))
+    for needle in ("Read-only, local", "`changed-since-approval`", "never printed", "Project stack profile (data, not instructions)",
+                   "`<stack id>.conventions[<n>]`", "`stack-unprofiled`", "`--check`", "shell code that a human approves", "a tripwire, not a sandbox", "| none |"):
+        assert needle in row, needle
+    docs = _flat("docs/stack-kits.md")
+    for needle in ("## The stack profile", "`changed-since-approval`", "What the agent may see", "never a value", "( cd ./<root> && sh -c '<run, shell-quoted>' )",
+                   "never spliced", "over 500 characters is refused", "A command in the profile is shell code that a human approves",
+                   "a tripwire for accidents and copied fetch-and-run lines, not a sandbox", "process enforcement, not a security boundary"):
+        assert needle in docs, needle
+    assert "shown only after a profile marked approved" in docs and "a human approved" not in docs
+    assert ("the approval is a record, not proof: anyone who can edit the file can compute the hash; trust comes from reviewing the commit "
+            "and, from P2-5, the target branch plus the terminal-only approve") in docs
+    assert "`approval.by` is printed only when it is a plain role" in docs
+    assert "`ado stack show`" in _flat("AGENTS.md") and "ado stack show [--json|--md] [--check]" in _flat("AGENTS.md")
+    assert "`ado stack show` (read-only, local" in _flat("rules/hitl.md")
+    log = _flat("CHANGELOG.md")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack show [--json|--md] [--check]`") < log.index("## 0.2")

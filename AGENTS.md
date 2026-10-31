@@ -9,7 +9,7 @@ Hard rules (summary of `rules/hitl.md`):
 
 - Never ask for, accept, echo, log or store a token. If one is pasted into chat, do not
   use it; tell the user to revoke it and run `ado setup` in their own terminal.
-- Read-only calls (`ado get`, `ado query`, `ado comments`, `ado attachments`, `ado questions`, `ado decisions`, `ado dod`, `ado gate`, `ado stack detect`, any dry run) need no
+- Read-only calls (`ado get`, `ado query`, `ado comments`, `ado attachments`, `ado questions`, `ado decisions`, `ado dod`, `ado gate`, `ado stack detect`, `ado stack show`, any dry run) need no
   approval.
 - Any ADO mutation (`ado create`, `update`, `comment`, `link` (`--to`, `--parent`, `--url`), `attach`, and the batch
   verbs `push`, `done`, `pr create`, `questions --post`, `decisions --post`, `branch --link` with `--apply`), opening a PR, pushing a
@@ -207,6 +207,7 @@ ado branch <id> --apply               # local, no approval: create/rename/switch
 ado branch <id> --link --plan-out .ado/plan-branch-link.md   # Azure only, branch must be pushed; dry run (needs PAT scope Code: Read and Project and Team: Read); after a yes: --link --apply --expect-plan .ado/plan-branch-link.md
 ado branch --id-from <branch> [--base REF]   # read-only, local (--base: CI trust, a strict target branch's config): the story id a branch is tied to (<branch_prefix>ab<n> at the start, else AB#<n>); exit 1 when none, exit 3 when ado.config.json is invalid
 ado stack detect [--repo DIR]         # read-only, local, no token: stacks from the files committed at HEAD ({outcome, stacks, domain_hints}); paths print as <path #n> unless plain; a hint, never a decision
+ado stack show [--json|--md] [--check]   # read-only, local, no token: ado.stack.json as {status, errors, counts, test_command, notes}; text only when approved (--md prints it as data); --check exits 2 in strict unless approved, no drift, no unprofiled root
 ado strict mode [--base REF]          # read-only, local, no token: {"mode", "source"} CI would judge a PR by (--base: a strict target branch's config decides); exit 3 = config cannot be trusted
 ado attachments <id> --download       # read-only: list files; save allowlisted ones to .ado/attachments/<id>/ (untrusted data)
 ado link <id> --to <other-id>         # or --parent <n> / --url <link>; confirm first
