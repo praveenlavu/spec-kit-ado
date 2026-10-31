@@ -1,7 +1,9 @@
+import json
 import os
 import pty
 import re
 import select
+import shutil
 import signal
 import subprocess
 import sys
@@ -185,3 +187,80 @@ def run_in_pty(args, cwd, answer=None, before=None, stdout_pty=True, stdin_pty=T
         if proc.poll() is None:
             proc.kill()
     return proc.returncode, (out if stdout_pty else piped).decode().replace("\r\n", "\n"), err.decode()
+
+
+# ---- a REAL Spec Kit repository (P2-17a): `specify init`, `specify extension add --dev` for the toolkit and for a fictional kit, committed ----
+# Hand-made fixtures held only `.specify/extensions/<kit>/`; a real repo also commits `.specify/init-options.json`, `integration.json`,
+# `extensions.yml`, `.gitignore`, `integrations/`, `memory/`, `scripts/`, `templates/`, `workflows/` and the `.claude/` agent copies,
+# and tracks the toolkit's own `.specify/extensions/ado/`. Built once per session (about a second), copied per test.
+SPECKIT_KIT = "contoso-kit"
+_EXT_PARTS = ("extension.yml", "commands", "rules", "docs", "README.md", "CHANGELOG.md", "LICENSE", "AGENTS.md", "ado-config.template.json")
+_KIT_MANIFEST = f"""schema_version: "1.0"
+
+extension:
+  id: "{SPECKIT_KIT}"
+  name: "Contoso kit (fictional)"
+  version: "0.1.0"
+  description: "A fictional one-command kit."
+  author: "Dana Fictional"
+  repository: "https://example.invalid/contoso/{SPECKIT_KIT}"
+  license: "MIT"
+
+requires:
+  speckit_version: ">=0.9.0"
+
+provides:
+  commands:
+    - name: "speckit.{SPECKIT_KIT}.hello"
+      file: "commands/hello.md"
+      description: "Print a short reminder."
+"""
+
+
+@pytest.fixture(scope="session")
+def speckit_template(tmp_path_factory):
+    """Path of a committed Spec Kit repository on `main`: strict `ado.config.json`, an approved `ado.stack.json`, and an
+    `ado.kits.lock.json` pinning `contoso-kit` to its committed files (the toolkit's `ado` is tracked and unpinned, as in a normal install).
+    Skipped when the `specify` CLI is not on PATH."""
+    specify = shutil.which("specify")
+    if specify is None:
+        pytest.skip("the specify CLI is not installed")
+    from ado import kits  # noqa: PLC0415
+    from tests.test_stack_show import approve, profile  # noqa: PLC0415
+    root = tmp_path_factory.mktemp("speckit-template")
+    repo, kit_src, ext_src = root / "repo", root / "kit-src", root / "ext-src"
+    for d in (repo, kit_src / "commands", ext_src):
+        d.mkdir(parents=True)
+    (kit_src / "extension.yml").write_text(_KIT_MANIFEST)
+    (kit_src / "commands" / "hello.md").write_text("---\ndescription: Print a short reminder.\n---\n\nPrint a short reminder.\n")
+    here = Path(__file__).resolve().parent.parent
+    for part in _EXT_PARTS:
+        (shutil.copytree if (here / part).is_dir() else shutil.copy)(here / part, ext_src / part)
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "NO_COLOR": "1",
+           **{f"GIT_{k}_{f}": v for k in ("AUTHOR", "COMMITTER") for f, v in (("NAME", "Test"), ("EMAIL", "test@example.invalid"))}}
+
+    def run(*cmd):
+        subprocess.run(cmd, cwd=repo, env=env, check=True, capture_output=True, timeout=120)
+    run("git", "init", "-q", "-b", "main")
+    run(specify, "init", "--here", "--force", "--non-interactive", "--integration", "claude", "--script", "sh")
+    run(specify, "extension", "add", "--dev", str(ext_src))
+    run(specify, "extension", "add", "--dev", str(kit_src))
+    run("git", "add", "-A")
+    run("git", "commit", "-q", "-m", "specify init and extensions")
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, env=env, check=True, capture_output=True, text=True).stdout.strip()
+    pin = {"version": "0.1.0", "source": None, "catalog_sha256": None, "dir_digest": kits.dir_digest_at(str(repo), sha, SPECKIT_KIT), "agents_sha256": "a" * 64}
+    (repo / "ado.kits.lock.json").write_text(json.dumps({"schema": 1, "kits": {SPECKIT_KIT: pin}}))
+    (repo / "ado.stack.json").write_text(json.dumps(approve(profile()), indent=1))
+    (repo / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam", "mode": "strict",
+                                                      "strict": {"test_command": "PYTHONPATH=src python3 -m pytest -q"}}))
+    run("git", "add", "-A")
+    run("git", "commit", "-q", "-m", "adopt strict mode")
+    return repo
+
+
+@pytest.fixture
+def speckit_repo(speckit_template, tmp_path, git_env):
+    """A private copy of `speckit_template` (a git repository on `main`)."""
+    repo = tmp_path / "repo"
+    shutil.copytree(speckit_template, repo, symlinks=True)
+    return repo

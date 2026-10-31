@@ -351,6 +351,12 @@ branch like `ado.config.json`.
 `"warnings": ["trust-introducing PR: review ado.stack.json as code"]` from `strict check`, and the `gate` PR comment carries the same line with the JSON key `trust_note`. The note
 fires on every such edit, consistent or not: once merged the edit is in force with no further note (an approved hash is computable by
 anyone), so review it as code. What runs in CI is the merged `strict.test_command`, which `ado stack approve` sets from the profile.
+**The adoption PR (the target is not strict).** With `--base REF`, when the target branch holds no `ado.config.json` or an advisory one and the PR's own
+config is strict, the PR is the one that turns strict mode on, and its own config judges it. It gets the same fixed note
+`trust-introducing PR: review ado.stack.json as code` (`warnings` of `strict check`, `trust_note` and the line in the `gate` comment) whatever it
+contains, and `trust-introducing PR: review ado.kits.lock.json as code` (`kits_trust_note`) when it holds an `ado.kits.lock.json` and the target has none. They are notes,
+never findings, and change no exit code. Nothing is added when the target is strict (its own rules apply), when the PR's config is advisory,
+without `--base`, or when `REF` is no commit here.
 
 **Bootstrap.** When the target branch has no `ado.stack.json`, the stack rules give no finding against a target. The PR that adds the
 first profile must still be sound: its head profile has to be valid, approved and consistent with the head's `strict.test_command`
@@ -492,8 +498,12 @@ the files judged are the ones git **tracks** at the PR head:
 |---|---|
 | each kit in the target lockfile: `kits.dir_digest_at(repo, head, id)` of its tracked files against the pinned `dir_digest` | `.specify/extensions/.registry`, so enabled/disabled and the installed version |
 | a newly tracked `.specify/extensions/<dir>/extension.yml` whose `<dir>` is not in the target lockfile: `kit-unpinned` (a `<dir>` that is no valid id is `#<n>`; a symlink or submodule where an unpinned kit dir would be is also unpinned) | agent copies (`.claude/...`) and `agents_sha256`: a PR that edits only an agent copy passes CI and is caught by `ado kits verify` on a developer's machine |
-| a symlink or submodule entry inside a kit dir (an excluded `<id>-config.yml` too), in place of a kit dir, or in place of `.specify` or `.specify/extensions`: `kit-changed`. A tracked dir below `.specify/extensions/` whose name is no kit id (`SF`, a fullwidth or Cyrillic lookalike), with or without a manifest, is `kit-unpinned` (`#<n>`), and a top-level `.Specify` or `.specify/Extensions` (case or Unicode variants) is `kit-changed`: on a case-insensitive checkout they land in the kit dirs. Names are never echoed | untracked files, ignored files and the contents of `<id>-config.yml` / local config files |
+| a symlink, submodule or file entry in place of `.specify` or `.specify/extensions` (asked as two entries of their own, not by listing `.specify`, which holds many other tracked files in a real Spec Kit repository: `init-options.json`, `integration.json`, `extensions.yml`, `.gitignore`, `templates/`...), or a symlink or submodule entry inside a kit dir (an excluded `<id>-config.yml` too) or in place of a kit dir: `kit-changed`. A tracked dir below `.specify/extensions/` whose name is no kit id (`SF`, a fullwidth or Cyrillic lookalike), with or without a manifest, is `kit-unpinned` (`#<n>`), and a top-level `.Specify` or `.specify/Extensions` (case or Unicode variants) is `kit-changed`: on a case-insensitive checkout they land in the kit dirs. Names are never echoed | untracked files, ignored files and the contents of `<id>-config.yml` / local config files |
 | the PR's own `ado.kits.lock.json` is judged for being sound and present (see below), never used to judge | a kit installed on a developer's machine and never committed |
+
+**The toolkit's own extension is no kit.** `.specify/extensions/ado/` (installed and tracked in a normal install) is excluded in CI exactly as `ado kits verify` leaves `ado` out of the registry: it
+is never `kit-unpinned`, and `ado kits pin ado` is refused. Its files are reviewed as code like any other file of the repository; a PR that replaces its
+directory with a symlink or submodule is outside these rules. A case or Unicode variant (`ADO`) is no id and is still reported as `kit-unpinned` (`#<n>`).
 
 A locked kit with **no tracked files** at the head is a warning, `kit not in the repository: checked locally only (<ids>)`, not a finding (a
 repository that commits no kit dirs is legitimate); that includes a PR that deletes the whole kit dir, so review a PR that removes tracked kit
@@ -529,7 +539,8 @@ In a strict project the target branch decides what CI accepts, so a new stack, p
 1. **The trust PR.** Add `ado.stack.json` (a human ran `ado stack approve --apply`, which also set `strict.test_command`) and, for each
    kit, `ado.kits.lock.json` (a human ran `ado kits pin <id> --apply`). When the target branch has no profile or lockfile yet, CI cannot
    judge the PR against one, so the stack and kit rules are notes for this PR and it carries the flagged note
-   `trust-introducing PR: review ado.stack.json as code` (for the first lockfile, `trust-introducing PR: review ado.kits.lock.json as code`). **The note
+   `trust-introducing PR: review ado.stack.json as code` (for the first lockfile, `trust-introducing PR: review ado.kits.lock.json as code`). The same notes
+   come when the target is advisory and this PR switches `mode` to `strict` (see "The adoption PR" above). **The note
    means the reviewer reads the file as code**: what runs in CI after the merge is the command in the profile. The head files must still be
    sound (valid, approved, consistent with `strict.test_command`; a lockfile that can be read), so merging cannot lock the repository.
 2. **Feature PRs.** Once the profile and lockfile are on the target branch the rules bind: a new high-confidence root is

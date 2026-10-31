@@ -1746,3 +1746,17 @@ def test_review_minor_texts_are_documented_where_behaviour_changed():
     assert "shorten the roots, or edit the draft's `test.run` to call one repo script" in readme and "A seed sets no `kit`" in readme
     assert "`config-invalid`" in agents and "Review minors (P2-16d)" in log and "`kit dir without extension.yml`" in log and "`config-invalid`" in log
     assert "once installed" not in log and "once installed" not in _flat("commands/stack.md")
+
+
+# ---- P2-17a: CI kit rules on a real Spec Kit repository, the toolkit's own extension, the adoption PR's notes ----
+def test_real_repo_kit_fixes_and_adoption_notes_documented():
+    kits, readme, log = _flat("docs/stack-kits.md"), _flat("README.md"), _flat("CHANGELOG.md")
+    for needle in ("**The adoption PR (the target is not strict).**", "turns strict mode on", "never findings, and change no exit code",
+                   "**The toolkit's own extension is no kit.**", "`ado kits pin ado` is refused", "outside these rules", "A case or Unicode variant (`ADO`)",
+                   "asked as two entries of their own", "see \"The adoption PR\" above"):
+        assert needle in kits, needle
+    assert "`.specify/extensions/ado/`) is no kit in CI either" in readme and "carries the two trust notes" in readme
+    for needle in ("CI kit rules on a real Spec Kit repository (P2-17a", "kits.OWN_EXTENSION", "`ADO` is still reported", "(`warnings`, `trust_note`)", "`kits_trust_note`"):
+        assert needle in log, needle
+    for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        assert "carries the trust notes" in _flat(doc), doc

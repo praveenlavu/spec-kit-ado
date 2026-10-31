@@ -301,6 +301,26 @@ def adds_kits_lock(cfg, repo, commit="HEAD"):
     return bool(full) and _head_blob(repo, full, "ado.kits.lock.json", "ado.kits.lock.json at the head commit") is not None
 
 
+def adoption_notes(cfg, repo, base, commit="HEAD"):
+    """`(stack note, kits note)` for a run under the PR's OWN strict config (`cfg.from_target` False) when `base` (the PR's target ref) holds no
+    strict config: this PR is the one that turns strict mode on, so its `ado.stack.json`, `strict.test_command` and `ado.kits.lock.json` are
+    trust files nobody has reviewed as code. The stack note always applies then; the kits note when `commit` holds an `ado.kits.lock.json` and
+    the target has none (as `adds_kits_lock`). `(False, False)` for a target-judged run, an advisory run, no `base` or one that is no commit
+    here. Only commits are read; a target config that cannot be read counts as no strict config (a note too many, never one too few)."""
+    full = _resolve_base(repo, base) if base and not cfg.from_target and cfg.mode == "strict" else ""
+    head = _rev(repo, commit) if full else ""
+    if not (full and head):
+        return False, False
+    try:
+        target = Config.load_from_ref(full, repo)
+    except ConfigInvalid:
+        target = None
+    if target is not None and target.mode == "strict":  # the target judges, and `edits_trust_files` covers a PR that edits its files
+        return False, False
+    lock = "ado.kits.lock.json"
+    return True, _head_blob(repo, head, lock, "ado.kits.lock.json at the head commit") is not None and _head_blob(repo, full, lock, "ado.kits.lock.json at the target branch") is None
+
+
 def _stack_state(c):
     """The profile that judges this run, cached: `{"bootstrap", "status", "profile", "errors"}` (the target's blob in CI, else the working
     tree) plus, in CI, `"head"`: `_head_trust` of the head commit."""
@@ -518,11 +538,16 @@ def _tracked_kits(repo, head):
     `.specify` or `extensions` has a case/Unicode lookalike), or "replaced" when `.specify` or `.specify/extensions` is itself a symlink,
     submodule or file (the kits would live elsewhere), or None when git cannot answer. Names are decoded leniently (an odd one never equals
     a kit id)."""
-    top = _git(repo, "ls-tree", "-z", "--full-tree", "--end-of-options", head, "--", ".specify", ".specify/extensions")
-    if top is None or top.returncode:
-        return None
-    if any(rec.partition(b"\t")[0].split(b" ")[0] != b"040000" for rec in top.stdout.split(b"\0") if rec):
-        return "replaced"
+    for path in (".specify", ".specify/extensions"):  # one pathspec per call: two make git list the children of `.specify` too
+        top = _git(repo, "ls-tree", "-z", "--full-tree", "--end-of-options", head, "--", path)
+        if top is None or top.returncode:
+            return None
+        for rec in (r for r in top.stdout.split(b"\0") if r):
+            meta, _, name = rec.partition(b"\t")
+            if name != path.encode():  # git answered about something else: not an answer
+                return None
+            if meta.split(b" ")[0] != b"040000":
+                return "replaced"
     roots, inner = _lookalikes(repo, head, (), ".specify"), _lookalikes(repo, head, ("--", ".specify/"), "extensions")
     if roots is None or inner is None:
         return None
@@ -571,7 +596,9 @@ def _kits_ci(c):
     present, manifests, entries, lookalike = tracked
     if lookalike:
         problems.append(_KIT_LOOKALIKE)
-    odd = {n for n, mode in entries.items() if mode in (b"120000", b"160000") and not n.startswith(".")}  # symlinked or submodule dirs
+    own = kits.OWN_EXTENSION  # the toolkit's own `ado` is reviewed as code, not pinned (a case variant such as `ADO` is no id and stays reported)
+    present, manifests = present - {own}, manifests - {own}
+    odd = {n for n, mode in entries.items() if mode in (b"120000", b"160000") and not n.startswith(".") and n != own}  # symlinked or submodule dirs
     # a tracked dir whose name is no kit id (`SF`, a fullwidth or Cyrillic lookalike) would land in a pinned kit dir on a case-insensitive
     # checkout, with or without a manifest; dot names (.cache) and plain files at the top are not kit dirs
     odd |= {n for n in present if not n.startswith(".") and not stack._ID.fullmatch(n)}
@@ -1135,10 +1162,11 @@ def _used(ids):
     return sorted(ids, key=lambda i: int(i[1:]))
 
 
-def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False):
+def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False, target=None):
     """Read-only. `overrides_used`: the ids of the override lines that let a finding through (the apply paths stamp them used).
     `head`: HEAD, a branch or a commit id; `base` (pr): the ref the PR targets, red and green must lie in base..head; `push`: as
-    `pr create --push` (the remote head is not compared)."""
+    `pr create --push` (the remote head is not compared); `target`: the CLI's `--base REF` (CI), which adds the adoption notes of
+    `adoption_notes` to `warnings` (the default base of the `pr` phase is not a CI target and adds none)."""
     if phase not in PHASES:
         raise ValueError(f"unknown phase (valid: {', '.join(PHASES)})")
     mode = client.config.mode
@@ -1156,9 +1184,10 @@ def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False)
            "overrides_used": sorted(used, key=lambda i: int(i[1:]))}
     warnings = _fidelity_warnings(ctx) if phase in ("pr", "done") else []
     head = _stack_state(ctx)["head"]
-    if head and _stack_note(ctx.cfg, head):  # the PR edits the profile, the lockfile or strict.test_command: review it as code
+    adopts, adopts_kits = adoption_notes(ctx.cfg, repo, target, ctx.rev)  # the target is not strict: this PR turns strict mode on
+    if adopts or (head and _stack_note(ctx.cfg, head)):  # the PR edits the profile, the lockfile or strict.test_command: review it as code
         warnings.append(gate.TRUST_NOTE)
-    warnings += _kits_state(ctx)["warnings"]
+    warnings += _kits_state(ctx)["warnings"] + ([gate.KITS_TRUST_NOTE] if adopts_kits else [])
     found = _detect_state(ctx)
     if found and (note := _ignored_roots_warning(found.get("ignored_roots", {}).get("count", 0))):  # roots no profile can name: outside the stack rules
         warnings.append(note)

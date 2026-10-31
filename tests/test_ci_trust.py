@@ -667,8 +667,8 @@ def test_bootstrap_applies_only_when_the_target_lacks_a_profile(tmp_path, monkey
     d = tmp_path / "local"
     d.mkdir()
     _ci(d, monkeypatch, git_env, None, target_cfg=None, head_cfg=STACK_STRICT)  # no target config: the PR's own strict config, a local one
-    rc, out = _run(capsys)
-    assert rc == 2 and _rules_of(out) == ["stack-profile-missing"] and "warnings" not in out
+    rc, out = _run(capsys)  # (P2-17a: no strict target config, so this PR turns strict mode on: the stack note applies)
+    assert rc == 2 and _rules_of(out) == ["stack-profile-missing"] and out["warnings"] == [NOTE]
     d = tmp_path / "plain"
     d.mkdir()
     _ci(d, monkeypatch, git_env, None, head_files={"ado.stack.json": json.dumps(approve(profile()))})

@@ -14,6 +14,7 @@ from .config import ConfigInvalid, _has_control
 
 LOCK_FILE = "ado.kits.lock.json"
 REGISTRY = ".specify/extensions/.registry"
+OWN_EXTENSION = "ado"  # the toolkit's own extension id: installed with it, reviewed as code, never a kit to pin (local and CI rules alike)
 MAX_REGISTRY = 1 << 20   # bytes
 MAX_FILE = 16 << 20      # bytes per kit file or agent copy; larger is refused (fail closed)
 MAX_FILES = 5000         # kit files hashed per kit
@@ -104,7 +105,7 @@ def installed(root="."):
         raise KitError("unreadable")
     out = []
     for n, (kit_id, e) in enumerate(data["extensions"].items(), 1):
-        if kit_id == "ado":
+        if kit_id == OWN_EXTENSION:
             continue
         try:
             if not (isinstance(kit_id, str) and stack._ID.fullmatch(kit_id) and isinstance(e, dict)):

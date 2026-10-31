@@ -208,7 +208,7 @@ def dispatch(client, args):
         base = args.base
         if base is None and args.phase == "pr" and client.config.mode == "strict":
             base = strict.default_base(".")  # "" when origin/HEAD is not set: the finding base-unknown, never a pass
-        return strict.check(client, args.id, args.phase, head=args.head, base=base)
+        return strict.check(client, args.id, args.phase, head=args.head, base=base, target=args.base)
     if args.command == "pr":
         return _pr(client, args)
     if args.command == "done":
@@ -845,6 +845,11 @@ def main(argv=None):
                     out["kits_trust_note"] = gate.KITS_TRUST_NOTE
             elif args.command == "gate" and args.base is not None and client.config.mode == "strict":  # a strict PR config under --base
                 out["config"] = gate.PR_CONFIG_NOTE
+                stack_note, kits_note = strict.adoption_notes(client.config, args.src, args.base)  # the target is not strict: this PR turns it on
+                if stack_note:
+                    out["trust_note"] = gate.TRUST_NOTE
+                if kits_note:
+                    out["kits_trust_note"] = gate.KITS_TRUST_NOTE
     except (ConfigError, AuthError, dod.DodExists, ValueError) as e:
         # 3 (invalid config) lets CI fail closed: `gate`, and `branch --id-from` (the Azure gate reads its story id with it)
         fail_closed = args.command == "gate" or (args.command == "branch" and args.id_from is not None) or (
