@@ -45,11 +45,11 @@ class DownClient(FakeClient):
         raise AdoError("HTTP 503 Service Unavailable")
 
 
-def _neutral():
-    """An approved profile that defines no test command (so no drift, whatever strict.test_command says): what the older tests in this
-    module sit behind, since a strict project now needs an approved ado.stack.json."""
+def _neutral(command=None):
+    """An approved profile whose test command is `command` (so no drift: the composed command is the config's), or defines none when the
+    config has none: what the older tests in this module sit behind, since a strict project now needs an approved ado.stack.json."""
     p = profile()
-    p["stacks"][0]["commands"]["test"] = {"run": None, "why": "the older strict tests set their own command"}
+    p["stacks"][0]["commands"]["test"] = {"run": command, "source": "unverified"} if command else {"run": None, "why": "the older strict tests set no command"}
     return approve(p)
 
 
@@ -60,7 +60,7 @@ def _project(tmp_path, ledger=None, files=None, mode="strict", test_command="pyt
              cls=FakeClient, prof=_NEUTRAL):
     (tmp_path / "dod").mkdir(exist_ok=True)
     if prof is not None:
-        put(tmp_path, _neutral() if prof is _NEUTRAL else prof)
+        put(tmp_path, _neutral(test_command) if prof is _NEUTRAL else prof)
     if ledger is not False:
         (tmp_path / "dod" / "DoD_1001.md").write_text(ledger if ledger is not None else _ledger(), encoding="utf-8")
     for name, text in (FILES if files is None else files).items():
@@ -198,9 +198,12 @@ def test_tasks_file_with_no_tasks_is_tasks_missing(tmp_path):
 
 
 def test_test_command_unset(tmp_path):
-    res, _ = _check(tmp_path, test_command=None)
+    res, _ = _check(tmp_path, test_command=None)  # a profile exists (P2-16a): the fix is the human's override, not a hand edit
     assert _rules(res) == ["test-command"]
-    assert res["findings"][0]["fix"] == "set strict.test_command in ado.config.json"
+    assert "set strict.test_command" not in res["findings"][0]["fix"] and "ado strict override 1001 l2" in res["findings"][0]["fix"]
+    (tmp_path / "np").mkdir()
+    res, _ = _check(tmp_path / "np", test_command=None, prof=None)  # no profile: the old text
+    assert res["findings"][0]["rule"] == "test-command" and res["findings"][0]["fix"] == "set strict.test_command in ado.config.json"
 
 
 @pytest.mark.parametrize("unreadable", [False, True])
@@ -244,7 +247,7 @@ def _cli(tmp_path, monkeypatch, cfg_extra, **kw):
 
 
 def test_cli_exit_2_lists_findings_json(tmp_path, monkeypatch, capsys):
-    m = _cli(tmp_path, monkeypatch, {"mode": "strict"}, files={"spec.md": "x"})
+    m = _cli(tmp_path, monkeypatch, {"mode": "strict"}, files={"spec.md": "x"}, test_command=None)
     assert m.main(["strict", "check", "1001", "--phase", "implement"]) == 2
     cap = capsys.readouterr()
     out = json.loads(cap.out)
@@ -687,7 +690,7 @@ def test_missing_test_command_refused_with_fix(tmp_path, git_env, monkeypatch):
     client, s = _scenario(tmp_path, git_env, command=None)
     monkeypatch.setattr(strict, "run_configured", lambda *a: pytest.fail("no test may run"))
     res = _verify(tmp_path, client)
-    assert _vrules(res) == ["test-command"] and "strict.test_command" in res["findings"][0]["fix"]
+    assert _vrules(res) == ["test-command"] and "ado strict override 1001 l2" in res["findings"][0]["fix"]
 
 
 def test_l1_failure_refuses_before_any_test_runs(tmp_path, git_env, monkeypatch):
@@ -1037,13 +1040,15 @@ def _fid(*lines, sha="abcdef123456", day="2026-10-30", sup=False):
     return f"### AC fidelity — {day} @ {sha}{' (superseded)' if sup else ''}\n\n" + "".join(lines) + "\n"
 
 
-def _story(tmp_path, git_env, dec=None, review="no", record=True, fidelity=True):
+def _story(tmp_path, git_env, dec=None, review="no", record=True, fidelity=True, config=None):
     """A repo with a spec commit, a red and a green commit, a committed ledger with a verification record, a review and an AC
     fidelity block (`fidelity`: True = a passing one, False = none, a str = that text with `{sha}` the code head; and `dec` as
-    Decisions_1001.md); returns (client, SimpleNamespace(base, red, green))."""
+    Decisions_1001.md; `config`: a dict committed as ado.config.json with the spec); returns (client, SimpleNamespace(base, red, green))."""
     repo = _repo(tmp_path, git_env)
     base = git(repo, "rev-parse", "--short", "HEAD")
-    _project(tmp_path, ledger=False)
+    _project(tmp_path, ledger=False, test_command=CMD)  # the profile (committed here) must already be the one the record is made under
+    if config is not None:  # the PR's own config, committed before the record so that a CI run against it is not stale
+        (tmp_path / "ado.config.json").write_text(json.dumps(config))
     commit(repo, "spec")
     red, green = _pair(repo)
     client = _project(tmp_path, ledger=_ledger_rows(("AC-1", RED_NOTE.format(red, green))), test_command=CMD)
@@ -1890,14 +1895,14 @@ def test_stack_profile_drift(tmp_path, git_env, real_detect):
     assert "stack-profile-drift" in _rules(unset)  # the profile defines a command and the config has none: they differ
 
 
-def test_drift_only_when_profile_defines_command(tmp_path, git_env, real_detect):
+def test_null_test_profile_makes_any_config_command_drift(tmp_path, git_env, real_detect):
     p = profile()
     p["stacks"][0]["commands"]["test"] = {"run": None, "why": "tests run on the platform"}
-    for n, cmd in enumerate(("pytest -q", None)):
+    for n, cmd in enumerate(("pytest -q", None)):  # (P2-16a: a command under a profile that defines none is a hand edit; none is the unset rule)
         d = tmp_path / f"r{n}"
         d.mkdir()
         res = _impl(_stk(d, git_env, approve(p), test_command=cmd), d)
-        assert "stack-profile-drift" not in _rules(res) and _rules(res) == (["test-command"] if cmd is None else [])
+        assert _rules(res) == (["test-command"] if cmd is None else ["stack-profile-drift"])
 
 
 def test_null_test_with_l2_override_passes(tmp_path, git_env, real_detect):
@@ -1975,8 +1980,8 @@ def test_fix_texts_name_the_seed_verb(tmp_path, git_env, real_detect):
 
 def test_unprofiled_root_is_printed_through_safe_path(tmp_path, git_env, real_detect):
     client = _stk(tmp_path, git_env, approve(profile()), files={"my app/package.json": "{}\n", "ok-dir/package.json": "{}\n"})
-    detail = _only(_impl(client, tmp_path), "stack-unprofiled")["detail"]
-    assert "ok-dir" in detail and "<path #" in detail and "my app" not in detail
+    detail = _only(_impl(client, tmp_path), "stack-unprofiled")["detail"]  # (P2-16a: "my app" is no root a profile can name: ignored, not listed)
+    assert "ok-dir" in detail and detail.startswith("1 ") and "my app" not in detail and "<path #" not in detail
 
 
 def test_unprofiled_detection_failure_is_a_finding(tmp_path, git_env, real_detect, monkeypatch):

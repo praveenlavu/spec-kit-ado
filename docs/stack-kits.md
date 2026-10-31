@@ -109,6 +109,15 @@ untracked, staged-only and working-tree changes are ignored. A repository with n
   `65be5f2`, committed 2026-10-21) lists `@pega/*` packages (for example `@pega/react-sdk-components`) and `ado stack detect` on that
   checkout printed `typescript` with `pega: true`. That is one repository, a Constellation front end; nothing shows the scope marks every
   Pega project, and a Pega rule-base application has no such file.
+- **Roots a profile cannot name (`ignored_roots`):** a profile `root` is `.` or segments of `[A-Za-z0-9._-]` that start with a letter, digit
+  or `_` (at most 200 characters; the validator is unchanged). A detected root that does not fit, such as `.github/tools` (a dot
+  directory), `my app` or `café`, would be a permanent `stack-unprofiled` finding that no profile edit and no override could clear, so it is
+  not reported as a stack and counts for nothing in `outcome`, `show --check` or `strict check` findings. It is listed, not hidden: `detect`
+  gains `"ignored_roots": {"count": 3, "paths": [".github/tools", "<path #3>", "<path #4>"]}` (the key is absent when there is none; `paths`
+  lists at most 5, through the plain-path rule), and `strict check` (the `implement`, `pr` and `done` phases, locally and in CI) and the `gate`
+  PR comment (`ignored_roots_note`, when the target branch's config judged the run) carry one fixed **warning**, never a finding, so it cannot
+  block a PR: `N detected root(s) cannot be named in a profile and are not covered by it: review them as code` (a count, no path). Such a
+  project is outside the profile and its stack rules: review it as code, or rename it to a path the profile grammar allows if it must be covered.
 - **Untrusted paths:** in CI a PR controls every path, so a root or evidence path is printed only when it is 1 to 200 characters of
   `A-Za-z0-9._/-`; anything else (a space, a control character, a non-UTF-8 byte, a longer path) is printed as `<path #n>`. Ids,
   evidence and hints come from the marker table and fixed words, never from file contents. A manifest is read only from the commit,
@@ -257,13 +266,17 @@ in the override table): an unknown or unapproved stack stops the run.
 - **`stack-profile-*`.** `stack-profile-missing` (no `ado.stack.json`), `stack-profile-invalid` (fails the checks above; the finding
   carries a count, not the errors: run `ado stack show`), `stack-profile-draft`, `stack-profile-changed` (the hash no longer matches) and
   `stack-profile-drift`: the approved profile composes a test command and `strict.test_command` differs (or the composed command is over
-  500 characters). A profile whose `test` is `null` everywhere compares nothing, so no drift fires; the `test-command` finding is then
-  covered only by a per-story `l2` (or `test-command`) override, which is the recorded waiver.
+  500 characters), **or** no stack defines a test command (`test` is `null` everywhere) and `strict.test_command` is set to anything: a profile
+  that composes no command leaves nothing to hand-set, so a hand edit is drift here too (locally, against the target branch's profile and
+  config in CI, and in the head copy checks below). The `test-command` finding for an unset command then says a human runs
+  `ado strict override <id> l2 --reason "<why>"` (a per-story `l2` or `test-command` override is the recorded waiver); where a profile
+  defines a command the fix also names `ado stack approve --apply`, which sets it. With no profile the fix stays "set `strict.test_command`".
 - **`stack-unprofiled`.** `ado stack detect` runs on the commit being judged (the PR head in CI) and every high-confidence root must be the
   `root` of a profile stack. A stack with a free-form id covers its root; one with a detect id covers only its own family (`node` and
   `typescript`, `dart` and `flutter` are one each: the `node-typescript` seed has id `typescript` while detection may say `node`), so a
   Python profile at `.` does not cover a TypeScript project added at `.`; a medium-confidence root is not a finding; roots are printed through the plain-path rule (`<path #n>`
-  otherwise). When detection cannot run the finding says so (fail closed).
+  otherwise). `ado stack show --check` applies the very same rule (one helper, `stack.uncovered`), so it and `strict check` never disagree on
+  coverage. A root no profile can name (see "Detection", `ignored_roots`) is never a finding; it is a fixed warning (`N detected root(s) cannot be named in a profile and are not covered by it: review them as code`). When detection cannot run the finding says so (fail closed).
 
 **Where the profile comes from.** A local strict config reads the working-tree `ado.stack.json`. In CI (`--base`, a strict config on the
 target branch) the profile, `ado.kits.lock.json` and `strict.test_command` all come from the **target branch's commit**: `_config` reads
@@ -273,7 +286,7 @@ trust files are invalid", not that the config is). So editing the profile, the l
 command or the verdict **in that PR's own run**. The PR's copies are judged as well, because they become the target's on merge: when the
 head's profile or `strict.test_command` differs from the target's, `strict check` also refuses a head profile that is invalid, unreadable,
 a draft, changed since approval, deleted, or that does not compose to the head's `strict.test_command` (a null `test` with no command is
-consistent), with the same `stack-profile-*` ids and the detail "at the head commit". These findings only add to the target's verdict.
+consistent; a null `test` with a command is drift), with the same `stack-profile-*` ids and the detail "at the head commit". These findings only add to the target's verdict.
 `ado strict verify` runs only the ledger, L1 and test-command rules and applies no stack or kit rule. Protect the files on the target
 branch like `ado.config.json`.
 

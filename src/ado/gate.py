@@ -366,6 +366,12 @@ TARGET_CONFIG_NOTE = "target branch (strict)"  # `result["config"]` when CI judg
 PR_CONFIG_NOTE = "pull request"  # ... or with the PR's own strict config, when `--base` was given
 TRUST_NOTE = "trust-introducing PR: review ado.stack.json as code"  # this PR edits the profile, the lockfile or strict.test_command
 KITS_TRUST_NOTE = "trust-introducing PR: review ado.kits.lock.json as code"  # this PR adds the first kits lockfile (the target has none)
+IGNORED_ROOTS_NOTE = re.compile(r"[0-9]{1,6} detected root\(s\) cannot be named in a profile and are not covered by it: review them as code")
+
+
+def ignored_roots_note(n):
+    """The one fixed warning for `n` detected roots a profile cannot name (a count, never a path); `render_summary` prints it only in this shape."""
+    return f"{n} detected root(s) cannot be named in a profile and are not covered by it: review them as code"
 
 
 def render_summary(result):
@@ -374,6 +380,8 @@ def render_summary(result):
     source = f"config: {result['config']}\n" if result.get("config") in (TARGET_CONFIG_NOTE, PR_CONFIG_NOTE) else ""
     source += f"{TRUST_NOTE}\n" if result.get("trust_note") == TRUST_NOTE else ""
     source += f"{KITS_TRUST_NOTE}\n" if result.get("kits_trust_note") == KITS_TRUST_NOTE else ""
+    note = result.get("ignored_roots_note")
+    source += f"{note}\n" if isinstance(note, str) and IGNORED_ROOTS_NOTE.fullmatch(note) else ""
     if "traceability" not in result:  # no / unreadable ledger: advisory note only
         return head + f"Advisory: {_code(result.get('note', ''))}\n" + source
     trace, drift = result["traceability"], result["drift"]

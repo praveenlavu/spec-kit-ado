@@ -1663,3 +1663,15 @@ def test_pega_hint_source_is_cited_and_matches_the_detection_rule():
     for needle in ("**Where the hint comes from:**", "`stack.py`", "starts with `@pega/`", "`pegasystems/react-sdk`", "2026-10-31", "`65be5f2`",
                    "That is one repository", "nothing shows the scope marks every Pega project"):
         assert needle in docs, needle
+
+
+# ---- P2-16a: one coverage rule, drift for a profile without a test command, roots a profile cannot name ----
+def test_coverage_drift_and_ignored_roots_documented():
+    kits, readme, conf, log, agents = (_flat(d) for d in ("docs/stack-kits.md", "README.md", "docs/configuration.md", "CHANGELOG.md", "AGENTS.md"))
+    for needle in ("`ignored_roots`", "`stack.uncovered`", "`strict.test_command` is set to anything",
+                   "`ado strict override <id> l2 --reason \"<why>\"`", "never a finding", "a null `test` with a command is drift"):
+        assert needle in kits, needle
+    assert "`ignored_roots: {count, paths}`" in readme and "ANY non-empty `strict.test_command` is drift" in readme
+    assert "`stack.uncovered`" in log and "`ignored_roots`" in log and "any non-empty `strict.test_command`" in log
+    assert "so is any `strict.test_command` at all when no stack defines a test command" in conf
+    assert "`ado strict override <id> l2`" in agents

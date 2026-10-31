@@ -435,10 +435,13 @@ def test_show_reports_drift_in_the_config_command(repo, capsys):
     assert res["test_command"]["drift"] is False and res["notes"] == []
     p = approve(profile())
     p["stacks"][0]["commands"]["test"] = {"run": None, "why": "none"}
-    put(repo, approve(p))  # a profile that defines no test command: nothing to compare
+    put(repo, approve(p))  # a profile that defines no test command: any config command is a hand edit
     config(repo, test_command="anything")
     res = json.loads(show(capsys)[1])
-    assert res["test_command"] == {"profile": None, "config": "anything", "drift": False} and res["notes"] == []
+    assert res["test_command"] == {"profile": None, "config": "anything", "drift": True}
+    assert res["notes"] == ["stack-profile: strict.test_command is set, but the approved profile defines no test command"]
+    config(repo)
+    assert json.loads(show(capsys)[1])["test_command"]["drift"] is False
 
 
 def test_show_an_over_long_composed_command_is_a_note(repo, capsys):
@@ -467,11 +470,10 @@ def test_advisory_unprofiled_root_is_a_note(repo, capsys):
     assert json.loads(show(capsys)[1])["notes"] == []
 
 
-def test_unprofiled_root_that_is_not_plain_is_named_by_position(repo, capsys):
-    commit_files(repo, {"pyproject.toml": "[project]\n", "we b/package.json": "{}"})
+def test_unprofiled_root_that_is_not_plain_is_ignored_not_a_note(repo, capsys):
+    commit_files(repo, {"pyproject.toml": "[project]\n", "we b/package.json": "{}"})  # no profile can name it (P2-16a): listed by detect, no note
     put(repo, approve(profile()))
-    notes = json.loads(show(capsys)[1])["notes"]
-    assert notes == ["stack-unprofiled: <path #3> (node) is a high-confidence root that no profile stack covers"]
+    assert json.loads(show(capsys)[1])["notes"] == []
 
 
 def test_show_check_exit_codes_strict_vs_advisory(repo, capsys):

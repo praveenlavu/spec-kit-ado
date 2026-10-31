@@ -281,11 +281,9 @@ def test_control_char_path_printed_as_placeholder(tmp_path, capsys):
     code, out, err = cli(capsys, tmp_path)
     assert code == 0 and "\x1b" not in out and "31m" not in out and "il\\nname" not in out and "sp ace" not in out
     res = json.loads(out)
-    roots = {s["id"]: s["root"] for s in res["stacks"]}
-    assert roots["rust"] == "ok-dir" and roots["python"].startswith("<path #") and roots["go"].startswith("<path #")
-    # printed items are numbered in output order: python root #1 and evidence #2, rust #3 and #4, go #5 and #6
-    ev = {s["id"]: s["evidence"] for s in res["stacks"]}
-    assert ev == {"python": ["<path #2>"], "rust": ["ok-dir/Cargo.toml"], "go": ["<path #6>"]} and roots["python"] == "<path #1>"
+    # (P2-16a) roots no profile can name are no stacks; they are counted and listed through safe_path, numbered after the stacks' own paths
+    assert [(s["id"], s["root"], s["evidence"]) for s in res["stacks"]] == [("rust", "ok-dir", ["ok-dir/Cargo.toml"])]
+    assert res["ignored_roots"] == {"count": 2, "paths": ["<path #3>", "<path #4>"]}
 
 
 def test_non_utf8_path_is_a_placeholder(tmp_path):
@@ -295,7 +293,8 @@ def test_non_utf8_path_is_a_placeholder(tmp_path):
     subprocess.run(["git", "-C", str(tmp_path), "update-index", "--add", "-z", "--index-info"], input=idx, check=True, capture_output=True)
     git(tmp_path, "commit", "-q", "-m", "latin1")
     res = stack.detect(tmp_path)
-    assert {s["id"]: s["root"] for s in res["stacks"]}["rust"].startswith("<path #")
+    assert [(s["id"], s["root"]) for s in res["stacks"]] == [("go", "a")]  # (P2-16a) no profile can name a latin-1 root: ignored, listed
+    assert res["ignored_roots"] == {"count": 1, "paths": ["<path #3>"]}
 
 
 def test_safe_path():

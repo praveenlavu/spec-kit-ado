@@ -129,8 +129,8 @@ def test_a_record_made_under_another_command_is_a_mismatch(tmp_path, git_env, ph
     client, _ = _story(tmp_path, git_env)
     assert _pr(tmp_path, client, phase)["ok"] is True
     client.config.strict["test_command"] = "true"  # a locally weakened (or just different) command
-    res = _pr(tmp_path, client, phase)
-    assert res["ok"] is False and _rules(res) == ["record-command-mismatch"]
+    res = _pr(tmp_path, client, phase)  # (the story's approved profile composes the recorded command, so the weaker one is also drift)
+    assert res["ok"] is False and _rules(res) == ["record-command-mismatch", "stack-profile-drift"]
     assert "ado strict verify 1001" in res["findings"][0]["fix"]
     assert hashlib.sha256(b"true").hexdigest()[:12] not in json.dumps(res)  # no hash is echoed
 
@@ -139,7 +139,7 @@ def test_a_record_made_under_another_command_is_a_mismatch(tmp_path, git_env, ph
 def test_an_unset_command_with_a_record_present_is_a_mismatch(tmp_path, git_env, phase):
     client, _ = _story(tmp_path, git_env)
     del client.config.strict["test_command"]
-    assert _rules(_pr(tmp_path, client, phase)) == ["record-command-mismatch"]
+    assert _rules(_pr(tmp_path, client, phase)) == ["record-command-mismatch", "stack-profile-drift"]  # an unset command differs from the profile's too
 
 
 def test_a_record_with_no_command_line_is_a_mismatch(tmp_path, git_env):
@@ -155,8 +155,8 @@ def test_an_l2_override_covers_the_mismatch(tmp_path, git_env):
     client.config.strict["test_command"] = "true"
     DEC(tmp_path).write_text(decisions.render_file(1001) + _d(1, "skip l2", kind="override", posted=True))
     commit(tmp_path, "override")
-    res = _pr(tmp_path, client, "pr")
-    assert res["ok"] is True and res["overrides_used"] == ["D1"]
+    res = _pr(tmp_path, client, "pr")  # the override covers the record; the stack drift (the profile composes the recorded command) is not overridable
+    assert _rules(res) == ["stack-profile-drift"] and res["overrides_used"] == ["D1"]
 
 
 def test_ci_judges_the_record_under_the_target_branchs_command(tmp_path, monkeypatch, capsys, git_env):
@@ -166,8 +166,8 @@ def test_ci_judges_the_record_under_the_target_branchs_command(tmp_path, monkeyp
     (tmp_path / "ado.config.json").write_text(json.dumps(weak))
     argv = ["strict", "check", "1001", "--phase", "pr"]
     _target(tmp_path, {**STRICT, "strict": {"test_command": CMD}}, _full(tmp_path, s.base))
-    rc, out = _cli(mod, capsys, *argv, "--base", "origin/trunk")  # the recorded command is the target's: fine
-    assert rc == 0, out
+    rc, out = _cli(mod, capsys, *argv, "--base", "origin/trunk")  # the recorded command is the target's: no mismatch (the weak head copy is stack drift)
+    assert rc == 2 and _rules(out) == ["stack-profile-drift"] and "at the head commit" in out["findings"][0]["detail"], out
     _target(tmp_path, {**STRICT, "strict": {"test_command": "pytest -q"}}, _full(tmp_path, s.base))
     rc, out = _cli(mod, capsys, *argv, "--base", "origin/trunk")  # the target's command is another one: the record is a mismatch
-    assert rc == 2 and _rules(out) == ["record-command-mismatch"]
+    assert rc == 2 and _rules(out) == ["record-command-mismatch", "stack-profile-drift"]  # the head copy's config (here none) differs from its profile too

@@ -97,7 +97,7 @@ class _Ctx:
         self.ledger = gate._read(Path(repo) / dod.dod_file(self.cfg.dod_path, story_id), repo, set())
         spec_dir = dod.ledger_spec_dir(self.ledger) if self.ledger is not None else None
         self.spec_dir = spec_dir.strip() or None if spec_dir else None  # a CRLF ledger leaves `\r` on the header value
-        self._files, self._stack, self._head, self._kits = {}, None, None, None
+        self._files, self._stack, self._head, self._kits, self._detect = {}, None, None, None, None
         path = Path(repo) / decisions.decisions_file(self.cfg.dod_path, story_id)
         md = gate._read(path, repo, set()) if os.path.lexists(path) else None  # confined like the ledger: no symlink, <= 1 MiB
         self.decisions_md = md or ""
@@ -197,10 +197,26 @@ def _board(c):
     return [_finding("board-task-missing", f"{n} task(s) in tasks.md have no Task on the board", f"ado push {c.id} --apply")]
 
 
+def _override_l2(c):
+    return f"a human runs `ado strict override {c.id} l2 --reason \"<why>\"` in their own terminal window"
+
+
+def _test_command_fix(c):
+    """Where a profile exists, strict.test_command is the profile's (a hand edit is drift): approval sets it, or a human waives the rule."""
+    res = stack.profile_for(c.cfg, c.repo)
+    if res["status"] == "none":
+        return "set strict.test_command in ado.config.json"
+    try:
+        sets = res["status"] == "approved" and stack.compose_test_command(res["profile"]) is not None
+    except ValueError:
+        sets = False
+    return (f"{_APPROVE} to set it from the profile, or " if sets else "") + _override_l2(c)
+
+
 def _test_command(c):
     if c.cfg.strict.get("test_command"):
         return []
-    return [_finding("test-command", "strict.test_command is not set", "set strict.test_command in ado.config.json")]
+    return [_finding("test-command", "strict.test_command is not set", _test_command_fix(c))]
 
 
 # ---- stack profile rules (D§5): `ado.stack.json` must be approved, unchanged since, and agree with strict.test_command ----
@@ -294,10 +310,14 @@ def _stack_state(c):
     return c._stack
 
 
+def _no_test_fix(c):
+    return f"remove strict.test_command from ado.config.json ({_override_l2(c)} waives the unset command), or add a test command to the profile; then {_APPROVE}"
+
+
 _DRAFT_IT = "run `ado stack init --seed <name>` (or speckit.ado.stack, once installed) to draft it"
 
 
-def _head_findings(s):
+def _head_findings(c, s):
     """The head commit's copy, which becomes the target's on merge: when it differs from the target's (or the head config's
     strict.test_command does), it must itself be a valid, approved profile that agrees with the head's strict.test_command. Only adds
     findings; the target's verdict is never replaced. A head without a profile is fine at bootstrap (nothing to lock)."""
@@ -321,21 +341,24 @@ def _head_findings(s):
     try:
         composed = stack.compose_test_command(h["profile"]["profile"])
     except ValueError:
-        composed = None
-        too_long = True
+        too_long, composed = True, None
     else:
         too_long = False
-    if too_long or (composed is not None and h["cmd"] != composed):
-        return [_finding("stack-profile-drift", f"strict.test_command at the head commit differs from the command {at} composes"
-                         + (" (which is over 500 characters)" if too_long else ""),
+    if too_long:
+        return [_finding("stack-profile-drift", f"strict.test_command at the head commit differs from the command {at} composes (which is over 500 characters)",
                          f"{_APPROVE} to set it from the profile; do not hand-edit it")]
-    return []
+    if (h["cmd"] or None) == composed:
+        return []
+    if composed is None:
+        return [_finding("stack-profile-drift", f"strict.test_command at the head commit is set, but {at} {stack.N_NO_TEST}", _no_test_fix(c))]
+    return [_finding("stack-profile-drift", f"strict.test_command at the head commit differs from the command {at} composes",
+                     f"{_APPROVE} to set it from the profile; do not hand-edit it")]
 
 
 def _stack_profile(c):
     s = _stack_state(c)
     if s["bootstrap"]:
-        return _head_findings(s)  # no profile on the target yet: the first one is judged for being sound, not against a target
+        return _head_findings(c, s)  # no profile on the target yet: the first one is judged for being sound, not against a target
     status, n = s["status"], len(s["errors"])
     if status == "none":
         out = [_finding("stack-profile-missing", "ado.stack.json is missing", f"{_DRAFT_IT}; then {_APPROVE}")]
@@ -355,20 +378,38 @@ def _stack_profile(c):
             out = [_finding("stack-profile-drift", "the command the approved profile composes is longer than 500 characters",
                             "point `test` at a repo script (kind `repo`) in the profile, then re-approve it")]
         else:
-            if composed is not None and c.cfg.strict.get("test_command") != composed:  # a profile with no test command compares nothing
-                out = [_finding("stack-profile-drift", "strict.test_command differs from the command the approved profile composes",
-                                f"{_APPROVE} to set it from the profile; do not hand-edit it")]
-    return out + _head_findings(s)
-
-
-# a profile stack covers a detected root when it sits at that root and either has a free-form id (any stack there) or one of the detect ids in
-# the same family (the seed's `typescript` is detected as `node`); a python profile at "." does not cover a TypeScript project at "."
-_FAMILY = {"node": "node", "typescript": "node", "dart": "dart", "flutter": "dart"}
-_DETECT_IDS = {"python", "node", "typescript", "dart", "flutter", "salesforce", "java", "go", "rust", "dotnet", "c-cpp"}
+            if (c.cfg.strict.get("test_command") or None) != composed:  # no test command in the profile: any command in the config is a hand edit
+                out = [_finding("stack-profile-drift", "strict.test_command differs from the command the approved profile composes" if composed is not None
+                                else f"strict.test_command is set, but the approved profile {stack.N_NO_TEST}",
+                                f"{_APPROVE} to set it from the profile; do not hand-edit it" if composed is not None else _no_test_fix(c))]
+    return out + _head_findings(c, s)
 
 
 def _detected(repo, commit):
     return stack.detect(repo, commit)
+
+
+def _detect_state(c):
+    """`stack.detect` at the commit being judged, once per run; False when git cannot answer."""
+    if c._detect is None:
+        try:
+            c._detect = _detected(c.repo, c.rev)
+        except ValueError:
+            c._detect = False
+    return c._detect
+
+
+def _ignored_roots_warning(n):
+    return gate.ignored_roots_note(n) if n else None
+
+
+def ignored_roots_note(repo, commit="HEAD"):
+    """The warning for the roots at `commit` that no profile can name (detect's `ignored_roots`), or None: a count, no path. It is never a
+    finding, so it cannot block a PR; it says the project is outside the profile and should be reviewed as code."""
+    try:
+        return _ignored_roots_warning(_detected(repo, commit).get("ignored_roots", {}).get("count", 0))
+    except ValueError:
+        return None
 
 
 def _stack_unprofiled(c):
@@ -378,15 +419,11 @@ def _stack_unprofiled(c):
     if s["bootstrap"] or s["profile"] is None:
         return []  # bootstrap: nothing to compare to; no profile: stack-profile-* already says so
     fix = (f"two PRs: first add the root to ado.stack.json ({_DRAFT_IT}; then {_APPROVE}) and merge it, then add the code")
-    try:
-        found = _detected(c.repo, c.rev)["stacks"]
-    except ValueError:
+    found = _detect_state(c)
+    if found is False:
         return [_finding("stack-unprofiled", "the stacks at the head commit could not be detected (git could not answer)",
                          "run in a full clone of the repository (fetch-depth: 0), then re-run")]
-    own = [(posixpath.normpath(st["root"]), st["id"]) for st in s["profile"]["stacks"]]
-    new = sorted({(posixpath.normpath(d["root"]), d["id"]) for d in found if d["confidence"] == "high"
-                  if not any(r == posixpath.normpath(d["root"]) and (i not in _DETECT_IDS or _FAMILY.get(i, i) == _FAMILY.get(d["id"], d["id"]))
-                             for r, i in own)})
+    new = stack.uncovered(s["profile"], found)
     if not new:
         return []
     shown = ", ".join(f"{stack.safe_path(r, n)} ({i})" for n, (r, i) in enumerate(new[:5], 1))
@@ -1104,6 +1141,9 @@ def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False)
     if head and _stack_note(ctx.cfg, head):  # the PR edits the profile, the lockfile or strict.test_command: review it as code
         warnings.append(gate.TRUST_NOTE)
     warnings += _kits_state(ctx)["warnings"]
+    found = _detect_state(ctx)
+    if found and (note := _ignored_roots_warning(found.get("ignored_roots", {}).get("count", 0))):  # roots no profile can name: outside the stack rules
+        warnings.append(note)
     return {**out, "warnings": warnings} if warnings else out
 
 

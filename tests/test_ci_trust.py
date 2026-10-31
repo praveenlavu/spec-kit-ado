@@ -264,7 +264,7 @@ def _cli(mod, capsys, *argv):
 
 
 def test_strict_check_base_uses_the_target_config(tmp_path, monkeypatch, capsys, git_env):
-    mod, fake, sent, s = _wire(tmp_path, monkeypatch, git_env, mode=None)  # the PR's config says advisory
+    mod, fake, sent, s = _wire(tmp_path, monkeypatch, git_env, mode=None, committed=True)  # the PR's config (committed, with the profile) says advisory
     _target(tmp_path, {**STRICT, "strict": {"test_command": CMD}}, _full(tmp_path, s.base))
     argv = ["strict", "check", "1001", "--phase", "pr"]
     rc, out = _cli(mod, capsys, *argv, "--base", "origin/trunk")

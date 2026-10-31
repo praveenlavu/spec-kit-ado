@@ -9,6 +9,7 @@ import fnmatch
 import json
 import os
 import hashlib
+import posixpath
 import re
 import shlex
 import stat
@@ -56,6 +57,12 @@ def safe_path(p, n):
     return p if _SAFE.fullmatch(p) else f"<path #{n}>"
 
 
+def representable_root(root):
+    """Whether a profile `stacks[].root` can be this root, as `validate` decides: `.`, or at most 200 characters in segments of
+    `[A-Za-z0-9._-]` that start with a letter, digit or `_` (so no dot-directory, space or non-ASCII character)."""
+    return isinstance(root, str) and len(root) <= CAP_ROOT and (root == "." or bool(_ROOT.fullmatch(root)))
+
+
 def _join(root, name):
     return name if root == "." else f"{root}/{name}"
 
@@ -76,7 +83,8 @@ def _has_media(text):
 def detect(repo=".", commit="HEAD"):
     """The stacks of `repo` at `commit` (HEAD, a full 40-hex commit id or a branch; never a tag):
     `{"outcome": "detected"|"multiple"|"unknown", "stacks": [{"id", "root", "confidence", "evidence", "hints"}], "domain_hints": [...]}`
-    (plus `"note": "commit first"` when the repository has no commit). ValueError with a fixed text when git cannot answer."""
+    (plus `"note": "commit first"` when the repository has no commit, and `"ignored_roots": {"count", "paths"}` for roots a profile cannot
+    name, see `representable_root`: `paths` lists at most 5 through `safe_path`). ValueError with a fixed text when git cannot answer."""
     from . import strict  # local, as config.py does: strict imports its siblings
 
     def run(*args):  # strict's hardened git (no replace refs, selectors, pager or prompt) with the user's global config: safe.directory works
@@ -228,7 +236,9 @@ def detect(repo=".", commit="HEAD"):
         else:
             parent["evidence"] += evidence
             parent["hints"].update({k: v for k, v in hints.items() if k == "pega" and v})
-    n = 0
+    kept_stacks = [s for s in stacks if representable_root(s["root"])]
+    ignored = sorted({s["root"] for s in stacks} - {s["root"] for s in kept_stacks})  # a root no profile can name is never reported as a stack
+    stacks, n = kept_stacks, 0
 
     def printable(p):
         nonlocal n
@@ -241,7 +251,8 @@ def detect(repo=".", commit="HEAD"):
         s["evidence"] = [printable(e) for e in s["evidence"][:MAX_EVIDENCE]]
     highs = sum(s["confidence"] == "high" for s in stacks)
     return {"outcome": "unknown" if not highs else "detected" if highs == 1 else "multiple", "stacks": stacks,
-            "domain_hints": sorted(domain), **({"note": "hints incomplete"} if incomplete[0] else {})}
+            "domain_hints": sorted(domain), **({"note": "hints incomplete"} if incomplete[0] else {}),
+            **({"ignored_roots": {"count": len(ignored), "paths": [printable(r) for r in ignored[:5]]}} if ignored else {})}
 
 
 # ---- the stack profile (`ado.stack.json`, D§5): validation. The profile is attacker-controlled in CI and model-written at creation, so
@@ -499,7 +510,7 @@ def validate(data):
         elif "id" in st:
             seen.add(sid)
         root = st.get("root")
-        if "root" in st and not (isinstance(root, str) and len(root) <= CAP_ROOT and (root == "." or _ROOT.fullmatch(root))):
+        if "root" in st and not representable_root(root):
             bad(j(p, "root"), 'must be "." or "/"-separated segments of letters, digits, _, . and - that start with a letter, digit or _')
         elif isinstance(root, str) and any(pat.search(root) for _, pat in SECRETS):
             bad(j(p, "root"), "matches a secret pattern")
@@ -737,6 +748,23 @@ def render_md(profile):
     return "\n".join(out)
 
 
+# a profile stack covers a detected root when it sits at that root and either has a free-form id (any stack there) or one of the detect ids in
+# the same family (the seed's `typescript` is detected as `node`); a python profile at "." does not cover a TypeScript project at "."
+_FAMILY = {"node": "node", "typescript": "node", "dart": "dart", "flutter": "dart"}
+_DETECT_IDS = {"python", "node", "typescript", "dart", "flutter", "salesforce", "java", "go", "rust", "dotnet", "c-cpp"}
+N_NO_TEST = "defines no test command"
+
+
+def uncovered(profile, detected):
+    """The one coverage rule of `show --check` and the strict `stack-unprofiled` finding: the sorted `(root, id)` pairs of the
+    high-confidence stacks in `detect` result `detected` that no stack of `profile` covers (same root, and a free-form id or the same
+    id family). A medium-confidence root is never listed. Roots are printed by the caller through `safe_path`."""
+    own = [(posixpath.normpath(_d(st).get("root")), _d(st).get("id")) for st in _l(_d(profile).get("stacks")) if isinstance(_d(st).get("root"), str)]
+    return sorted({(posixpath.normpath(d["root"]), d["id"]) for d in detected["stacks"] if d["confidence"] == "high"
+                   if not any(r == posixpath.normpath(d["root"]) and (i not in _DETECT_IDS or _FAMILY.get(i, i) == _FAMILY.get(d["id"], d["id"]))
+                              for r, i in own)})
+
+
 def show(root=".", mode="advisory", config_command=None):
     """`(result, approved_profile_or_None, findings)` for `ado stack show`. `result` is `{status, errors, counts, test_command: {profile,
     config, drift}, notes}`: counts and the validator's fixed error texts only; the composed command is the one piece of profile text and
@@ -750,14 +778,15 @@ def show(root=".", mode="advisory", config_command=None):
             composed = compose_test_command(prof)
         except ValueError as e:
             notes.append(f"stack-profile: {e}")
-    drift = composed is not None and (config_command is not None or mode == "strict") and config_command != composed
+    # a profile with no test command composes nothing, so any command in the config is a hand edit too
+    drift = status == "approved" and not notes and (config_command is not None or mode == "strict") and (config_command or None) != composed
     if drift:
-        notes.append("stack-profile: strict.test_command differs from the command composed from the profile (re-approve to change it)")
+        notes.append("stack-profile: strict.test_command differs from the command composed from the profile (re-approve to change it)"
+                     if composed is not None else f"stack-profile: strict.test_command is set, but the approved profile {N_NO_TEST}")
     if prof is not None:
         try:
-            covered = {_d(st).get("root") for st in _l(prof.get("stacks"))}
-            notes += [f"stack-unprofiled: {s['root']} ({s['id']}) is a high-confidence root that no profile stack covers"
-                      for s in detect(root)["stacks"] if s["confidence"] == "high" and s["root"] not in covered]
+            notes += [f"stack-unprofiled: {safe_path(r, n)} ({i}) is a high-confidence root that no profile stack covers"
+                      for n, (r, i) in enumerate(uncovered(prof, detect(root)), 1)]
         except ValueError as e:  # fixed texts of detect
             notes.append(f"stack-unprofiled: not checked ({e})")
     result = {"status": status, "errors": res["errors"], "counts": _counts(prof),

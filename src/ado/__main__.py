@@ -814,6 +814,8 @@ def main(argv=None):
                 out["config"] = gate.TARGET_CONFIG_NOTE
                 if strict.edits_trust_files(client.config, args.src):  # the PR edits the profile, lockfile or test command: say so in the comment
                     out["trust_note"] = gate.TRUST_NOTE
+                if note := strict.ignored_roots_note(args.src):  # roots no profile can name are outside the stack rules: say so, never block
+                    out["ignored_roots_note"] = note
                 if strict.adds_kits_lock(client.config, args.src):  # the first kits lockfile: nobody has reviewed its pins as code
                     out["kits_trust_note"] = gate.KITS_TRUST_NOTE
             elif args.command == "gate" and args.base is not None and client.config.mode == "strict":  # a strict PR config under --base

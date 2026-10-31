@@ -16,12 +16,12 @@ PR_ARGS = ["pr", "create", "1001", "--title", "T", "--body-file", "body.md", "--
 TODAY = date.today().isoformat()
 
 
-def _wire(tmp_path, monkeypatch, git_env, mode="strict", responses=(), **kw):
+def _wire(tmp_path, monkeypatch, git_env, mode="strict", responses=(), committed=False, **kw):
     """The `_story` repo (branch main; `trunk` = the commit before the red commit) with a config, the CLI patched to a FakeClient
     and `gh` recorded: returns (main module, holder of the FakeClient, list of gh calls, story)."""
-    client, s = _story(tmp_path, git_env, **kw)
-    git(tmp_path, "branch", "trunk", s.base)
     cfg = {"organization": "contoso", "project": "Fabrikam", "strict": {"test_command": CMD}, **({"mode": mode} if mode else {})}
+    client, s = _story(tmp_path, git_env, **kw, **({"config": cfg} if committed else {}))  # committed: the head holds its own config (CI runs read it)
+    git(tmp_path, "branch", "trunk", s.base)
     (tmp_path / "ado.config.json").write_text(json.dumps(cfg))
     (tmp_path / "body.md").write_text("Body\n")
     monkeypatch.chdir(tmp_path)

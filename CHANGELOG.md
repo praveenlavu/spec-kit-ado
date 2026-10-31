@@ -26,6 +26,13 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   and `pega` are domain hints, and Pega and Appian projects are otherwise `unknown`. Paths are untrusted: printed only when they match
   `A-Za-z0-9._/-` (1 to 200 characters), else as `<path #n>`. Nested roots of the same stack (npm workspaces, Maven/Gradle modules, Cargo workspaces) fold into their nearest ancestor root as evidence (one stack); roots of different stacks stay separate. `note: "hints incomplete"` when a manifest could not be read as asked (read budget of 32, a `package.json` that is not a JSON object or repeats a key); SHA-1 repositories only. No commit is `unknown` with `note: "commit first"`; git failures are exit 2
   with fixed texts; no verb acts on it yet and advisory behaviour is unchanged. See `docs/stack-kits.md` "Detection".
+- Coverage and drift fixes (P2-16a). One helper, `stack.uncovered`, decides which high-confidence roots no profile stack covers, for both
+  `ado stack show --check` and the strict `stack-unprofiled` rule (same root and id family: a Python profile at `.` no longer passes `show --check`
+  while `strict check` refuses a TypeScript project there). When no stack in an approved profile defines a test command, any non-empty
+  `strict.test_command` is `stack-profile-drift` (locally, against the target branch in CI and in the head copy), and the `test-command` fix then
+  points to `ado strict override <id> l2 --reason "<why>"` (a human) instead of hand-setting the command. `ado stack detect` no longer reports
+  a root a profile cannot name (a dot directory such as `.github/tools`, a space, non-ASCII) as a stack: it is counted and listed under
+  `ignored_roots` (at most 5 paths, through `safe_path`), so it cannot become an un-overridable `stack-unprofiled`; `strict check` (local and CI) and the `gate` comment (`ignored_roots_note`) carry one fixed warning, `N detected root(s) cannot be named in a profile and are not covered by it: review them as code` (a count, never a finding). The profile validator is unchanged.
 - `ado dod` seeds the `dod` items of an approved `ado.stack.json` into section 5 of a fresh ledger (first run or `--force`) as unticked
   `- [ ] <item> (stack <id>, S<n>)` lines after the five fixed ones: cleaned, escaped, at most 20 (a fixed overflow line beyond that). `--refresh`
   never touches section 5; no approved profile, no change (byte-identical ledger). `ado done` counts them. See `docs/stack-kits.md` "Definition-of-done items".
