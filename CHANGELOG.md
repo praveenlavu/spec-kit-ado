@@ -21,7 +21,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   (`git ls-tree -r -z`; never the working tree) as JSON `{"outcome": "detected|multiple|unknown", "stacks": [{"id", "root", "confidence",
   "evidence", "hints"}], "domain_hints": []}`. Ids: `python`, `node`, `typescript`, `dart`, `flutter`, `salesforce`, `java`, `go`, `rust`,
   `dotnet`, `c-cpp`; fixed marker names at most 3 segments deep; a medium marker alone is listed, never `detected`; `sfdx-project.json`
-  absorbs the `package.json` beside it, `pubspec.yaml` absorbs `android/` Gradle projects, `typescript` replaces `node`; two roots are
+  absorbs the `package.json` beside it, `pubspec.yaml` absorbs `android/` Gradle projects and `linux/`/`windows/` CMake runners, `typescript` replaces `node`; two roots are
   `multiple`. Hints come from a few manifests read from the commit's blobs (regular files of at most 1 MiB, never a symlink); `media`
   and `pega` are domain hints, and Pega and Appian projects are otherwise `unknown`. Paths are untrusted: printed only when they match
   `A-Za-z0-9._/-` (1 to 200 characters), else as `<path #n>`. Nested roots of the same stack (npm workspaces, Maven/Gradle modules, Cargo workspaces) fold into their nearest ancestor root as evidence (one stack); roots of different stacks stay separate. `note: "hints incomplete"` when a manifest could not be read as asked (read budget of 32, a `package.json` that is not a JSON object or repeats a key); SHA-1 repositories only. No commit is `unknown` with `note: "commit first"`; git failures are exit 2

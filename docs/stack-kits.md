@@ -90,7 +90,7 @@ untracked, staged-only and working-tree changes are ignored. A repository with n
 | `c-cpp` | `CMakeLists.txt`, `meson.build` | `configure.ac`, `Makefile` | none |
 
 - **Precedence at one root:** `sfdx-project.json` absorbs the `package.json` beside it (the LWC Jest harness, no separate Node
-  stack); a `pubspec.yaml` absorbs the Gradle projects under its `android/` directory; `typescript` replaces `node`. Otherwise every
+  stack); a `pubspec.yaml` absorbs the Gradle projects under its `android/` directory and the CMake projects of its `linux/` and `windows/` runners; `typescript` replaces `node`. Otherwise every
   root with a high marker is its own stack (a medium marker beside a high one of the same stack is only added to its evidence).
 - **Nested roots of the same stack are one stack:** a high-confidence root inside another high-confidence root of the same stack
   (`node` and `typescript` are one family, `dart` and `flutter` too) folds into the nearest ancestor and its manifests are added to the

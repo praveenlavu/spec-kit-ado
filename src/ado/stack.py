@@ -173,6 +173,10 @@ def detect(repo=".", commit="HEAD"):
         prefix = _join(root, "android")
         for k in [k for k in cands if k[0] == "java" and (k[1] == prefix or k[1].startswith(prefix + "/"))]:
             cands.pop(k)  # a Flutter or Dart app's Android host project is part of it
+        for host in ("linux", "windows"):  # and so are its generated desktop runners (a CMakeLists.txt each)
+            prefix = _join(root, host)
+            for k in [k for k in cands if k[0] == "c-cpp" and (k[1] == prefix or k[1].startswith(prefix + "/"))]:
+                cands.pop(k)
     stacks, domain, kept = [], set(), {}
     for (sid, root) in sorted(cands, key=lambda k: (k[1] != ".", k[1], k[0])):
         c, names, hints = cands[(sid, root)], by_root.get(root, {}), {}

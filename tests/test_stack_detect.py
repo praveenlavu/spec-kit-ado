@@ -87,6 +87,17 @@ def test_pubspec_absorbs_android_gradle(tmp_path):
     assert ids(res) == [("dart", "app", "high"), ("java", "server", "high")]
 
 
+def test_pubspec_absorbs_desktop_runners(tmp_path):
+    """Found on flutter/samples (P2-14): every app's generated linux/ and windows/ CMakeLists.txt were reported as c-cpp stacks."""
+    res = stack.detect(make(tmp_path, {"pubspec.yaml": "dependencies:\n  flutter:\n    sdk: flutter\n",
+                                       "linux/CMakeLists.txt": "x\n", "linux/flutter/CMakeLists.txt": "x\n", "windows/CMakeLists.txt": "x\n"}))
+    assert ids(res) == [("flutter", ".", "high")] and res["outcome"] == "detected"
+    (tmp_path / "o").mkdir()  # a CMake project beside the app, or a linux/ folder in a project without pubspec.yaml, is its own stack
+    res = stack.detect(make(tmp_path / "o", {"app/pubspec.yaml": "name: a\n", "app/linux/CMakeLists.txt": "x\n", "native/CMakeLists.txt": "x\n",
+                                             "kernel/linux/CMakeLists.txt": "x\n"}))
+    assert ids(res) == [("dart", "app", "high"), ("c-cpp", "kernel/linux", "high"), ("c-cpp", "native", "high")]
+
+
 def test_marker_salesforce(tmp_path):
     res = stack.detect(make(tmp_path, {"sfdx-project.json": "{}"}))
     assert ids(res) == [("salesforce", ".", "high")]
