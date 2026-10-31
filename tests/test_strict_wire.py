@@ -465,3 +465,22 @@ def test_pr_create_head_must_be_the_checked_out_commit(tmp_path, monkeypatch, ca
     git(tmp_path, "branch", "-f", "other", "HEAD")  # another name for the same commit is fine
     assert mod.main(argv + ["--plan-out", "out/p.md"]) == 0
     capsys.readouterr()
+
+
+# ---- P2-5b: a strict project needs an approved stack profile at pr create and done ----
+@pytest.mark.parametrize("draft", [False, True], ids=["missing", "draft"])
+def test_pr_create_and_done_strict_refuse_a_missing_or_draft_stack_profile(tmp_path, monkeypatch, capsys, git_env, draft):
+    from ado import stack
+    from tests.test_stack_show import profile
+    mod, fake, sent, s = _wire(tmp_path, monkeypatch, git_env)
+    if draft:
+        (tmp_path / "ado.stack.json").write_text(json.dumps(profile()))
+    else:
+        (tmp_path / "ado.stack.json").unlink()
+    rule = "stack-profile-draft" if draft else "stack-profile-missing"
+    for argv in (PR_ARGS + ["--apply"], ["done", "1001", "--apply"]):
+        assert mod.main(argv) == 2
+        cap = capsys.readouterr()
+        assert rule in [f["rule"] for f in json.loads(cap.out)["findings"]] and rule in cap.err
+        assert "Run tests with" not in cap.out + cap.err and stack.PROFILE_FILE in cap.out
+    assert sent == [] and fake["c"].calls == []

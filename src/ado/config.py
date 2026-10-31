@@ -97,6 +97,8 @@ class Config:
         self.strict = {**STRICT_DEFAULTS, **(strict or {})}
         self.source_commit = None  # the 40-hex target commit load_from_ref resolved; None for a config read from disk
         self.from_target = False  # True when CI took this config from the PR's target branch (`ado gate --base`)
+        self.target_profile_blob = None  # ado.stack.json / ado.kits.lock.json bytes at source_commit (strict.read_target_trust); None: absent
+        self.target_lock_blob = None
 
     def _effective(self, project_list, floor):
         out = list(project_list)

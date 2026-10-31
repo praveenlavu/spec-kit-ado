@@ -1295,3 +1295,63 @@ def test_stack_approve_full_preview_needs_both_terminals_and_the_bang_prefix_is_
         assert "stdin and stdout are both terminals" in _flat(path), path
     assert "stdin and stdout are both terminals" in _flat("README.md") and "stdin and stdout are both terminals" in _flat("CHANGELOG.md")
     assert "`! ado stack approve" not in _flat("AGENTS.md")
+
+
+# ---- P2-5b: strict stack rules and the target-branch profile ----
+_STACK_RULES = ("stack-profile-missing", "stack-profile-invalid", "stack-profile-draft", "stack-profile-changed", "stack-profile-drift",
+                "stack-unprofiled")
+_TRUST_NOTE = "trust-introducing PR: review ado.stack.json as code"
+
+
+def test_stack_rule_ids_are_emitted_by_strict_py_and_documented():
+    assert set(_STACK_RULES) <= _strict_rule_ids()  # the doc test above then pins README and AGENTS.md
+    for doc in ("README.md", "AGENTS.md", "docs/stack-kits.md", "CHANGELOG.md"):
+        text = _flat(doc)
+        assert all(f"`{r}`" in text for r in _STACK_RULES), doc
+
+
+def test_stack_rules_are_not_overridable_in_the_docs():
+    for doc in ("README.md", "docs/stack-kits.md"):
+        assert "none of which can be overridden" in _flat(doc) or "Neither can be overridden" in _flat(doc), doc
+    assert "none can be overridden" in _flat("AGENTS.md")
+
+
+def test_ci_docs_protect_the_profile_and_lockfile_and_describe_the_two_pr_flow():
+    for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        text = _flat(doc)
+        assert "Protect `ado.stack.json` and `ado.kits.lock.json` on the target branch the same way" in text, doc
+        assert f"carries `{_TRUST_NOTE}` in the PR comment and in `warnings`, even when the edit is consistent" in text, doc
+        assert "**in that PR's own run**" in text and "once merged it is in force with no further note" in text, doc
+        assert "what runs in CI is the merged `strict.test_command`, which `ado stack approve` sets" in text, doc
+        assert "refused (`stack-profile-*`, detail \"at the head commit\")" in text, doc
+        assert "a new root takes two PRs: the profile first, then the code" in text, doc
+        assert "`ado strict verify` does not apply stack or kit rules" in text, doc
+
+
+def test_bootstrap_note_and_verify_exclusion_documented_everywhere():
+    for doc in ("README.md", "docs/stack-kits.md", "CHANGELOG.md"):
+        assert _TRUST_NOTE in _flat(doc), doc
+    assert "it applies no stack or kit rule (those bind at `strict check`)" in _flat("README.md")
+    assert "`strict verify` applies no stack or kit rule" in _flat("CHANGELOG.md")
+    kits = _flat("docs/stack-kits.md")
+    assert "## Strict rules and CI" in (ROOT / "docs/stack-kits.md").read_text(encoding="utf-8")
+    assert "`ado strict verify` runs only the ledger, L1 and test-command rules and applies no stack or kit rule" in kits
+    assert "process enforcement, not a security boundary" in kits.lower()
+
+
+def test_stack_notes_in_the_gate_and_check_are_documented():
+    assert '"warnings": ["' + _TRUST_NOTE + '"]' in _flat("README.md")
+    assert "`trust_note`" in _flat("docs/stack-kits.md") and "`trust_note`" in _flat("CHANGELOG.md")
+
+
+def test_fix_round_docs_family_upgrade_note_and_gate_wording():
+    flat = _flat("CHANGELOG.md")
+    assert "link-on-merge `ado done`" in flat and "refuses `stack-profile-missing` for existing strict projects until the profile PR merges" in flat
+    assert "`ado stack init --seed <name>` (or `speckit.ado.stack`, once installed)" in flat
+    assert "target branch trust files are invalid" in flat and "by root and id family" in flat
+    kits = _flat("docs/stack-kits.md")
+    assert "`node` and `typescript`, `dart` and `flutter` are one each" in kits and "in that PR's own run" in kits
+    assert "must still be sound" in kits and "valid, approved and consistent" in kits
+    readme = _flat("README.md")
+    assert "in that PR's own run; once merged the edit is in force with no note" in readme and "review edits to these files as code" in readme
+    assert "neither the command that runs nor the verdict" not in readme + kits

@@ -364,12 +364,14 @@ def _code(s, cap=200):
 
 TARGET_CONFIG_NOTE = "target branch (strict)"  # `result["config"]` when CI judged the PR with the target branch's config
 PR_CONFIG_NOTE = "pull request"  # ... or with the PR's own strict config, when `--base` was given
+TRUST_NOTE = "trust-introducing PR: review ado.stack.json as code"  # this PR edits the profile, the lockfile or strict.test_command
 
 
 def render_summary(result):
     """Markdown PR comment for a gate result (what `--summary-out` writes)."""
     head = "### ADO gate\n\n"
     source = f"config: {result['config']}\n" if result.get("config") in (TARGET_CONFIG_NOTE, PR_CONFIG_NOTE) else ""
+    source += f"{TRUST_NOTE}\n" if result.get("trust_note") == TRUST_NOTE else ""
     if "traceability" not in result:  # no / unreadable ledger: advisory note only
         return head + f"Advisory: {_code(result.get('note', ''))}\n" + source
     trace, drift = result["traceability"], result["drift"]
@@ -418,6 +420,8 @@ def render_error(reason):
     reason = " ".join(str(reason).split())
     if token := os.environ.get("ADO_TOKEN", "").strip():
         reason = reason.replace(token, "***")
+    if invalid and str(reason).startswith(("ado.stack.json at the target branch", "ado.kits.lock.json at the target branch")):
+        return f"### ADO gate\n\n**ADO gate FAILED: target branch trust files are invalid:** {_code(reason, 500)}\n\nFix the file on the target branch; an invalid one fails this check.\n"
     if invalid:
         return f"### ADO gate\n\n**ADO gate FAILED: ado.config.json is invalid:** {_code(reason, 500)}\n\nFix the config; an invalid config fails this check.\n"
     return f"### ADO gate\n\nThe gate could not run: {_code(reason, 500)}\n\nThis check is advisory and does not fail the PR.\n"

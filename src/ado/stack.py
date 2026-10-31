@@ -586,6 +586,37 @@ def read_profile(root=".", blob=None):
     return {"status": "approved", "profile": data, "errors": []}
 
 
+def profile_for(cfg, repo="."):
+    """`read_profile` of the profile that judges this run: the target branch's blob when `cfg.from_target` (CI; an absent one is `none`,
+    never the working tree, which holds the PR's own file), else the working-tree file. Strict mode only; the bootstrap is in strict.py."""
+    if not getattr(cfg, "from_target", False):
+        return read_profile(repo)
+    blob = cfg.target_profile_blob
+    return read_profile(repo, blob=blob) if blob is not None else {"status": "none", "profile": None, "errors": []}
+
+
+def lock_error(raw):
+    """A fixed text when `raw` (the bytes of `ado.kits.lock.json`) is not a lockfile this version can trust, else None: valid JSON without
+    duplicate keys, an object with `schema` 1 and a `kits` object keyed by kit ids, no control character and no secret pattern anywhere.
+    Kit fields are judged by the kit rules (P2-9); this is the gate every strict run passes first."""
+    try:
+        data = parse_json(raw, MAX_PROFILE)
+    except ValueError:
+        return "is not valid JSON, or has a duplicate key"
+    if not (isinstance(data, dict) and type(data.get("schema")) is int and data["schema"] == 1 and isinstance(data.get("kits"), dict)):
+        return "is not a schema 1 lockfile (an object with `schema` 1 and a `kits` object)"
+    if not all(isinstance(k, str) and _ID.fullmatch(k) for k in data["kits"]):
+        return "has a kit id that is not 1 to 40 characters of a-z, 0-9 and -"
+    todo = [data]
+    while todo:  # iterative: a deep value must not hit the recursion limit
+        node = todo.pop()
+        strings = [*node, *(v for v in node.values() if isinstance(v, str))] if isinstance(node, dict) else [v for v in node if isinstance(v, str)]
+        if any(_has_control(t) or any(pat.search(t) for _, pat in SECRETS) for t in strings):
+            return "contains a control character or a secret pattern"
+        todo += [v for v in (node.values() if isinstance(node, dict) else node) if isinstance(v, (dict, list))]
+    return None
+
+
 def load_profile(root="."):
     """The profile when it is `approved`, else None."""
     res = read_profile(root)

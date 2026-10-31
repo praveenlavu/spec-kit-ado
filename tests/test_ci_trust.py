@@ -12,7 +12,8 @@ from ado import decisions, strict
 from ado.__main__ import main
 from ado.dod import SECTION2
 from tests.conftest import FakeClient, commit, git
-from tests.test_strict import CMD, LEDGER, RED_NOTE, _d, _ledger_rows, _pair, _project, _repo
+from tests.test_stack_show import approve, profile
+from tests.test_strict import CMD, LEDGER, MARK, RED_NOTE, STACK_CMD, _d, _kids, _ledger_rows, _pair, _project, _repo
 from tests.test_strict_wire import _full, _wire
 
 ORG = {"organization": "contoso", "project": "Fabrikam"}
@@ -25,14 +26,16 @@ def _cfg_text(cfg):
 
 
 # ---- gate ----
-def _gate_pr(tmp_path, monkeypatch, git_env, target, head, decisions_md=None):
+def _gate_pr(tmp_path, monkeypatch, git_env, target, head, decisions_md=None, target_files=None, head_files=None):
     """main holds `target` (a dict, raw text or None) = refs/remotes/origin/main; the branch `feature` (checked out) holds `head` and
     a ledger with one AC whose test does not exist (AC traceability finds it) and, optionally, a decisions file."""
     git(tmp_path, "init", "-q", "-b", "main")
-    commit(tmp_path, "AB#1001 base", {"README.md": "x\n", **({"ado.config.json": _cfg_text(target)} if target is not None else {})})
+    commit(tmp_path, "AB#1001 base", {"README.md": "x\n", **({"ado.config.json": _cfg_text(target)} if target is not None else {}),
+                                      **(target_files or {})})
     git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
     git(tmp_path, "checkout", "-q", "-b", "feature")
-    files = {"dod/DoD_1001.md": f"{SECTION2}\n## 3. AC\n| AC | x | tests | ev | status |\n|---|---|---|---|---|\n| AC-1 | x | Gone.testX | | red |\n"}
+    files = {"dod/DoD_1001.md": f"{SECTION2}\n## 3. AC\n| AC | x | tests | ev | status |\n|---|---|---|---|---|\n| AC-1 | x | Gone.testX | | red |\n",
+             **(head_files or {})}
     if head is not None:
         files["ado.config.json"] = _cfg_text(head)
     if decisions_md is not None:
@@ -229,9 +232,11 @@ def test_no_base_flag_unchanged(tmp_path, monkeypatch, capsys, git_env):
 
 
 # ---- strict check / strict verify ----
-def _target(repo, cfg, parent, ref="refs/remotes/origin/trunk"):
-    """A commit with `ado.config.json` = cfg on top of `parent` (not on the checked-out branch), set as `ref`. cfg None: the parent as it is."""
-    if cfg is None:
+def _target(repo, cfg, parent, ref="refs/remotes/origin/trunk", files=None):
+    """A commit with `ado.config.json` = cfg (and `files`: path -> text, or (mode, text); None removes it) on top of `parent` (not on the
+    checked-out branch), set as `ref`. cfg None and no files: the parent as it is."""
+    files = {**({"ado.config.json": _cfg_text(cfg)} if cfg is not None else {}), **(files or {})}
+    if not files:
         git(repo, "update-ref", ref, parent)
         return
     env = {**os.environ, "GIT_INDEX_FILE": str(repo / ".git" / "trust-index")}
@@ -239,8 +244,13 @@ def _target(repo, cfg, parent, ref="refs/remotes/origin/trunk"):
     def run(*a, inp=None):
         return subprocess.run(["git", "-C", str(repo), *a], env=env, input=inp, capture_output=True, text=True, check=True).stdout.strip()
     run("read-tree", parent)
-    blob = run("hash-object", "-w", "--stdin", inp=_cfg_text(cfg))
-    run("update-index", "--add", "--cacheinfo", f"100644,{blob},ado.config.json")
+    for path, text in files.items():
+        if text is None:
+            run("update-index", "--force-remove", path)
+            continue
+        mode, text = text if isinstance(text, tuple) else ("100644", text)
+        blob = run("hash-object", "-w", "--stdin", inp=text)
+        run("update-index", "--add", "--cacheinfo", f"{mode},{blob},{path}")
     sha = run("commit-tree", run("write-tree"), "-p", parent, "-m", "target")
     git(repo, "update-ref", ref, sha)
     os.remove(repo / ".git" / "trust-index")
@@ -390,3 +400,367 @@ def test_strict_mode_needs_no_token_and_makes_no_request(tmp_path, monkeypatch, 
     monkeypatch.delenv("ADO_TOKEN", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))  # no keychain, no stored token
     assert _mode(monkeypatch, capsys, "--base", "origin/main")[0] == 0
+
+
+# ---- P2-5b: the stack profile and the kit lockfile come from the TARGET branch ----
+NOTE = "trust-introducing PR: review ado.stack.json as code"
+STACK_STRICT = {**STRICT, "strict": {"test_command": STACK_CMD}}
+OVERSIZE = "{" + " " * (256 * 1024 + 1) + "}"
+TOKEN = "gh" + "p_" + "a" * 36  # built here so this file holds no secret-looking literal
+BAD_PROFILES = {
+    "parse": "{not json " + MARK,
+    "duplicate-key": '{"schema": 1, "schema": 1, "x": "' + MARK + '"}',
+    "schema": json.dumps({**profile(), "version": MARK}),
+    "unknown-key": json.dumps({**profile(), MARK: 1}),
+    "secret": json.dumps({**profile(), "sources": {"S1": {**profile()["sources"]["S1"], "evidence": TOKEN + MARK}, "S2": profile()["sources"]["S2"]}}),
+    "oversize": OVERSIZE,
+}
+BAD_LOCKS = {
+    "parse": "{not json " + MARK,
+    "duplicate-key": '{"schema": 1, "schema": 1, "kits": {}}',
+    "schema": json.dumps({"schema": 2, "kits": {}, "x": MARK}),
+    "not-object": "[]",
+    "kit-id": json.dumps({"schema": 1, "kits": {"Bad Id " + MARK: {}}}),
+    "secret": json.dumps({"schema": 1, "kits": {"sf": {"source": TOKEN + MARK}}}),
+    "oversize": OVERSIZE,
+}
+
+
+def _all_output(capsys, summary=None):
+    cap = capsys.readouterr()
+    return cap.out + cap.err + (_md(summary) if summary and os.path.exists(summary) else "")
+
+
+@pytest.mark.parametrize("raw", BAD_PROFILES.values(), ids=BAD_PROFILES)
+def test_invalid_target_profile_gate_exit_3_check_exit_2(tmp_path, monkeypatch, capsys, git_env, raw):
+    summary = _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG, target_files={"ado.stack.json": raw})
+    assert _gate(capsys, summary, "--base", "origin/main")[0] == 3
+    md = _md(summary)
+    assert "ado.stack.json at the target branch" in md and MARK not in md and TOKEN not in md and "origin/main" not in md.replace("target branch", "")
+    monkeypatch.setattr(m, "AdoClient", lambda c: FakeClient(c))
+    capsys.readouterr()
+    rc, out = _cli(m, capsys, "strict", "check", "1001", "--phase", "implement", "--base", "origin/main")
+    err = _all_output(capsys)
+    assert (rc, out) == (2, None)  # an error: line on stderr, no JSON
+    assert _cli(m, capsys, "strict", "verify", "1001", "--no-record", "--base", "origin/main")[0] == 2
+    assert _cli(m, capsys, "strict", "mode", "--base", "origin/main")[0] == 3
+    assert _cli(m, capsys, "branch", "--id-from", "feature/ab1001-x", "--base", "origin/main")[0] == 3
+    assert MARK not in err and TOKEN not in err
+
+
+@pytest.mark.parametrize("raw", BAD_LOCKS.values(), ids=BAD_LOCKS)
+def test_invalid_target_lock_gate_exit_3(tmp_path, monkeypatch, capsys, git_env, raw):
+    summary = _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG, target_files={"ado.kits.lock.json": raw})
+    assert _gate(capsys, summary, "--base", "origin/main")[0] == 3
+    md = _md(summary)
+    assert "ado.kits.lock.json at the target branch" in md and MARK not in md and TOKEN not in md
+    assert _cli(m, capsys, "strict", "mode", "--base", "origin/main")[0] == 3
+    assert MARK not in _all_output(capsys)
+
+
+def test_valid_target_profile_and_lock_do_not_fail_the_config(tmp_path, monkeypatch, capsys, git_env):
+    files = {"ado.stack.json": json.dumps(approve(profile())), "ado.kits.lock.json": json.dumps({"schema": 1, "kits": {"sf": {"version": "1.0.0"}}})}
+    summary = _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG, target_files=files)
+    rc, out = _gate(capsys, summary, "--base", "origin/main")
+    assert rc == 1 and out["config"] == "target branch (strict)"  # judged strict by the target (AC traceability blocks), not exit 3
+    assert _cli(m, capsys, "strict", "mode", "--base", "origin/main")[1] == {"mode": "strict", "source": "target branch"}
+
+
+def test_target_blobs_are_read_through_blob_at_with_the_cap_and_the_labels(tmp_path, monkeypatch, capsys, git_env):
+    _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG, target_files={"ado.stack.json": json.dumps(approve(profile()))})
+    calls, real = [], strict._blob_at
+    monkeypatch.setattr(strict, "_blob_at", lambda *a, **k: calls.append(a[2:]) or real(*a, **k))
+    assert _cli(m, capsys, "strict", "mode", "--base", "origin/main")[0] == 0
+    assert calls == [("ado.config.json", 1024 * 1024, "ado.config.json at the target branch"),
+                     ("ado.stack.json", 256 * 1024, "ado.stack.json at the target branch"),
+                     ("ado.kits.lock.json", 256 * 1024, "ado.kits.lock.json at the target branch")]
+
+
+def test_advisory_or_absent_target_config_reads_no_stack_files(tmp_path, monkeypatch, capsys, git_env):
+    for n, target in enumerate((None, ORG)):
+        repo = tmp_path / f"r{n}"
+        repo.mkdir()
+        _gate_pr(repo, monkeypatch, git_env, target, ORG, target_files={"ado.stack.json": "{not json", "ado.kits.lock.json": "{not json"})
+        seen = []
+        real = strict._blob_at
+        monkeypatch.setattr(strict, "_blob_at", lambda *a, **k: seen.append(a[2]) or real(*a, **k))
+        assert _cli(m, capsys, "strict", "mode", "--base", "origin/main")[0] == 0
+        assert "ado.stack.json" not in seen and "ado.kits.lock.json" not in seen  # v0.2: nothing new is read
+        monkeypatch.undo()
+        monkeypatch.chdir(repo)
+
+
+# -- strict check: the target's profile judges --
+def _ci(tmp_path, monkeypatch, git_env, target_files, head_files=None, target_cfg=STACK_STRICT, head_cfg=STACK_STRICT):
+    """`origin/trunk` = base + the target's config and `target_files`; HEAD = base + the spec/ledger files, the PR's own config and
+    `head_files`. Returns a runner for `strict check 1001 --phase implement --base origin/trunk` -> (rc, JSON, holder of the client)."""
+    repo = _repo(tmp_path, git_env)
+    base = git(repo, "rev-parse", "HEAD")
+    _project(tmp_path, prof=None)
+    _target(repo, target_cfg, base, files=target_files)
+    mine = {k: v for k, v in (head_files or {}).items() if v is not None}
+    inherited = {k: v for k, v in (target_files or {}).items() if isinstance(v, str) and k not in mine}  # the PR branched from the target
+    commit(repo, "AB#1001 pr", {"ado.config.json": _cfg_text(head_cfg), **inherited, **mine})
+    for gone in (k for k, v in (head_files or {}).items() if v is None):  # a head file of None: the PR deletes it
+        git(repo, "rm", "-q", gone)
+        git(repo, "commit", "-q", "-m", "AB#1001 delete")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    monkeypatch.setenv("ADO_TOKEN", "t")
+    holder = {}
+
+    def make(c):
+        holder["c"] = FakeClient(c, responses=_kids("T001", "T002"))
+        return holder["c"]
+    monkeypatch.setattr(m, "AdoClient", make)
+    return holder
+
+
+def _run(capsys, *extra, phase="implement"):
+    rc = main(["strict", "check", "1001", "--phase", phase, "--base", "origin/trunk", *extra])
+    out = capsys.readouterr().out
+    return rc, (json.loads(out) if out.strip() else None)
+
+
+def _rules_of(out):
+    return [f["rule"] for f in out["findings"]]
+
+
+def test_target_profile_used_when_target_strict(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    holder = _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))})
+    rc, out = _run(capsys)  # the PR touches neither file: the target's approved profile judges, no note
+    assert (rc, out["ok"], out["findings"]) == (0, True, []) and "warnings" not in out and holder["c"].config.from_target is True
+    d = tmp_path / "rev"
+    d.mkdir()
+    _ci(d, monkeypatch, git_env, {"ado.stack.json": json.dumps(profile())}, head_files={"ado.stack.json": json.dumps(approve(profile()))})
+    rc, out = _run(capsys)  # the PR approves its own profile: the target's draft is what counts (and the head copy is consistent)
+    assert rc == 2 and _rules_of(out) == ["stack-profile-draft"] and "at the head commit" not in out["findings"][0]["detail"]
+
+
+def test_head_draft_over_an_approved_target_is_refused_at_the_head_commit(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    """Fix round 1 (this replaces the P2-5b brief's 'head draft + target approved -> pass'): the target's verdict stays, and a head copy
+    that would lock every later PR once merged is refused too."""
+    _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))}, head_files={"ado.stack.json": json.dumps(profile())})
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == ["stack-profile-draft"] and "at the head commit" in out["findings"][0]["detail"]
+    assert out["warnings"] == [NOTE]
+
+
+HEAD_BAD = {"draft": (lambda: profile(), "stack-profile-draft"),
+            "changed": (lambda: approve(profile(), sha256="1" * 64), "stack-profile-changed"),
+            "parse": (lambda: "{not json " + MARK, "stack-profile-invalid"),
+            "unknown-key": (lambda: json.dumps({**profile(), MARK: 1}), "stack-profile-invalid")}
+
+
+@pytest.mark.parametrize("kind", HEAD_BAD)
+@pytest.mark.parametrize("bootstrap", [False, True], ids=["target-has-profile", "bootstrap"])
+def test_head_profile_that_would_lock_strict_after_merge_is_refused(tmp_path, monkeypatch, capsys, git_env, real_detect, kind, bootstrap):
+    make, rule = HEAD_BAD[kind]
+    raw = make()
+    _ci(tmp_path, monkeypatch, git_env, None if bootstrap else {"ado.stack.json": json.dumps(approve(profile()))},
+        head_files={"ado.stack.json": raw if isinstance(raw, str) else json.dumps(raw)})
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == [rule] and "at the head commit" in out["findings"][0]["detail"] and out["warnings"] == [NOTE]
+    assert MARK not in json.dumps(out)
+
+
+def test_head_hand_edited_test_command_is_refused(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))}, head_cfg={**STRICT, "strict": {"test_command": "true"}})
+    rc, out = _run(capsys)  # the head's profile is unchanged but its config no longer matches it: merged, every later PR would drift
+    assert rc == 2 and _rules_of(out) == ["stack-profile-drift"] and "at the head commit" in out["findings"][0]["detail"] and out["warnings"] == [NOTE]
+    d = tmp_path / "unset"
+    d.mkdir()
+    _ci(d, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))}, head_cfg=STRICT)  # the PR drops the command
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == ["stack-profile-drift"]
+
+
+def test_head_deleting_the_profile_is_refused_and_a_null_test_is_consistent(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))}, head_files={"ado.stack.json": None})
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == ["stack-profile-missing"] and "at the head commit" in out["findings"][0]["detail"]
+    null = profile()
+    null["stacks"][0]["commands"]["test"] = {"run": None, "why": "tests run on the platform"}
+    for n, boot in enumerate((False, True)):  # no command anywhere is consistent with a null test, in both flows
+        d = tmp_path / f"n{n}"
+        d.mkdir()
+        _ci(d, monkeypatch, git_env, None if boot else {"ado.stack.json": json.dumps(approve(null))}, target_cfg=STRICT, head_cfg=STRICT,
+            head_files={"ado.stack.json": json.dumps(approve({**null, "version": 3}))})
+        rc, out = _run(capsys)
+        assert _rules_of(out) == ["test-command"] and out["warnings"] == [NOTE], boot  # only the unset command (an l2 waiver covers it)
+
+
+def test_the_note_fires_on_any_head_edit_of_the_trust_files(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    approved = json.dumps(approve(profile()))
+    cases = {"lockfile": dict(head_files={"ado.kits.lock.json": json.dumps({"schema": 1, "kits": {}})}),
+             "profile": dict(head_files={"ado.stack.json": json.dumps(approve({**profile(), "version": 3}))}),
+             "command": dict(head_cfg={**STRICT, "strict": {"test_command": "true"}}, head_files={"ado.stack.json": json.dumps(
+                 approve({**profile(), "stacks": [{**profile()["stacks"][0], "commands": {"test": {"run": "true", "source": "S1"}}}]}))})}
+    for n, (name, kw) in enumerate(cases.items()):
+        d = tmp_path / f"c{n}"
+        d.mkdir()
+        _ci(d, monkeypatch, git_env, {"ado.stack.json": approved}, **kw)
+        rc, out = _run(capsys)
+        assert (rc, out["ok"], out["warnings"]) == (0, True, [NOTE]), name  # consistent edits pass, flagged for review as code
+    d = tmp_path / "none"
+    d.mkdir()
+    _ci(d, monkeypatch, git_env, {"ado.stack.json": approved})
+    assert "warnings" not in _run(capsys)[1]
+
+
+def test_head_edit_to_test_command_ignored_in_ci(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    other = profile()
+    other["stacks"][0]["commands"]["test"]["run"] = "true"
+    holder = _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))},
+                 head_files={"ado.stack.json": json.dumps(approve(other))},
+                 head_cfg={**STRICT, "strict": {"test_command": "true"}})  # the PR re-points both, consistently
+    rc, out = _run(capsys)
+    assert (rc, out["ok"], out["findings"]) == (0, True, [])
+    assert holder["c"].config.strict["test_command"] == STACK_CMD  # the command in force is the target's
+    d = tmp_path / "drift"
+    d.mkdir()
+    _ci(d, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))}, target_cfg={**STRICT, "strict": {"test_command": "pytest -q"}},
+        head_cfg={**STRICT, "strict": {"test_command": STACK_CMD}})  # the target's config drifted from its profile; the PR's own copy agrees
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == ["stack-profile-drift"]
+
+
+def test_bootstrap_no_target_profile_is_note_not_block(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, None)
+    rc, out = _run(capsys)
+    assert (rc, out["ok"], out["findings"]) == (0, True, []) and "warnings" not in out  # no profile anywhere: no finding, no note
+    d = tmp_path / "ok"
+    d.mkdir()
+    _ci(d, monkeypatch, git_env, None, head_files={"ado.stack.json": json.dumps(approve(profile()))})
+    rc, out = _run(capsys)  # the first profile: approved and consistent with the head's strict.test_command
+    assert (rc, out["ok"], out["findings"], out["warnings"]) == (0, True, [], [NOTE])
+    d = tmp_path / "drift"
+    d.mkdir()
+    _ci(d, monkeypatch, git_env, None, head_files={"ado.stack.json": json.dumps(approve(profile()))}, head_cfg={**STRICT, "strict": {"test_command": "true"}})
+    rc, out = _run(capsys)  # approved but the head's command is not the composed one
+    assert rc == 2 and _rules_of(out) == ["stack-profile-drift"] and out["warnings"] == [NOTE]
+
+
+@pytest.mark.parametrize("raw", BAD_PROFILES.values(), ids=BAD_PROFILES)
+def test_bootstrap_invalid_head_profile_refused(tmp_path, monkeypatch, capsys, git_env, real_detect, raw):
+    _ci(tmp_path, monkeypatch, git_env, None, head_files={"ado.stack.json": raw})
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == ["stack-profile-invalid"] and out["warnings"] == [NOTE]
+    assert MARK not in json.dumps(out) and TOKEN not in json.dumps(out)
+
+
+def test_bootstrap_head_symlink_profile_refused(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, None, head_files={"elsewhere.json": json.dumps(approve(profile()))})
+    os.symlink("elsewhere.json", tmp_path / "ado.stack.json")
+    commit(tmp_path, "AB#1001 link")
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == ["stack-profile-invalid"]
+
+
+def test_bootstrap_applies_only_when_the_target_lacks_a_profile(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(profile())}, head_files={"ado.stack.json": json.dumps(approve(profile()))})
+    rc, out = _run(capsys)  # the target has a (draft) profile: it binds, and the head's approved copy is just flagged for review
+    assert rc == 2 and _rules_of(out) == ["stack-profile-draft"] and out["warnings"] == [NOTE] and "at the head commit" not in out["findings"][0]["detail"]
+    d = tmp_path / "local"
+    d.mkdir()
+    _ci(d, monkeypatch, git_env, None, target_cfg=None, head_cfg=STACK_STRICT)  # no target config: the PR's own strict config, a local one
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == ["stack-profile-missing"] and "warnings" not in out
+    d = tmp_path / "plain"
+    d.mkdir()
+    _ci(d, monkeypatch, git_env, None, head_files={"ado.stack.json": json.dumps(approve(profile()))})
+    rc, out = _run(capsys)  # and a target without a profile gives a note even when the head's profile is approved and complete
+    assert rc == 0 and out["warnings"] == [NOTE]
+
+
+def test_new_root_after_bootstrap_is_stack_unprofiled(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))}, head_files={"web/package.json": "{}\n"})
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == ["stack-unprofiled"] and "web" in out["findings"][0]["detail"]
+    d = tmp_path / "covered"
+    d.mkdir()
+    web = profile()
+    web["stacks"].append({"id": "web", "root": "web", "commands": {"test": {"run": None, "why": "none"}}})
+    web = approve(web)
+    _ci(d, monkeypatch, git_env, {"ado.stack.json": json.dumps(web)}, head_files={"web/package.json": "{}\n"})
+    rc, out = _run(capsys)  # the profile on the target covers the root (the two-PR flow: profile first, then the root)
+    assert "stack-unprofiled" not in _rules_of(out)
+    e = tmp_path / "edit"
+    e.mkdir()
+    _ci(e, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))},
+        head_files={"web/package.json": "{}\n", "ado.stack.json": json.dumps(web)})  # the PR adds the root AND its own profile edit: still refused
+    rc, out = _run(capsys)
+    assert rc == 2 and "stack-unprofiled" in _rules_of(out)
+
+
+def test_a_new_stack_at_a_covered_root_is_unprofiled_by_family(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))},
+        head_files={"package.json": "{}\n", "tsconfig.json": "{}\n"})  # a python profile at "."; the head adds a TypeScript project at the same root
+    rc, out = _run(capsys)
+    assert rc == 2 and _rules_of(out) == ["stack-unprofiled"] and "(typescript)" in out["findings"][0]["detail"]
+    d = tmp_path / "fam"
+    d.mkdir()
+    ts = profile()
+    ts["stacks"][0]["id"] = "typescript"  # the seed's id for a root detection calls node or typescript: one family
+    _ci(d, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(ts))}, head_files={"package.json": "{}\n"})
+    assert _rules_of(_run(capsys)[1]) == []
+    e = tmp_path / "custom"
+    e.mkdir()
+    custom = profile()
+    custom["stacks"][0]["id"] = "web-app"  # a free-form id covers its root, whatever is detected there
+    _ci(e, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(custom))}, head_files={"package.json": "{}\n"})
+    assert _rules_of(_run(capsys)[1]) == []
+
+
+def test_stack_rules_bind_in_pr_and_done_phases_from_the_target(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(profile())}, head_files={"ado.stack.json": json.dumps(approve(profile()))})
+    for phase in ("pr", "done"):
+        rc, out = _run(capsys, phase=phase)
+        assert rc == 2 and "stack-profile-draft" in _rules_of(out), phase
+
+
+# -- gate: the PR comment carries the note --
+def test_gate_comment_notes_a_trust_introducing_pr(tmp_path, monkeypatch, capsys, git_env):
+    summary = _gate_pr(tmp_path, monkeypatch, git_env, STRICT, ORG, head_files={"ado.stack.json": json.dumps(profile())})
+    rc, out = _gate(capsys, summary, "--base", "origin/main")
+    assert out["trust_note"] == NOTE and _md(summary).splitlines().count(NOTE) == 1
+    cases = {"target has a profile": dict(target_files={"ado.stack.json": json.dumps(profile())}, head_files={"ado.stack.json": json.dumps(profile())}),
+             "head adds none": {}, "advisory target": dict(head_files={"ado.stack.json": json.dumps(profile())})}
+    for n, (name, kw) in enumerate(cases.items()):
+        repo = tmp_path / f"c{n}"
+        repo.mkdir()
+        s = _gate_pr(repo, monkeypatch, git_env, ORG if name == "advisory target" else STRICT, ORG, **kw)
+        rc, out = _gate(capsys, s, "--base", "origin/main")
+        assert "trust_note" not in out and NOTE not in _md(s), name
+    other = tmp_path / "nobase"
+    other.mkdir()
+    s = _gate_pr(other, monkeypatch, git_env, STRICT, ORG, head_files={"ado.stack.json": json.dumps(profile())})
+    assert "trust_note" not in _gate(capsys, s)[1] and NOTE not in _md(s)  # no --base: nothing is judged from a target
+
+
+def test_gate_comment_notes_any_head_edit_of_the_trust_files(tmp_path, monkeypatch, capsys, git_env):
+    cases = {"lockfile": dict(head=ORG, head_files={"ado.kits.lock.json": json.dumps({"schema": 1, "kits": {}})}),
+             "profile": dict(head=ORG, target_files={"ado.stack.json": json.dumps(approve(profile()))},
+                             head_files={"ado.stack.json": json.dumps(approve({**profile(), "version": 3}))}),
+             "command": dict(head={**ORG, "strict": {"test_command": "true"}})}
+    for n, (name, kw) in enumerate(cases.items()):
+        repo = tmp_path / f"e{n}"
+        repo.mkdir()
+        kw = {"head": ORG, **kw}
+        summary = _gate_pr(repo, monkeypatch, git_env, STRICT, kw.pop("head"), **kw)
+        rc, out = _gate(capsys, summary, "--base", "origin/main")
+        assert out["trust_note"] == NOTE and _md(summary).splitlines().count(NOTE) == 1, name
+
+
+def test_gate_comment_for_an_invalid_trust_file_does_not_blame_the_config(tmp_path, monkeypatch, capsys, git_env):
+    for name, raw in (("ado.stack.json", "{not json"), ("ado.kits.lock.json", "[]")):
+        repo = tmp_path / name
+        repo.mkdir()
+        summary = _gate_pr(repo, monkeypatch, git_env, STRICT, ORG, target_files={name: raw})
+        assert _gate(capsys, summary, "--base", "origin/main")[0] == 3
+        md = _md(summary)
+        assert "target branch trust files are invalid:" in md and f"{name} at the target branch" in md and "ado.config.json is invalid" not in md
+    other = tmp_path / "config"
+    other.mkdir()
+    summary = _gate_pr(other, monkeypatch, git_env, "{not json", ORG)  # a broken config file keeps its old wording
+    assert _gate(capsys, summary, "--base", "origin/main")[0] == 3 and "ado.config.json is invalid" in _md(summary)

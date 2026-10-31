@@ -389,7 +389,8 @@ def _override(args):
 def _config(args):
     """The config this run uses. With `--base REF` on `gate`, `strict check`, `strict verify`, `strict mode` or `branch --id-from`, the target branch's
     `ado.config.json` is read first: when it says `mode: strict`, the whole run uses it and the PR's own file is never read (a PR cannot
-    weaken its own strictness); an unreadable one raises ConfigInvalid (fail closed). A target with no config, or an advisory one, leaves
+    weaken its own strictness), and the target's `ado.stack.json` and `ado.kits.lock.json` are read and validated too; an unreadable
+    or invalid one raises ConfigInvalid (fail closed). A target with no config, or an advisory one, leaves
     the PR's config in charge. A REF that is no commit here (a shallow clone, `origin/main` in a repo with no origin) cannot say what the
     target holds: with an advisory PR config that is the v0.2 path (the gate notes it and goes on); with a strict one, or an invalid one,
     it fails closed."""
@@ -407,6 +408,7 @@ def _config(args):
             return head
         if target is not None and target.mode == "strict":
             target.from_target = True
+            strict.read_target_trust(target, repo)  # the profile and the lockfile of the target commit; ConfigInvalid fails closed
             return target
     return Config.load()
 
@@ -757,6 +759,8 @@ def main(argv=None):
             out = dispatch(client, args)
             if args.command == "gate" and client.config.from_target:  # additive: only when the target's config judged this run
                 out["config"] = gate.TARGET_CONFIG_NOTE
+                if strict.edits_trust_files(client.config, args.src):  # the PR edits the profile, lockfile or test command: say so in the comment
+                    out["trust_note"] = gate.TRUST_NOTE
             elif args.command == "gate" and args.base is not None and client.config.mode == "strict":  # a strict PR config under --base
                 out["config"] = gate.PR_CONFIG_NOTE
     except (ConfigError, AuthError, dod.DodExists, ValueError) as e:

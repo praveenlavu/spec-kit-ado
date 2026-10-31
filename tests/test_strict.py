@@ -5,12 +5,13 @@ import subprocess
 
 import pytest
 
-from ado import gate, strict
+from ado import gate, stack, strict
 from ado.__main__ import main
 from ado.client import AdoError
 from ado.config import Config
 from ado.dod import SECTION2
 from tests.conftest import FakeClient, commit, git, review_md, write_files
+from tests.test_stack_show import approve, profile, put
 
 SPEC = "specs/001-members"
 TASKS = "- [ ] T001 Count members\n- [ ] T002 List members\n"
@@ -42,9 +43,22 @@ class DownClient(FakeClient):
         raise AdoError("HTTP 503 Service Unavailable")
 
 
+def _neutral():
+    """An approved profile that defines no test command (so no drift, whatever strict.test_command says): what the older tests in this
+    module sit behind, since a strict project now needs an approved ado.stack.json."""
+    p = profile()
+    p["stacks"][0]["commands"]["test"] = {"run": None, "why": "the older strict tests set their own command"}
+    return approve(p)
+
+
+_NEUTRAL = object()
+
+
 def _project(tmp_path, ledger=None, files=None, mode="strict", test_command="pytest -q", board=("T001", "T002"),
-             cls=FakeClient):
+             cls=FakeClient, prof=_NEUTRAL):
     (tmp_path / "dod").mkdir(exist_ok=True)
+    if prof is not None:
+        put(tmp_path, _neutral() if prof is _NEUTRAL else prof)
     if ledger is not False:
         (tmp_path / "dod" / "DoD_1001.md").write_text(ledger if ledger is not None else _ledger(), encoding="utf-8")
     for name, text in (FILES if files is None else files).items():
@@ -1809,3 +1823,196 @@ def test_superseding_an_open_decision_the_po_never_saw_is_flagged(tmp_path, git_
         assert _rules(res) == ["supersedes-unposted"] and "D4" in res["findings"][0]["detail"] and "D6" not in res["findings"][0]["detail"]
     DEC(tmp_path).write_text(decisions.render_file(1001) + _d(4, "an open choice", posted=True) + _sup(6, 4, status="validated"))
     assert _pr(tmp_path, client, "done")["ok"] is True
+
+
+# ---- P2-5b: the stack rules (here: the working-tree profile of a local strict config; the target branch's: test_ci_trust.py) ----
+STACK_CMD = "PYTHONPATH=src python3 -m pytest -q"  # what profile() composes to (one stack at root ".")
+MARK = "ZZ-UNTRUSTED"
+
+
+def _stk(tmp_path, git_env, prof, files=None, test_command=STACK_CMD, **kw):
+    """A git repo whose commit holds `files`, with the profile `prof` (a dict, raw text, or None for none) in the working tree."""
+    _repo(tmp_path, git_env)
+    client = _project(tmp_path, prof=prof, test_command=test_command, **kw)
+    commit(tmp_path, "project", files or {})
+    return client
+
+
+def _impl(client, tmp_path, phase="implement"):
+    return strict.check(client, 1001, phase, repo=str(tmp_path))
+
+
+def _only(res, rule):
+    assert res["ok"] is False and _rules(res) == [rule], res["findings"]
+    f = res["findings"][0]
+    assert set(f) == {"rule", "detail", "fix"} and MARK not in json.dumps(res)
+    return f
+
+
+def test_a_matching_approved_profile_is_ok(tmp_path, git_env, real_detect):
+    client = _stk(tmp_path, git_env, approve(profile()))
+    assert _impl(client, tmp_path) == {"phase": "implement", "mode": "strict", "ok": True, "findings": [], "overrides_used": []}
+
+
+def test_stack_profile_missing(tmp_path, git_env, real_detect):
+    f = _only(_impl(_stk(tmp_path, git_env, None), tmp_path), "stack-profile-missing")
+    assert "ado.stack.json" in f["detail"] and "speckit.ado.stack" in f["fix"]
+
+
+@pytest.mark.parametrize("raw", ["{not json", '{"schema": 1, "schema": 1}', json.dumps({**profile(), "extra": MARK}),
+                                 json.dumps({**profile(), "version": MARK})], ids=["parse", "duplicate-key", "unknown-key", "schema"])
+def test_stack_profile_invalid(tmp_path, git_env, real_detect, raw):
+    f = _only(_impl(_stk(tmp_path, git_env, raw), tmp_path), "stack-profile-invalid")
+    assert "ado stack show" in f["fix"]
+
+
+def test_stack_profile_draft(tmp_path, git_env, real_detect):
+    p = profile()
+    p["stacks"][0]["commands"]["lint"]["run"] = MARK
+    f = _only(_impl(_stk(tmp_path, git_env, p), tmp_path), "stack-profile-draft")
+    assert "ado stack approve --apply" in f["fix"] and "speckit.ado.stack" in f["fix"]
+
+
+def test_stack_profile_changed(tmp_path, git_env, real_detect):
+    p = approve(profile())
+    p["stacks"][0]["commands"]["lint"]["run"] = MARK
+    f = _only(_impl(_stk(tmp_path, git_env, p), tmp_path), "stack-profile-changed")
+    assert "ado stack approve --apply" in f["fix"]
+
+
+def test_stack_profile_drift(tmp_path, git_env, real_detect):
+    f = _only(_impl(_stk(tmp_path, git_env, approve(profile()), test_command="pytest -q"), tmp_path), "stack-profile-drift")
+    assert "strict.test_command" in f["detail"] and "ado stack approve --apply" in f["fix"] and "pytest -q" not in json.dumps(f)
+    (tmp_path / "u").mkdir()
+    unset = _impl(_stk(tmp_path / "u", git_env, approve(profile()), test_command=None), tmp_path / "u")
+    assert "stack-profile-drift" in _rules(unset)  # the profile defines a command and the config has none: they differ
+
+
+def test_drift_only_when_profile_defines_command(tmp_path, git_env, real_detect):
+    p = profile()
+    p["stacks"][0]["commands"]["test"] = {"run": None, "why": "tests run on the platform"}
+    for n, cmd in enumerate(("pytest -q", None)):
+        d = tmp_path / f"r{n}"
+        d.mkdir()
+        res = _impl(_stk(d, git_env, approve(p), test_command=cmd), d)
+        assert "stack-profile-drift" not in _rules(res) and _rules(res) == (["test-command"] if cmd is None else [])
+
+
+def test_null_test_with_l2_override_passes(tmp_path, git_env, real_detect):
+    p = profile()
+    p["stacks"][0]["commands"]["test"] = {"run": None, "why": "tests run on the platform"}
+    client = _stk(tmp_path, git_env, approve(p), test_command=None)
+    assert _rules(_impl(client, tmp_path)) == ["test-command"]  # no command anywhere: the waiver is the only way through
+    DEC(tmp_path).write_text(decisions.render_file(1001) + _d(1, "skip l2", kind="override"))
+    res = _impl(_project(tmp_path, prof=approve(p), test_command=None), tmp_path)  # a fresh board response
+    assert res == {"phase": "implement", "mode": "strict", "ok": True, "findings": [], "overrides_used": ["D1"]}
+
+
+@pytest.mark.parametrize("rule", ["stack-profile-missing", "stack-profile-invalid", "stack-profile-draft", "stack-profile-changed",
+                                  "stack-profile-drift", "stack-unprofiled", "stack-profile"])
+def test_stack_rules_are_not_overridable(tmp_path, git_env, real_detect, rule):
+    client = _stk(tmp_path, git_env, profile())  # a draft
+    DEC(tmp_path).write_text(decisions.render_file(1001) + _d(1, f"skip {rule}", kind="override"))
+    assert _rules(_impl(client, tmp_path)) == ["stack-profile-draft"]
+    assert not any(r.startswith("stack") for r in strict._COVERS) and not any(v.startswith("stack") for vs in strict._COVERS.values() for v in vs)
+
+
+@pytest.mark.parametrize("phase", ["implement", "pr", "done"])
+def test_stack_rules_run_in_implement_pr_and_done(phase):
+    assert strict._stack_profile in strict.PHASES[phase] and strict._stack_unprofiled in strict.PHASES[phase]
+
+
+def test_stack_rules_bind_at_pr_and_done_on_the_story_repo(tmp_path, git_env, real_detect):
+    client, _ = _story(tmp_path, git_env)
+    for phase in ("pr", "done"):
+        assert _pr(tmp_path, client, phase)["ok"] is True
+    put(tmp_path, profile())  # a draft in the working tree
+    for phase in ("pr", "done"):
+        assert _rules(_pr(tmp_path, client, phase)) == ["stack-profile-draft"]
+    (tmp_path / "ado.stack.json").unlink()
+    assert _rules(_pr(tmp_path, client, "pr")) == ["stack-profile-missing"]
+
+
+def test_stack_unprofiled(tmp_path, git_env, real_detect):
+    client = _stk(tmp_path, git_env, approve(profile()), files={"web/package.json": "{}\n"})
+    f = _only(_impl(client, tmp_path), "stack-unprofiled")
+    assert "web" in f["detail"] and "speckit.ado.stack" in f["fix"] and "ado stack approve --apply" in f["fix"]
+
+
+def test_unprofiled_compares_roots_not_ids_and_ignores_medium(tmp_path, git_env, real_detect):
+    p = profile()
+    p["stacks"][0]["id"] = "typescript"  # detect says `node` at this root; the seed's id is `typescript`: the root decides
+    p["stacks"][0]["commands"]["test"]["run"] = STACK_CMD
+    client = _stk(tmp_path, git_env, approve(p), files={"package.json": "{}\n", "api/requirements.txt": "flask\n", "docs/Makefile": "x:\n"})
+    assert _impl(client, tmp_path)["ok"] is True  # a medium-confidence root (requirements.txt, Makefile) is no finding
+
+
+def test_unprofiled_matches_by_root_and_id_family(tmp_path, git_env, real_detect):
+    client = _stk(tmp_path, git_env, approve(profile()), files={"package.json": "{}\n", "tsconfig.json": "{}\n"})
+    f = _only(_impl(client, tmp_path), "stack-unprofiled")  # a python profile at "." does not cover a TypeScript project at "."
+    assert "(typescript)" in f["detail"]
+    for n, (pid, ok) in enumerate((("node", True), ("typescript", True), ("flutter", False), ("web-app", True))):
+        d = tmp_path / f"f{n}"
+        d.mkdir()
+        p = profile()
+        p["stacks"][0]["id"] = pid
+        res = _impl(_stk(d, git_env, approve(p), files={"package.json": "{}\n"}), d)
+        assert (res["ok"], _rules(res)) == ((True, []) if ok else (False, ["stack-unprofiled"])), pid  # families: node/typescript, dart/flutter; free ids cover by root
+
+
+def test_fix_texts_name_the_seed_verb(tmp_path, git_env, real_detect):
+    for prof, rule in ((None, "stack-profile-missing"), (profile(), "stack-profile-draft")):
+        d = tmp_path / rule
+        d.mkdir()
+        fix = _only(_impl(_stk(d, git_env, prof), d), rule)["fix"]
+        assert "ado stack init --seed <name>" in fix and "speckit.ado.stack" in fix and "ado stack approve --apply" in fix
+    d = tmp_path / "unprofiled"
+    d.mkdir()
+    assert "ado stack init --seed <name>" in _only(_impl(_stk(d, git_env, approve(profile()), files={"web/package.json": "{}\n"}), d), "stack-unprofiled")["fix"]
+
+
+def test_unprofiled_root_is_printed_through_safe_path(tmp_path, git_env, real_detect):
+    client = _stk(tmp_path, git_env, approve(profile()), files={"my app/package.json": "{}\n", "ok-dir/package.json": "{}\n"})
+    detail = _only(_impl(client, tmp_path), "stack-unprofiled")["detail"]
+    assert "ok-dir" in detail and "<path #" in detail and "my app" not in detail
+
+
+def test_unprofiled_detection_failure_is_a_finding(tmp_path, git_env, real_detect, monkeypatch):
+    client = _stk(tmp_path, git_env, approve(profile()))
+    monkeypatch.setattr(stack, "detect", lambda *a, **k: (_ for _ in ()).throw(ValueError("boom")))
+    f = _only(_impl(client, tmp_path), "stack-unprofiled")
+    assert "could not" in f["detail"] and "boom" not in json.dumps(f)
+
+
+def test_a_draft_profile_still_gets_the_unprofiled_check_and_none_does_not_double_report(tmp_path, git_env, real_detect):
+    client = _stk(tmp_path, git_env, None, files={"web/package.json": "{}\n"})
+    assert _rules(_impl(client, tmp_path)) == ["stack-profile-missing"]
+
+
+def test_verify_ignores_stack_rules(tmp_path, git_env, real_detect):
+    client, s = _story(tmp_path, git_env, record=False)
+    put(tmp_path, profile())  # a draft: `check` would refuse
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "package.json").write_text("{}")
+    res = strict.verify(client, 1001, record=False, repo=str(tmp_path))
+    assert res["ok"] is True and not any(f["rule"].startswith("stack") for f in res["findings"])
+    (tmp_path / "ado.stack.json").unlink()
+    assert strict.verify(client, 1001, record=False, repo=str(tmp_path))["ok"] is True
+
+
+def test_advisory_noop_byte_identical(tmp_path, monkeypatch, capsys):
+    """Advisory output is the v0.2 baseline text, whatever ado.stack.json / ado.kits.lock.json hold."""
+    base = ('{\n  "phase": "%s",\n  "mode": "advisory",\n  "ok": true,\n  "findings": [],\n  "note": "mode is advisory"\n}\n')
+    (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam"}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    monkeypatch.setenv("ADO_TOKEN", "t")
+    from ado import __main__ as m
+    monkeypatch.setattr(m, "AdoClient", lambda c: FakeClient(c))
+    for prof in (None, "{not json", approve(profile())):
+        if prof is not None:
+            (tmp_path / "ado.stack.json").write_text(prof if isinstance(prof, str) else json.dumps(prof))
+            (tmp_path / "ado.kits.lock.json").write_text("{not json")
+        for phase in ("implement", "pr", "done"):
+            assert main(["strict", "check", "1001", "--phase", phase]) == 0
+            assert capsys.readouterr().out == base % phase

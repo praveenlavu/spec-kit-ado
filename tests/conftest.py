@@ -83,3 +83,16 @@ def git_env(monkeypatch):
     for k in ("AUTHOR", "COMMITTER"):
         monkeypatch.setenv(f"GIT_{k}_NAME", "Test")
         monkeypatch.setenv(f"GIT_{k}_EMAIL", "test@example.invalid")
+
+
+@pytest.fixture
+def real_detect():
+    """Opt-in marker (see `_stub_detect`): the test runs the real stack detection of the strict `stack-unprofiled` rule."""
+
+
+@pytest.fixture(autouse=True)
+def _stub_detect(request, monkeypatch):
+    """Most strict tests run in a plain temporary directory that is no git repository; `stack-unprofiled` (P2-5b) would call that a
+    finding. Those tests are about other rules, so detection finds nothing there; a test of the rule asks for `real_detect`."""
+    if "real_detect" not in request.fixturenames:
+        monkeypatch.setattr("ado.strict._detected", lambda repo, commit: {"outcome": "unknown", "stacks": [], "domain_hints": []})

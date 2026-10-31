@@ -18,10 +18,10 @@ import time
 from datetime import date
 from pathlib import Path
 
-from . import decisions, dod, gate, prs, push, questions, tasks
+from . import decisions, dod, gate, prs, push, questions, stack, tasks
 from .auth import AuthError
 from .client import AdoError
-from .config import ConfigInvalid
+from .config import Config, ConfigInvalid
 
 _PLACEHOLDER = re.compile(r"_\(\s*fill\s+in", re.I)
 _BULLETS = (("Approach", "Approach"), ("Assumptions", "Assumptions"), ("Use cases & edge cases", "Use cases"))
@@ -96,7 +96,7 @@ class _Ctx:
         self.ledger = gate._read(Path(repo) / dod.dod_file(self.cfg.dod_path, story_id), repo, set())
         spec_dir = dod.ledger_spec_dir(self.ledger) if self.ledger is not None else None
         self.spec_dir = spec_dir.strip() or None if spec_dir else None  # a CRLF ledger leaves `\r` on the header value
-        self._files = {}
+        self._files, self._stack, self._head = {}, None, None
         path = Path(repo) / decisions.decisions_file(self.cfg.dod_path, story_id)
         md = gate._read(path, repo, set()) if os.path.lexists(path) else None  # confined like the ledger: no symlink, <= 1 MiB
         self.decisions_md = md or ""
@@ -200,6 +200,183 @@ def _test_command(c):
     if c.cfg.strict.get("test_command"):
         return []
     return [_finding("test-command", "strict.test_command is not set", "set strict.test_command in ado.config.json")]
+
+
+# ---- stack profile rules (D§5): `ado.stack.json` must be approved, unchanged since, and agree with strict.test_command ----
+# In CI (cfg.from_target) the profile is the TARGET branch's blob (read once by read_target_trust), never the PR's file; a local config
+# reads the working tree. Not overridable (not in _COVERS): an unknown or unapproved stack stops the run. Process enforcement, not a sandbox.
+_PROFILE_LABEL = "ado.stack.json at the target branch"
+_LOCK_LABEL = "ado.kits.lock.json at the target branch"
+_HEAD_LABEL = "ado.stack.json at the head commit"
+_APPROVE = "a human runs `ado stack approve --apply` in their own terminal window (`ado stack approve` previews it)"
+
+
+def read_target_trust(cfg, repo):
+    """For a strict config taken from the target branch (`cfg.from_target`): reads `ado.stack.json` and `ado.kits.lock.json` at
+    `cfg.source_commit` through `_blob_at` (256 KiB each) into `cfg.target_profile_blob` / `cfg.target_lock_blob` (None when absent) and
+    raises ConfigInvalid, with fixed texts that carry none of the file, when either is unreadable or invalid. A draft or changed profile
+    is valid here (the rule refuses it); the lockfile is judged by `stack.lock_error`."""
+    raw = _blob_at(repo, cfg.source_commit, stack.PROFILE_FILE, stack.MAX_PROFILE, _PROFILE_LABEL)
+    if raw is not None and (res := stack.read_profile(blob=raw))["status"] == "invalid":
+        raise ConfigInvalid(f"{_PROFILE_LABEL}: the profile is invalid ({len(res['errors'])} error(s)); fix it on the target branch")
+    cfg.target_profile_blob = raw
+    raw = _blob_at(repo, cfg.source_commit, "ado.kits.lock.json", stack.MAX_PROFILE, _LOCK_LABEL)
+    if raw is not None and (why := stack.lock_error(raw)):
+        raise ConfigInvalid(f"{_LOCK_LABEL}: the lockfile {why}")
+    cfg.target_lock_blob = raw
+
+
+def _head_commit(c):
+    if c._head is None:
+        c._head = _rev(c.repo, c.rev)
+    return c._head
+
+
+_UNREADABLE = object()  # a head file that cannot be read (symlink, directory, oversize, git failure): never equal to the target's bytes
+
+
+def _head_blob(repo, head, path, label):
+    try:
+        return _blob_at(repo, head, path, stack.MAX_PROFILE, label) if head else _UNREADABLE
+    except ConfigInvalid:
+        return _UNREADABLE
+
+
+def _head_trust(cfg, repo, head):
+    """For a strict target config: what the head commit holds of the trust files, against the target's. `{"profile": read_profile-like dict,
+    "differs": the profile or strict.test_command differs from the target's, "changed": that or the lockfile differs, "cmd": the head
+    config's strict.test_command}`. An absent head config counts as no command; an unreadable file as different."""
+    raw = _head_blob(repo, head, stack.PROFILE_FILE, _HEAD_LABEL)
+    lock = _head_blob(repo, head, "ado.kits.lock.json", "ado.kits.lock.json at the head commit")
+    try:
+        hc = Config.load_from_ref(head, repo) if head else None
+    except ConfigInvalid:
+        hc = None
+    cmd = hc.strict.get("test_command") if hc is not None else None
+    if raw is _UNREADABLE:
+        res = {"status": "unreadable", "profile": None, "errors": []}
+    else:
+        res = stack.read_profile(blob=raw) if raw is not None else {"status": "none", "profile": None, "errors": []}
+    differs = raw != cfg.target_profile_blob or cmd != cfg.strict.get("test_command")
+    return {"profile": res, "differs": differs, "changed": differs or lock != cfg.target_lock_blob, "cmd": cmd}
+
+
+def edits_trust_files(cfg, repo, commit="HEAD"):
+    """True when `commit` (the PR head) differs from the target branch in `ado.stack.json`, `ado.kits.lock.json` or `strict.test_command`
+    (only for a config taken from the target): the PR comment and `warnings` say to review it as code."""
+    full = _rev(repo, commit) if cfg.from_target else ""
+    return bool(full) and _head_trust(cfg, repo, full)["changed"]
+
+
+def _stack_state(c):
+    """The profile that judges this run, cached: `{"bootstrap", "status", "profile", "errors"}` (the target's blob in CI, else the working
+    tree) plus, in CI, `"head"`: `_head_trust` of the head commit."""
+    if c._stack is None:
+        cfg = c.cfg
+        c._stack = {"bootstrap": bool(cfg.from_target and cfg.target_profile_blob is None), **stack.profile_for(cfg, c.repo), "head": None}
+        if cfg.from_target:
+            c._stack["head"] = _head_trust(cfg, c.repo, _head_commit(c))
+    return c._stack
+
+
+_DRAFT_IT = "run `ado stack init --seed <name>` (or speckit.ado.stack, once installed) to draft it"
+
+
+def _head_findings(s):
+    """The head commit's copy, which becomes the target's on merge: when it differs from the target's (or the head config's
+    strict.test_command does), it must itself be a valid, approved profile that agrees with the head's strict.test_command. Only adds
+    findings; the target's verdict is never replaced. A head without a profile is fine at bootstrap (nothing to lock)."""
+    h = s["head"]
+    if h is None or not h["differs"]:
+        return []
+    st, at = h["profile"]["status"], "ado.stack.json at the head commit"
+    n = len(h["profile"]["errors"])
+    if st in ("unreadable", "invalid"):
+        return [_finding("stack-profile-invalid", f"{at} cannot be read, or is invalid" + ("" if st == "unreadable" else f" ({n} error(s))"),
+                         "run `ado stack show` for the error positions and fix the file: once merged it would fail every later PR")]
+    if st == "none":
+        return [] if s["bootstrap"] else [_finding("stack-profile-missing", f"{at} is missing: the PR deletes the profile",
+                                                  f"restore it, or {_DRAFT_IT}; then {_APPROVE}")]
+    if st == "draft":
+        return [_finding("stack-profile-draft", f"{at} is a draft: once merged it would fail every later PR",
+                         f"{_DRAFT_IT}; then {_APPROVE}")]
+    if st == "changed-since-approval":
+        return [_finding("stack-profile-changed", f"{at} changed after it was approved (the recorded hash no longer matches)",
+                         f"review the change; then {_APPROVE} to approve it again")]
+    try:
+        composed = stack.compose_test_command(h["profile"]["profile"])
+    except ValueError:
+        composed = None
+        too_long = True
+    else:
+        too_long = False
+    if too_long or (composed is not None and h["cmd"] != composed):
+        return [_finding("stack-profile-drift", f"strict.test_command at the head commit differs from the command {at} composes"
+                         + (" (which is over 500 characters)" if too_long else ""),
+                         f"{_APPROVE} to set it from the profile; do not hand-edit it")]
+    return []
+
+
+def _stack_profile(c):
+    s = _stack_state(c)
+    if s["bootstrap"]:
+        return _head_findings(s)  # no profile on the target yet: the first one is judged for being sound, not against a target
+    status, n = s["status"], len(s["errors"])
+    if status == "none":
+        out = [_finding("stack-profile-missing", "ado.stack.json is missing", f"{_DRAFT_IT}; then {_APPROVE}")]
+    elif status == "invalid":
+        out = [_finding("stack-profile-invalid", f"ado.stack.json is invalid ({n} error(s))",
+                        "run `ado stack show` for the error positions and fix the file")]
+    elif status == "draft":
+        out = [_finding("stack-profile-draft", "ado.stack.json is a draft: nobody has approved it", f"{_DRAFT_IT}; then {_APPROVE}")]
+    elif status == "changed-since-approval":
+        out = [_finding("stack-profile-changed", "ado.stack.json changed after it was approved (the recorded hash no longer matches)",
+                        f"review the change; then {_APPROVE} to approve it again")]
+    else:
+        out = []
+        try:
+            composed = stack.compose_test_command(s["profile"])
+        except ValueError:
+            out = [_finding("stack-profile-drift", "the command the approved profile composes is longer than 500 characters",
+                            "point `test` at a repo script (kind `repo`) in the profile, then re-approve it")]
+        else:
+            if composed is not None and c.cfg.strict.get("test_command") != composed:  # a profile with no test command compares nothing
+                out = [_finding("stack-profile-drift", "strict.test_command differs from the command the approved profile composes",
+                                f"{_APPROVE} to set it from the profile; do not hand-edit it")]
+    return out + _head_findings(s)
+
+
+# a profile stack covers a detected root when it sits at that root and either has a free-form id (any stack there) or one of the detect ids in
+# the same family (the seed's `typescript` is detected as `node`); a python profile at "." does not cover a TypeScript project at "."
+_FAMILY = {"node": "node", "typescript": "node", "dart": "dart", "flutter": "dart"}
+_DETECT_IDS = {"python", "node", "typescript", "dart", "flutter", "salesforce", "java", "go", "rust", "dotnet", "c-cpp"}
+
+
+def _detected(repo, commit):
+    return stack.detect(repo, commit)
+
+
+def _stack_unprofiled(c):
+    """A high-confidence (root, stack) at the head commit that no profile stack covers: compared by root and id family (see _FAMILY); a
+    medium-confidence root is no finding. Printed only through `stack.safe_path`."""
+    s = _stack_state(c)
+    if s["bootstrap"] or s["profile"] is None:
+        return []  # bootstrap: nothing to compare to; no profile: stack-profile-* already says so
+    fix = (f"two PRs: first add the root to ado.stack.json ({_DRAFT_IT}; then {_APPROVE}) and merge it, then add the code")
+    try:
+        found = _detected(c.repo, c.rev)["stacks"]
+    except ValueError:
+        return [_finding("stack-unprofiled", "the stacks at the head commit could not be detected (git could not answer)",
+                         "run in a full clone of the repository (fetch-depth: 0), then re-run")]
+    own = [(posixpath.normpath(st["root"]), st["id"]) for st in s["profile"]["stacks"]]
+    new = sorted({(posixpath.normpath(d["root"]), d["id"]) for d in found if d["confidence"] == "high"
+                  if not any(r == posixpath.normpath(d["root"]) and (i not in _DETECT_IDS or _FAMILY.get(i, i) == _FAMILY.get(d["id"], d["id"]))
+                             for r, i in own)})
+    if not new:
+        return []
+    shown = ", ".join(f"{stack.safe_path(r, n)} ({i})" for n, (r, i) in enumerate(new[:5], 1))
+    return [_finding("stack-unprofiled", f"{len(new)} high-confidence stack root(s) have no stack in the approved profile: {shown}"
+                     + (", ..." if len(new) > 5 else ""), fix)]
 
 
 # ---- L1 order evidence (D§5): red <sha> → green <sha> per AC, checked against git ----
@@ -701,9 +878,9 @@ def _fidelity_warnings(c):
 
 
 PHASES = {
-    "implement": [_ledger, _spec_files, _placeholders, _open_questions, _board, _test_command],
-    "pr": [_ledger, _base, _l1, _record, _decisions_pr, _review, _fidelity_pr],
-    "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _review, _fidelity_done],
+    "implement": [_ledger, _spec_files, _placeholders, _open_questions, _board, _test_command, _stack_profile, _stack_unprofiled],
+    "pr": [_ledger, _base, _l1, _record, _decisions_pr, _review, _fidelity_pr, _stack_profile, _stack_unprofiled],
+    "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _review, _fidelity_done, _stack_profile, _stack_unprofiled],
 }
 
 # ---- override (D§7): `skip <rule>` lines of kind override; only these findings, never L1 or a missing spec/plan/tasks ----
@@ -749,6 +926,8 @@ def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False)
     out = {"phase": phase, "mode": mode, "ok": not findings, "findings": findings,
            "overrides_used": sorted(used, key=lambda i: int(i[1:]))}
     warnings = _fidelity_warnings(ctx) if phase in ("pr", "done") else []
+    if (_stack_state(ctx)["head"] or {}).get("changed"):  # the PR edits the profile, the lockfile or strict.test_command: review it as code
+        warnings.append(gate.TRUST_NOTE)
     return {**out, "warnings": warnings} if warnings else out
 
 
@@ -938,7 +1117,8 @@ def _write_record(path, repo, old, heading, lines):
 def verify(client, story_id, record=True, base=None, repo=".", allow_override=False):
     """L1 for every AC, then the test command at each AC's red commit (must exit non-zero) and green commit (must exit 0),
     once per distinct commit. Strict mode only. With `record` and a pass, appends the verification record to ledger
-    section 4. With `record` False (CI) an override in force is the finding `override-in-force` unless `allow_override`. Returns `{"mode","ok","findings","recorded",...}`; nothing is returned or logged from the tests' output."""
+    section 4. With `record` False (CI) an override in force is the finding `override-in-force` unless `allow_override`. It applies no stack
+    or kit rule (D§5): those bind at `check` (`implement`, `pr`, `done`). Returns `{"mode","ok","findings","recorded",...}`; nothing is returned or logged from the tests' output."""
     mode = client.config.mode
     if mode != "strict":
         return {"mode": mode, "ok": True, "findings": [], "note": "mode is advisory"}

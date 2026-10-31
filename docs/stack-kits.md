@@ -206,6 +206,46 @@ The terminal check stops accidents; it is not a security boundary (a pseudo-term
 approval is a record, not proof: trust comes from reviewing the commit, and in strict CI from the target branch's copy. This is process
 enforcement, not a security boundary.
 
+## Strict rules and CI
+
+In strict mode `ado strict check` runs two stack rules in the `implement`, `pr` and `done` phases. Neither can be overridden (they are not
+in the override table): an unknown or unapproved stack stops the run.
+
+- **`stack-profile-*`.** `stack-profile-missing` (no `ado.stack.json`), `stack-profile-invalid` (fails the checks above; the finding
+  carries a count, not the errors: run `ado stack show`), `stack-profile-draft`, `stack-profile-changed` (the hash no longer matches) and
+  `stack-profile-drift`: the approved profile composes a test command and `strict.test_command` differs (or the composed command is over
+  500 characters). A profile whose `test` is `null` everywhere compares nothing, so no drift fires; the `test-command` finding is then
+  covered only by a per-story `l2` (or `test-command`) override, which is the recorded waiver.
+- **`stack-unprofiled`.** `ado stack detect` runs on the commit being judged (the PR head in CI) and every high-confidence root must be the
+  `root` of a profile stack. A stack with a free-form id covers its root; one with a detect id covers only its own family (`node` and
+  `typescript`, `dart` and `flutter` are one each: the `node-typescript` seed has id `typescript` while detection may say `node`), so a
+  Python profile at `.` does not cover a TypeScript project added at `.`; a medium-confidence root is not a finding; roots are printed through the plain-path rule (`<path #n>`
+  otherwise). When detection cannot run the finding says so (fail closed).
+
+**Where the profile comes from.** A local strict config reads the working-tree `ado.stack.json`. In CI (`--base`, a strict config on the
+target branch) the profile, `ado.kits.lock.json` and `strict.test_command` all come from the **target branch's commit**: `_config` reads
+both files with the same capped blob read as the config (256 KiB each) and fails closed on an unreadable or invalid one (exit 3 for `gate`,
+`branch --id-from`, `strict mode`; 2 for `strict check`), with fixed texts that carry none of the file (the gate comment says "target branch
+trust files are invalid", not that the config is). So editing the profile, the lockfile or `strict.test_command` does not change the
+command or the verdict **in that PR's own run**. The PR's copies are judged as well, because they become the target's on merge: when the
+head's profile or `strict.test_command` differs from the target's, `strict check` also refuses a head profile that is invalid, unreadable,
+a draft, changed since approval, deleted, or that does not compose to the head's `strict.test_command` (a null `test` with no command is
+consistent), with the same `stack-profile-*` ids and the detail "at the head commit". These findings only add to the target's verdict.
+`ado strict verify` runs only the ledger, L1 and test-command rules and applies no stack or kit rule. Protect the files on the target
+branch like `ado.config.json`.
+
+**The note.** A PR that edits the profile, the lockfile or `strict.test_command` (or adds the first profile) gets
+`"warnings": ["trust-introducing PR: review ado.stack.json as code"]` from `strict check`, and the `gate` PR comment carries the same line with the JSON key `trust_note`. The note
+fires on every such edit, consistent or not: once merged the edit is in force with no further note (an approved hash is computable by
+anyone), so review it as code. What runs in CI is the merged `strict.test_command`, which `ado stack approve` sets from the profile.
+
+**Bootstrap.** When the target branch has no `ado.stack.json`, the stack rules give no finding against a target. The PR that adds the
+first profile must still be sound: its head profile has to be valid, approved and consistent with the head's `strict.test_command`
+(an invalid, draft or changed one is refused, so merging it cannot lock the repository). Once the target holds a profile the rules bind,
+so a new root needs two PRs: the profile first, then the code. The lockfile is read and validated from the target in the same way; the
+rules that use it come with kit pinning. A recovery for a locked target (an invalid or draft profile merged by mistake) is an admin-bypass
+merge of the fix. This is process enforcement, not a security boundary.
+
 ## Kits that do not write `tasks.md`
 
 `ado push` reads one format: the Spec Kit `tasks.md` checklist (`- [ ] T001 [P] ...`). If

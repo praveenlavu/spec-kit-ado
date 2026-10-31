@@ -42,6 +42,23 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   over 500 characters); `--story` adds one decision line; a failed step puts earlier writes back. `stack.validate` now limits
   `approval.by` to a role (`[A-Za-z0-9 ]{1,40}`). Once a profile exists, `strict.test_command` comes only from this verb; `ado setup` never
   writes it. `stack.plan_approve`, `stack.apply_approve`, `stack.preview_text`. See `docs/stack-kits.md` "Approving a profile".
+- Strict stack rules (`strict check`, phases `implement`, `pr`, `done`; not overridable): `stack-profile-missing`, `stack-profile-invalid`,
+  `stack-profile-draft`, `stack-profile-changed`, `stack-profile-drift` (only when the approved profile composes a test command and
+  `strict.test_command` differs) and `stack-unprofiled` (a high-confidence `ado stack detect` root at the head commit that no profile stack
+  covers, by root and id family: `node`/`typescript`, `dart`/`flutter`; a free-form stack id covers its root). A strict project now needs an
+  approved `ado.stack.json`; an advisory one changes nothing (`strict check` output is byte-identical). In CI (`--base`, strict target)
+  `_config` also reads `ado.stack.json` and `ado.kits.lock.json` from the target commit through `strict._blob_at` (256 KiB each;
+  `Config.target_profile_blob` / `target_lock_blob`), fails closed on an invalid one (exit 3 for `gate`, `branch --id-from` and `strict mode`,
+  2 for `strict check`; the gate comment says "target branch trust files are invalid") and judges with them, so editing them does not change
+  the command or the verdict in that PR's own run. Because the PR's copies become the target's on merge, `strict check` also refuses a head
+  profile that is invalid, a draft, changed, deleted or inconsistent with the head's `strict.test_command` when the head differs from the
+  target (same ids, detail "at the head commit"; also at bootstrap, when the target has no profile). Any PR that edits the profile, the
+  lockfile or `strict.test_command` carries `trust-introducing PR: review ado.stack.json as code` (`warnings` in `strict check`, a line and the JSON key `trust_note` in the gate
+  comment); once merged the edit is in force with no note (an approved hash is computable by anyone), so review these files as code.
+  `strict verify` applies no stack or kit rule. `stack.profile_for`, `stack.lock_error`. See `docs/stack-kits.md` "Strict rules and CI".
+- **Upgrade note (strict projects):** a strict project with no `ado.stack.json` now fails `strict check`. That includes link-on-merge
+  `ado done` (merged tree, local config), which refuses `stack-profile-missing` for existing strict projects until the profile PR merges:
+  run `ado stack init --seed <name>` (or `speckit.ado.stack`, once installed), then a human runs `ado stack approve --apply`, and merge it first.
 - Config: `mode` (`"advisory"` default, or `"strict"`) and the `strict` object (`test_command`,
   `test_timeout`); in strict mode the effective `gate.block` and `review_block_on` are the
   project's lists plus the strict floor. Invalid values are a config error.
