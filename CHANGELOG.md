@@ -109,8 +109,8 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   ado.stack.json as code`, then feature PRs) and the source of the `pega` hint (any `@pega/` dependency, checked on one repository,
   `pegasystems/react-sdk`, on 2026-10-31); `docs/configuration.md` names `ado.stack.json` and `ado.kits.lock.json` and the exit codes of the
   `ado stack` and `ado kits` verbs. **The `unverified` count at approval is a lower bound**: it counts only the literal `unverified`, a claim
-  marked unverified inside a `why` is not counted and the preview prints a `why` only for a command whose `run` is `null`, so read every
-  `why` in `ado.stack.json` before approving (the shipped seeds each have such claims). Corrected: earlier text claimed that nothing from a kit is printed by the pin preview and `kits.scan`; hook names, tool names and kit-relative paths come from the kit and are only pattern-limited.
+  marked unverified inside a `why` is not counted, but the approval preview and `ado stack show --md` print every command's `why` under the
+  command, so read each `why` before approving (the shipped seeds each have such claims). Corrected: earlier text claimed that nothing from a kit is printed by the pin preview and `kits.scan`; hook names, tool names and kit-relative paths come from the kit and are only pattern-limited.
   `tests/test_docs.py` pins every verb, flag, finding id, file name, exit code and boundary phrase; `tests/test_advisory_regression.py`
   compares every pre-existing verb's output with baseline a0b3c9e on a project without `ado.stack.json` or a lockfile.
 - **Upgrade note (strict projects):** a strict project with no `ado.stack.json` now fails `strict check`. That includes link-on-merge

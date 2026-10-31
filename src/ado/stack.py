@@ -696,6 +696,8 @@ def render_md(profile):
         c = _d(c)
         if isinstance(c.get("run"), str):
             out += [f"**{label}** ({cite(c.get('source'))}):", "", "```", _clean(c["run"], CAP_COMMAND), "```", ""]
+            if "why" in c:
+                out += [f"why: {_clean(c.get('why'))}", ""]
         elif "run" in c:
             out += [f"**{label}**: not defined ({_clean(c.get('why'))})", ""]
 
@@ -976,6 +978,8 @@ def preview_text(profile, composed, config_command, version, story_id, by, statu
         c = _d(c)
         if isinstance(c.get("run"), str):
             out += [f"{label} ({cite(c.get('source'))}):", "```", t(c["run"], MAX_PROFILE), "```"]
+            if "why" in c:
+                out.append(f"why: {t(c.get('why'))}")
         elif "run" in c:
             out.append(f"{label}: not defined ({t(c.get('why'))})")
 

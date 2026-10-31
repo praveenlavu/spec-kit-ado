@@ -314,7 +314,7 @@ lock on a machine.
 
 - detect your stack from the files committed at `HEAD` and show the evidence (`ado stack detect`);
 - keep one reviewable profile, `ado.stack.json`, in which every command, convention and definition-of-done item cites a source or
-  says `unverified` (read each `why` in the file too: the `unverified` count is a lower bound, see [docs/stack-kits.md](docs/stack-kits.md#approving-a-profile));
+  says `unverified` (read each `why` the preview prints too: the `unverified` count is a lower bound, see [docs/stack-kits.md](docs/stack-kits.md#approving-a-profile));
 - run, in strict mode, only the test command string a human approved with `ado stack approve --apply`, in a throwaway clone with a
   reduced environment;
 - refuse, in strict mode, an unknown or unprofiled stack, a profile nobody approved, and a kit nobody pinned or one that changed
@@ -336,7 +336,7 @@ lock on a machine.
 - **Azure DevOps Boards only.** The tracker is Azure DevOps Boards (code on Azure Repos or GitHub). Jira and GitHub Issues are not
   supported. There is no adapter interface: board access is a set of modules built on one Azure DevOps client (`client`, `workitems`,
   `comments`, `questions`, `decisions`, `attachments`, `push`, `done`, `prs`), so another tracker would mean reimplementing them. The
-  Stack detection, the profile and kit pinning make no tracker calls; no adapter is built.
+  stack detection, the profile and kit pinning make no tracker calls; no adapter is built.
 - **Stack kits are optional.** Without a kit, core Spec Kit runs each phase. The profile works with or without one.
 - **Third-party kits are code the agent runs.** The kit rules (`kit-unpinned`, `kit-changed`) accept only kits a human reviewed and pinned
   with `ado kits pin`, and refuse a kit that changed since. The pin records a review; the automated scan behind it is a heuristic aid, not a verdict.

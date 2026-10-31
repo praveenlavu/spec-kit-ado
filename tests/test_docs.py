@@ -1622,20 +1622,21 @@ def test_seed_list_matches_the_shipped_seed_files():
         assert needle in " ".join(docs.split()), needle
 
 
-def test_unverified_count_is_a_lower_bound_everywhere_and_the_preview_really_hides_why_texts():
+def test_unverified_count_is_a_lower_bound_everywhere_and_the_preview_prints_why_texts():
     import json
     from ado import stack
     for doc in ("docs/stack-kits.md", "AGENTS.md", "CHANGELOG.md", "commands/stack.md"):
         text = _flat(doc)
         assert "lower bound" in text and "`why`" in text, doc
-    assert "prints a `why` only for a command whose `run` is `null`" in _flat("docs/stack-kits.md")
-    assert "read every `why`" in _flat("docs/stack-kits.md") and "lower bound" in _flat("README.md")
-    # behaviour behind the sentence: a `why` on a command that has a `run` is not in the terminal preview, a `why` of a null `run` is
+    assert "the preview prints every command's `why`" in _flat("docs/stack-kits.md")
+    assert "read each `why`" in _flat("docs/stack-kits.md") and "lower bound" in _flat("README.md")
+    # behaviour behind the sentence: the `why` of a command that has a `run` is in the terminal preview and in `show --md`, the count ignores it
     seed = json.loads((ROOT / "src/ado/seeds/python-pytest.json").read_text(encoding="utf-8"))
     hidden = seed["stacks"][0]["commands"]["test"]["why"]
     assert "Unverified design choices" in hidden
     text = stack.preview_text(seed, stack.compose_test_command(seed), None, 1, None, "tech lead")
-    assert "Unverified design choices" not in text and "UNVERIFIED item(s)" in text
+    assert "why: " in text and "Unverified design choices" in text and "UNVERIFIED item(s)" in text
+    assert "Unverified design choices" in stack.render_md(seed)
     seed["stacks"][0]["commands"]["build"] = {"run": None, "why": "no build step for this fixture"}
     assert "no build step for this fixture" in stack.preview_text(seed, stack.compose_test_command(seed), None, 1, None, "tech lead")
     # the corrected overclaim is gone

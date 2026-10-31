@@ -191,9 +191,9 @@ kinds are read from the seed files.
 | `salesforce` | `salesforce` | 13 (11 official, 2 implementation) | 2026-10-31 | 1 (`conventions[10]`) | `commands.test.why`; `commands.security[0].why` (the flag, the level, run-time fetches); `commands.org_only[0].why` and `[1].why` (the wait, the format, dry runs on production); `conventions[1].rule`; `dod[4].item` |
 
 **The `unverified` count is a lower bound.** The approval preview counts only items whose source is the literal `unverified`. A claim a
-seed marks as unverified inside a `why` is not counted, and the preview prints a `why` only for a command whose `run` is `null`; for a
-command that has a `run` the `why` is in the file only. So before you approve a profile, open `ado.stack.json` and read every `why`
-(and the `rule` and `item` texts, which the preview does print) for the words "unverified" and "design choice". The counts of 0 and 1 in
+seed marks as unverified inside a `why` is not counted, but the preview prints every command's `why` right under the command. So before
+you approve a profile, read each `why` (and the `rule` and `item` texts, which the preview also prints) for the words "unverified" and
+"design choice". The counts of 0 and 1 in
 the table hide the open claims in each seed. This is a limit of the preview, documented rather than fixed in this release.
 
 The seeds in one line each: `python-pytest` runs `PYTHONPATH=src python3 -m pytest -q`, with ruff, pytest-cov and pip-audit commands;
@@ -217,8 +217,8 @@ exists. It changes what strict CI runs, so the agent never runs it: after `ado s
   terminal on stdin, or with the output piped or redirected, it prints counts, the unverified count and the command's length only: the profile's text came from untrusted
   research and is not handed to an agent's shell. The command never fetches a URL, and nobody checked that a page supports a note: you are the check.
   **The `UNVERIFIED` count is a lower bound.** It counts only items whose source is the literal `unverified`. A claim marked unverified
-  inside a command's `why` is not counted, and the preview prints a `why` only for a command whose `run` is `null`. Open `ado.stack.json`
-  and read every `why` before you approve (the shipped seeds each have such claims: see "Seed profiles").
+  inside a command's `why` is not counted, but the preview prints every command's `why` under the command. Read every `why` before you
+  approve (the shipped seeds each have such claims: see "Seed profiles").
 - **`--apply`** refuses (exit 2, fixed text) unless stdin is a terminal, before it reads any file or the config, and refuses when
   `ADO_CONFIG` is set. It sets `status: approved`, raises `version` by 1 and writes `approval {by, date, sha256, decision}`: `--by` is a
   role (letters, digits and spaces with at least one letter or digit, at most 40, default `tech lead`; the validator also refuses any other `approval.by`), `sha256` is the
