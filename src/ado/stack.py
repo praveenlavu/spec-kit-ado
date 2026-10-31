@@ -4,6 +4,7 @@ Process help, not a security boundary. Every path comes from the repository (in 
 ever matched against fixed marker names and printed through `safe_path`. Stack ids, evidence and hints come from the marker table and
 fixed vocabularies, never from file contents; the few manifests that are read (from the commit's blobs, never the working tree) only
 set booleans and fixed words."""
+import copy
 import datetime
 import fnmatch
 import json
@@ -818,6 +819,8 @@ _E_FROM = "--from must name a regular, single-link, non-symlink UTF-8 file of at
 _E_SEED = "unknown seed; it must be one of: " + ", ".join(SEEDS)
 _E_SEED_FILE = "the seed profile is not installed or cannot be read"
 _E_ROOTS = "more than one detected root fits this seed; pass --root"
+_E_ROOTS_MANY = "more than one detected root fits one of the seeds; give that seed alone with --root R, or edit the draft and use --from"
+_E_DUP_ID = "two of the seeds make the same stack id; give each seed once"
 _E_ONE = "--stack needs a profile with exactly one stack"
 _E_APPROVED = "ado.stack.json is or was approved (approved, changed since approval, or carries an approval); pass --force to replace it"
 _E_LINK = "ado.stack.json is a symlink; remove it first"
@@ -862,18 +865,66 @@ def _read_seed(name):
         raise ValueError(_E_SEED_FILE) from None
 
 
+def _seed_root(name, root, too_many):
+    """The one detected root at HEAD that fits seed `name`, else `.`; several: ValueError(`too_many`)."""
+    roots = [s["root"] for s in detect(root)["stacks"] if seed_for(s) == name]
+    if len(roots) > 1:
+        raise ValueError(too_many)
+    return roots[0] if roots else "."
+
+
+def _merge_seeds(names, root):
+    """The bytes of ONE profile with a stack per seed in `names`, built from the shipped seed files only (never from repo text). Each
+    stack's root is its seed's detected root; the source ids (`S<n>`) of the seeds are renumbered into one namespace, in `source` values
+    and in the `S<n>` a `why` cites. A `source` that its seed does not define, or a seed that is not a profile object, fails closed."""
+    merged = {"schema": 1, "version": 1, "status": "draft", "stacks": [], "sources": {}}
+    for name in names:
+        try:
+            seed = parse_json(_read_seed(name), MAX_PROFILE)
+            ids = {k: f"S{len(merged['sources']) + n}" for n, k in enumerate(_d(seed.get("sources")), 1)}
+            stacks = copy.deepcopy(seed["stacks"])
+            if not isinstance(stacks, list) or not all(isinstance(st, dict) for st in stacks):
+                raise ValueError
+        except (ValueError, KeyError, AttributeError, TypeError):  # `_read_seed` and `parse_json` raise ValueError with fixed texts
+            raise ValueError(_E_SEED_FILE) from None
+        at = _seed_root(name, root, _E_ROOTS_MANY)
+
+        def renumber(node):
+            for k, v in (node.items() if isinstance(node, dict) else enumerate(node) if isinstance(node, list) else ()):
+                if k == "source" and isinstance(v, str) and v != "unverified":
+                    if v not in ids:
+                        raise ValueError(_E_SEED_FILE)
+                    node[k] = ids[v]
+                elif k == "why" and isinstance(v, str):
+                    node[k] = re.sub(r"\bS\d+\b", lambda m: ids.get(m.group(0), m.group(0)), v)
+                else:
+                    renumber(v)
+        renumber(stacks)
+        for st in stacks:
+            st["root"] = at
+        merged["stacks"] += stacks
+        merged["sources"].update({ids[k]: v for k, v in _d(seed.get("sources")).items()})
+    if len({_d(st).get("id") for st in merged["stacks"]}) != len(merged["stacks"]):
+        raise ValueError(_E_DUP_ID)
+    return json.dumps(merged).encode("utf-8")
+
+
 def plan_init(source, root=".", stack_id=None, seed_root=None):
-    """`{"ok", "errors", "counts", "profile"}` for a new draft. `source` is the bytes of a profile (`--from`) or a seed name from `SEEDS`
-    (anything else: ValueError). `status` is forced to `draft` and `approval` dropped. For a seed, every stack's root is set to
+    """`{"ok", "errors", "counts", "profile"}` for a new draft. `source` is the bytes of a profile (`--from`), a seed name from `SEEDS`, or
+    a list of seed names (anything else: ValueError). With several seeds the draft has one stack per seed (see `_merge_seeds`) and
+    `seed_root` must be None. `status` is forced to `draft` and `approval` dropped. For a seed, every stack's root is set to
     `seed_root` (None: the one detected root at HEAD that fits the seed, else `.`; several: ValueError); `stack_id` renames a
     single-stack profile. The result is validated AFTER those edits, so nothing about them is trusted; `profile` is None unless ok."""
-    if isinstance(source, str):
+    if isinstance(source, (list, tuple)) and len(source) == 1:
+        source = source[0]
+    if isinstance(source, (list, tuple)):
+        if seed_root is not None:
+            raise ValueError(_E_ROOTS_MANY)
+        raw, seed_root = _merge_seeds(source, root), None
+    elif isinstance(source, str):
         raw = _read_seed(source)
         if seed_root is None:
-            roots = [s["root"] for s in detect(root)["stacks"] if seed_for(s) == source]
-            if len(roots) > 1:
-                raise ValueError(_E_ROOTS)
-            seed_root = roots[0] if roots else "."
+            seed_root = _seed_root(source, root, _E_ROOTS)
     else:
         raw, seed_root = source, None
     try:

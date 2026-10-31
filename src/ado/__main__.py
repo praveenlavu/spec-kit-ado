@@ -706,8 +706,9 @@ def main(argv=None):
                          "error positions only, never profile text); --apply writes; an approved profile needs --force")
     src = q.add_mutually_exclusive_group(required=True)
     src.add_argument("--from", dest="from_file", metavar="FILE", help="a regular file inside .ado/ (validated; status forced to draft, approval dropped)")
-    src.add_argument("--seed", metavar="NAME", help="one of: " + ", ".join(stack.SEEDS))
-    q.add_argument("--root", metavar="R", help="with --seed: the stack's root (default: the one detected root that fits, else .)")
+    src.add_argument("--seed", metavar="NAME", action="append", help="one of: " + ", ".join(stack.SEEDS) + ". Repeat it for a repository with "
+                     "several stacks: one draft with one stack per seed (each at its detected root)")
+    q.add_argument("--root", metavar="R", help="with ONE --seed: the stack's root (default: the one detected root that fits, else .)")
     q.add_argument("--stack", metavar="ID", help="name the stack (a profile with exactly one stack)")
     q.add_argument("--apply", action="store_true", help="write ado.stack.json (default: preview, nothing written)")
     q.add_argument("--force", action="store_true", help="with --apply: replace an approved profile")
@@ -776,8 +777,8 @@ def main(argv=None):
     if getattr(args, "dir", None) and args.command == "attachments" and not args.download:
         parser.error("--dir needs --download")
     if args.command == "stack" and args.stack_command == "init":
-        if args.root is not None and args.seed is None:
-            parser.error("--root needs --seed")
+        if args.root is not None and (args.seed is None or len(args.seed) > 1):
+            parser.error("--root needs exactly one --seed")
         if args.force and not args.apply:
             parser.error("--force needs --apply")
     if (args.command == "stack" and args.stack_command == "approve") or (args.command == "kits" and args.kits_command == "pin"):

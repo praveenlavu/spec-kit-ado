@@ -178,6 +178,16 @@ trusted until a human approves it (and nothing reads a draft's text to the agent
   stack's root is rewritten to `--root`, or to the one detected root that fits the seed (python: `python-pytest`; typescript or node with
   an npm lockfile: `node-typescript`; salesforce: `salesforce`), else `.`; two fitting roots need `--root`. The rewritten profile goes
   through the validator again.
+- `--seed` can be repeated, once per detected stack (`ado stack init --seed python-pytest --seed node-typescript`): ONE draft with one
+  stack per seed, in the order of the flags. Each stack gets the detected root of its own seed (several seeds cannot take `--root`; two
+  fitting roots for one seed are refused with a fixed text), a seed may be given once (two stacks with the same id are refused), and
+  the draft is built from the shipped seed files only, never from repo text. The source ids (`S1`, `S2`, ...) of the seeds are
+  renumbered into one namespace (the second seed's `S1` becomes the next free id) in every `source` and in the `S<n>` a `why` cites,
+  and the merged draft goes through the validator like any other. A single `--seed` writes exactly what it always did. Why it matters:
+  `init` writes a whole profile, so a second `init --seed` run replaces the first stack (and, once the profile is approved, needs
+  `--force`); a polyglot repository has to be drafted in one command, or by editing the draft and using `--from`. A stack that has no
+  seed (pnpm, yarn, Java, Go, ...) is added to the draft by hand and `--from`; do not leave it out: strict mode reports its root as
+  `stack-unprofiled`.
 - `--stack ID` names the stack of a single-stack profile (for example a stack detect cannot name).
 
 Both forms validate the profile like `ado stack show`, force `status` to `draft` and drop any `approval`. Without `--apply` the command
@@ -187,9 +197,29 @@ file is kept when the write fails; a failed read-back after the rename is report
 agent's file. Replacing a profile that is `approved`, `changed-since-approval`, or hand-broken but still marked approved needs `--force` (a symlinked `ado.stack.json` is always refused), and `--force` over an approved profile needs the human's explicit yes: the agent passes the flag itself, so it must ask first. Exit 0 for a preview or a write, 2 for a
 refusal or an invalid profile. Seed `python-pytest` is researched: 12 official sources (pytest, Python, packaging.python.org, ruff, pytest-cov, pip-audit, PEP 8), every URL re-fetched on 2026-10-31, status `draft` (a human approves it per project). Its test command is `PYTHONPATH=src python3 -m pytest -q`; set `strict.test_timeout` >= 900, because each run has an empty temporary `HOME`. The package and its test tools must already be installed in the active environment (the run installs nothing). Seed `node-typescript` is researched too: 10 official sources (docs.npmjs.com, typescriptlang.org, nodejs.org, eslint.org), every URL re-fetched on 2026-10-31, status `draft`, npm only (pnpm and yarn go through research). Its test command is `npm ci --ignore-scripts && npm test`; set `strict.test_timeout` >= 900, because the npm cache starts empty and every run needs the network. Trade-off: `--ignore-scripts` also skips the project's OWN `package.json` lifecycle scripts (for example `prepare` and `postinstall`), so a TypeScript project that compiles in `prepare` will fail or run stale code and must set its own test command; dependency install scripts do not run either, so a package that needs a postinstall build step may fail (the npm docs say `--ignore-scripts` outranks allowing dependency install scripts; that every dependency script is skipped is a local observation, marked unverified in the seed). The `--audit-level=high` level is an unverified design choice. It ships `npm audit --audit-level=high` (which sends a description of the dependencies to the registry), no lint or type-check command (no authoritative generic one), and needs the project's own test dependencies in `package-lock.json`. Seed `salesforce` is researched too: 13 sources (help.salesforce.com, github.com/salesforce, github.com/salesforcecli and github.com/forcedotcom, docs.npmjs.com, the Code Analyzer GitHub Action page, and two files of the dreamhouse-lwc sample app as `implementation` sources), every URL re-fetched on 2026-10-31; developer.salesforce.com refused automated fetches (HTTP 403), so none of its pages is cited, and a claim only that site could support is marked `unverified`. Status `draft`. Its test command is `npm ci --ignore-scripts && npm run test:unit` (LWC Jest only); set `strict.test_timeout` >= 900, because the npm cache starts empty and every run needs the network. Trade-off: `--ignore-scripts` also skips the project's OWN lifecycle scripts, so a repo that installs git hooks from `prepare` (the sample app runs husky there) gets none in the strict clone, and a project that builds in `postinstall` must set its own test command; dependency install scripts are skipped too (unverified on every npm version). Apex tests and deploys need a live org, so `sf apex run test ...` and `sf project deploy start --dry-run ...` sit in `org_only`: `strict verify` never runs them, and the agent shows one and runs it only after the human's explicit yes for that run. Strict L2 therefore covers LWC Jest, not Apex. The seed also ships `coverage` (`npm run test:unit:coverage`, LWC only) and Salesforce Code Analyzer as `security` (`sf code-analyzer run --severity-threshold 2`; the plugin must already be installed, and the flag, the level and any run-time download are unverified). It ships no `lint` or `format_check` command (no general one exists); one convention, from a single sample app and unverified for other projects, says to run the project's own `lint` and `prettier:verify` scripts if it defines them. It does not set `kit`. All three shipped seeds are researched drafts; the next step after any init is the human's review and approval. This is process enforcement, not a security boundary.
 
+### A polyglot repository (python and node at the same root)
+
+A full-stack template such as the FastAPI one keeps a Python backend and an npm frontend, and `ado stack detect` says `multiple` (here
+both at `.`; the same works when they sit in different directories, each seed taking its own detected root):
+
+```
+ado stack detect                      # outcome multiple: python at ".", node at "." (package manager npm)
+ado stack init --seed python-pytest --seed node-typescript           # preview: {ok, errors, counts}
+ado stack init --seed python-pytest --seed node-typescript --apply   # writes the ONE draft
+```
+
+The draft has two stacks (`python` and `typescript`) and the counts of both seeds added up (here 2 stacks, 7 commands, 17 conventions,
+9 definition-of-done items, 22 sources, 0 unverified: the second seed's sources become `S13` to `S22`). It is a draft like any other:
+`ado stack approve --apply` is the human's step, and the composed `strict.test_command` runs each stack in turn, both from `.`:
+`( cd ./. && sh -c '<python run>' ) && ( cd ./. && sh -c '<node run>' )`. Two roots for one seed need a hand-edited draft and `--from`
+(`--root` takes one seed only). Running `ado stack init --seed node-typescript` alone afterwards would replace the Python stack, which
+is why every fix text names all the stacks. Whether the seeds' commands fit your layout (the Python seed runs `PYTHONPATH=src`, which
+only helps a `src` layout; both need their dependencies and an npm lockfile in place) is for the human reviewing the draft; this
+document does not claim the seeds were run against the FastAPI template.
+
 ## Seed profiles
 
-Three researched seeds ship as package data in `src/ado/seeds/` (`ado stack init --seed <name>`). All are `draft`: nothing is trusted
+Three researched seeds ship as package data in `src/ado/seeds/` (`ado stack init --seed NAME`, repeatable). All are `draft`: nothing is trusted
 until a human approves the profile for the project. Every source URL was re-fetched on the retrieval date below; the dates, counts and
 kinds are read from the seed files.
 
@@ -287,7 +317,8 @@ in the override table): an unknown or unapproved stack stops the run.
   `typescript`, `dart` and `flutter` are one each: the `node-typescript` seed has id `typescript` while detection may say `node`), so a
   Python profile at `.` does not cover a TypeScript project added at `.`; a medium-confidence root is not a finding; roots are printed through the plain-path rule (`<path #n>`
   otherwise). `ado stack show --check` applies the very same rule (one helper, `stack.uncovered`), so it and `strict check` never disagree on
-  coverage. A root no profile can name (see "Detection", `ignored_roots`) is never a finding; it is a fixed warning (`N detected root(s) cannot be named in a profile and are not covered by it: review them as code`). When detection cannot run the finding says so (fail closed).
+  coverage. The fix text says to draft the profile for every detected stack (`ado stack init --seed <a> --seed <b>`, one `--seed` per stack, or
+  edit the draft and use `--from`): a single-seed `init` for the uncovered root would replace the stack that is already there. A root no profile can name (see "Detection", `ignored_roots`) is never a finding; it is a fixed warning (`N detected root(s) cannot be named in a profile and are not covered by it: review them as code`). When detection cannot run the finding says so (fail closed).
 
 **Where the profile comes from.** A local strict config reads the working-tree `ado.stack.json`. In CI (`--base`, a strict config on the
 target branch) the profile, `ado.kits.lock.json` and `strict.test_command` all come from the **target branch's commit**: `_config` reads
@@ -323,7 +354,7 @@ prompt command: the `ado` CLI never fetches a web page. `speckit.ado.setup` call
 1. **Detect.** `ado stack detect` and `ado stack show`. An approved or draft profile ends the run with what to do next; `unknown` or
    medium-only detection means the human names the stack and roots (it never guesses).
 2. **Installed kit.** An enabled extension whose id, tags or commands match a detected stack (for example `sf` for `salesforce`) gets the phase map
-   of `speckit.ado.setup` step 4 (shown, written only on a yes) and the matching seed, if one ships (`ado stack init --seed <name>`).
+   of `speckit.ado.setup` step 4 (shown, written only on a yes) and the matching seed, if one ships (one `--seed` per detected stack in one `ado stack init` command).
 3. **No kit: ask** *Search for a kit* / *Build a profile by research* / *Both* / *Stop*.
    - **Search for a kit** (read-only). `specify extension search <stack>` prints text with no JSON, so it only refreshes Spec Kit's catalog cache;
      the facts (`id`, `author`, `version`, `created_at`, `updated_at`, `license`, `effect`, `requires.tools`, `provides` counts, `sha256`

@@ -1240,12 +1240,12 @@ def test_stack_init_documented_as_a_local_draft_write():
     for needle in ("## Creating a profile", "the draft is not trusted until a human approves it", "`../x` is refused", "force `status` to `draft` and drop any `approval`",
                    "`--force`", "process enforcement, not a security boundary"):
         assert needle in docs, needle
-    assert "ado stack init (--from .ado/FILE | --seed NAME [--root R]) [--stack ID] [--apply] [--force]" in _flat("AGENTS.md")
+    assert "ado stack init (--from .ado/FILE | --seed NAME [--seed NAME ...] [--root R]) [--stack ID] [--apply] [--force]" in _flat("AGENTS.md")
     assert "`ado stack init --apply`: a local write with no ADO call and no gate" in _flat("rules/hitl.md")
     assert "which needs the human's explicit yes: the agent passes the flag itself, so it must ask first" in _flat("rules/hitl.md")
     assert "the agent passes the flag itself, so it must ask first" in _flat("AGENTS.md") and "All three shipped seeds are researched drafts" in docs and "PLACEHOLDERS" not in docs and "`org_only`" in docs and "is kept on any failure" not in docs
     log = _flat("CHANGELOG.md")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack init (--from FILE | --seed NAME [--root R]) [--stack ID] [--apply] [--force]`") < log.index("## 0.2")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack init (--from FILE | --seed NAME [--seed NAME ...] [--root R]) [--stack ID] [--apply] [--force]`") < log.index("## 0.2")
 
 
 def test_stack_show_documented_with_exposure_rules_and_tripwire_wording():
@@ -1371,7 +1371,7 @@ def test_stack_notes_in_the_gate_and_check_are_documented():
 def test_fix_round_docs_family_upgrade_note_and_gate_wording():
     flat = _flat("CHANGELOG.md")
     assert "link-on-merge `ado done`" in flat and "refuses `stack-profile-missing` for existing strict projects until the profile PR merges" in flat
-    assert "`ado stack init --seed <name>` (or `speckit.ado.stack`, once installed)" in flat
+    assert "`ado stack init --seed <a> --seed <b>` with one `--seed` per detected stack (or `speckit.ado.stack`, once installed)" in flat
     assert "target branch trust files are invalid" in flat and "by root and id family" in flat
     kits = _flat("docs/stack-kits.md")
     assert "`node` and `typescript`, `dart` and `flutter` are one each" in kits and "in that PR's own run" in kits
@@ -1699,3 +1699,13 @@ def test_coverage_drift_and_ignored_roots_documented():
     assert "`stack.uncovered`" in log and "`ignored_roots`" in log and "any non-empty `strict.test_command`" in log
     assert "so is any `strict.test_command` at all when no stack defines a test command" in conf
     assert "`ado strict override <id> l2`" in agents
+
+
+def test_polyglot_seeds_documented():
+    docs, cmd = _flat("docs/stack-kits.md"), _flat("commands/stack.md")
+    for needle in ("### A polyglot repository (python and node at the same root)", "`ado stack init --seed python-pytest --seed node-typescript`",
+                   "ONE draft with one stack per seed", "renumbered into one namespace", "A single `--seed` writes exactly what it always did",
+                   "would replace the stack that is already there", "does not claim the seeds were run against the FastAPI template"):
+        assert needle in docs, needle
+    assert "pass one `--seed` per stack in ONE command" in cmd and "a second `init` replaces the first" in cmd
+    assert "`--seed` can be repeated, once per detected stack" in _flat("README.md") and "`--seed` is repeatable (one per detected stack" in _flat("CHANGELOG.md")

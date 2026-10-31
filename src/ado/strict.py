@@ -314,7 +314,8 @@ def _no_test_fix(c):
     return f"remove strict.test_command from ado.config.json ({_override_l2(c)} waives the unset command), or add a test command to the profile; then {_APPROVE}"
 
 
-_DRAFT_IT = "run `ado stack init --seed <name>` (or speckit.ado.stack, once installed) to draft it"
+_DRAFT_IT = ("draft it for every detected stack: run `ado stack init --seed <a> --seed <b>` (one --seed per stack), "
+             "or edit a draft and use `--from` (or speckit.ado.stack, once installed)")
 
 
 def _head_findings(c, s):

@@ -1972,10 +1972,10 @@ def test_fix_texts_name_the_seed_verb(tmp_path, git_env, real_detect):
         d = tmp_path / rule
         d.mkdir()
         fix = _only(_impl(_stk(d, git_env, prof), d), rule)["fix"]
-        assert "ado stack init --seed <name>" in fix and "speckit.ado.stack" in fix and "ado stack approve --apply" in fix
+        assert "ado stack init --seed <a> --seed <b>" in fix and "every detected stack" in fix and "speckit.ado.stack" in fix and "ado stack approve --apply" in fix
     d = tmp_path / "unprofiled"
     d.mkdir()
-    assert "ado stack init --seed <name>" in _only(_impl(_stk(d, git_env, approve(profile()), files={"web/package.json": "{}\n"}), d), "stack-unprofiled")["fix"]
+    assert "ado stack init --seed <a> --seed <b>" in _only(_impl(_stk(d, git_env, approve(profile()), files={"web/package.json": "{}\n"}), d), "stack-unprofiled")["fix"]
 
 
 def test_unprofiled_root_is_printed_through_safe_path(tmp_path, git_env, real_detect):

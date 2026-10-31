@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -428,3 +429,141 @@ def test_init_needs_no_config_token_or_git_for_from(tmp_path, monkeypatch, capsy
     (tmp_path / ".ado").mkdir()
     (tmp_path / ".ado" / "d.json").write_text(json.dumps(profile()), encoding="utf-8")
     assert init(capsys, "--from", ".ado/d.json", "--apply")[0] == 0
+
+
+# ---- P2-16c: several --seed flags build ONE draft (a polyglot repo); a single --seed is byte-for-byte what it always was ----
+POLY = {"pyproject.toml": "[project]\nname='x'\n", "package.json": "{}\n", "package-lock.json": "{}\n"}
+SPLIT = {"backend/pyproject.toml": "[project]\nname='x'\n", "web/package.json": "{}\n", "web/package-lock.json": "{}\n"}
+
+
+def commit_all(repo, files):
+    write_files(repo, files)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "init")
+
+
+def seed_data(name):
+    return json.loads((Path(stack.SEEDS_DIR) / f"{name}.json").read_text(encoding="utf-8"))
+
+
+def source_refs(node):
+    """Every `source` value under `node`, in document order."""
+    if isinstance(node, dict):
+        return [v for k, x in node.items() for v in ([x] if k == "source" else source_refs(x))]
+    return [v for x in node for v in source_refs(x)] if isinstance(node, list) else []
+
+
+def test_two_seeds_one_draft(repo, capsys):
+    commit_all(repo, SPLIT)  # different roots, taken from detect
+    code, out, err = init(capsys, "--seed", "python-pytest", "--seed", "node-typescript")
+    assert code == 0 and err == "" and not (repo / stack.PROFILE_FILE).exists()  # a preview writes nothing
+    assert json.loads(out)["counts"] == {"stacks": 2, "commands": 7, "conventions": 17, "dod": 9, "sources": 22, "unverified": 0}
+    assert init(capsys, "--seed", "python-pytest", "--seed", "node-typescript", "--apply")[0] == 0
+    p = written(repo)
+    assert [(s["id"], s["root"]) for s in p["stacks"]] == [("python", "backend"), ("typescript", "web")]
+    assert p["status"] == "draft" and "approval" not in p and stack.validate(p) == [] and stack.read_profile(repo)["status"] == "draft"
+    assert init(capsys, "--seed", "node-typescript", "--seed", "python-pytest", "--apply", "--force")[0] == 0  # the order is the order of the flags
+    assert [(s["id"], s["root"]) for s in written(repo)["stacks"]] == [("typescript", "web"), ("python", "backend")]
+    # both at `.` (the fastapi full-stack shape): allowed, the ids differ
+    git(repo, "rm", "-q", "-r", "-f", "backend", "web")
+    commit_all(repo, POLY)
+    assert init(capsys, "--seed", "python-pytest", "--seed", "node-typescript", "--apply", "--force")[0] == 0
+    p = written(repo)
+    assert [(s["id"], s["root"]) for s in p["stacks"]] == [("python", "."), ("typescript", ".")] and stack.validate(p) == []
+    assert stack.uncovered(p, stack.detect(".")) == []  # the draft covers every detected root
+
+
+def test_source_ids_renumbered_and_valid(repo, capsys):
+    py, ts, sf = (seed_data(n) for n in ("python-pytest", "node-typescript", "salesforce"))
+    assert init(capsys, "--seed", "python-pytest", "--seed", "node-typescript", "--seed", "salesforce", "--apply")[0] == 0
+    p = written(repo)
+    assert stack.validate(p) == [] and list(p["sources"]) == [f"S{n}" for n in range(1, len(py["sources"]) + len(ts["sources"]) + len(sf["sources"]) + 1)]
+    off = {0: 0, 1: len(py["sources"]), 2: len(py["sources"]) + len(ts["sources"])}
+    for i, seed in enumerate((py, ts, sf)):
+        new = {f"S{n}": f"S{n + off[i]}" for n in range(1, len(seed["sources"]) + 1)}
+        refs = source_refs(seed["stacks"])
+        assert source_refs(p["stacks"][i]) == [new.get(r, r) for r in refs] and refs  # every reference moved with its source
+        for old, now in new.items():
+            assert p["sources"][now] == seed["sources"][old]
+        # the free text that cites a source ("S3: ...") moved with it
+        why = json.dumps(seed["stacks"][0]["commands"]["test"]["why"])
+        assert json.dumps(p["stacks"][i]["commands"]["test"]["why"]) == re.sub(r"\bS(\d+)\b", lambda m: new.get(m.group(0), m.group(0)), why)
+    assert any(r != o for r, o in zip(source_refs(p["stacks"][1]), source_refs(ts["stacks"])))  # the second seed really moved
+
+
+def test_every_seed_mention_of_a_source_in_a_why_is_defined():
+    for name in stack.SEEDS:  # the renumbering rewrites S<n> in a why: each one must be a source of that seed
+        seed = seed_data(name)
+        text = json.dumps(seed["stacks"])
+        assert not set(re.findall(r"\bS\d+\b", text)) - set(seed["sources"]), name
+
+
+def test_duplicate_stack_id_refused(repo, capsys):
+    commit_all(repo, SPLIT)
+    texts = set()
+    for argv in (["--seed", "python-pytest", "--seed", "python-pytest"], ["--seed", "node-typescript", "--seed", "salesforce", "--seed", "node-typescript"]):
+        code, out, err = init(capsys, *argv, "--apply")
+        assert code == 2 and out == "" and err.startswith("error: ") and "same stack id" in err and not (repo / stack.PROFILE_FILE).exists()
+        texts.add(err)
+    assert len(texts) == 1  # one fixed text
+    # two roots for one of the seeds: refused with a fixed text (--root is for a single seed)
+    commit_all(repo, {"other/pyproject.toml": ""})
+    code, out, err = init(capsys, "--seed", "python-pytest", "--seed", "node-typescript", "--apply")
+    assert code == 2 and "more than one detected root" in err and "backend" not in err and not (repo / stack.PROFILE_FILE).exists()
+
+
+def test_root_and_stack_need_exactly_one_seed(repo, capsys):
+    commit_all(repo, POLY)
+    with pytest.raises(SystemExit) as e:
+        main(["stack", "init", "--seed", "python-pytest", "--seed", "node-typescript", "--root", "x"])
+    assert e.value.code == 2
+    capsys.readouterr()
+    code, out, err = init(capsys, "--seed", "python-pytest", "--seed", "node-typescript", "--stack", "x")
+    assert code == 2 and json.loads(out)["ok"] is False and not (repo / stack.PROFILE_FILE).exists()
+    with pytest.raises(SystemExit) as e:
+        main(["stack", "init", "--from", "x", "--seed", "python-pytest", "--seed", "node-typescript"])
+    assert e.value.code == 2
+
+
+def test_single_seed_output_unchanged(repo, capsys):
+    """The pre-change behaviour, restated independently: the seed file with `status` draft, no `approval`, every stack's root rewritten,
+    `json.dumps(indent=2, ensure_ascii=False)` and a newline. Recorded sha256 of the files and output of the pre-change code are in the report."""
+    for name in stack.SEEDS:
+        for root_flags, root in (((), "."), (("--root", "svc"), "svc")):
+            seed = seed_data(name)
+            seed.pop("approval", None)
+            seed["status"] = "draft"
+            for st in seed["stacks"]:
+                st["root"] = root
+            expect = json.dumps(seed, indent=2, ensure_ascii=False) + "\n"
+            code, out, err = init(capsys, "--seed", name, *root_flags, "--apply")
+            assert code == 0 and err == "" and (repo / stack.PROFILE_FILE).read_bytes() == expect.encode("utf-8"), (name, root)
+            assert json.loads(out) == {"ok": True, "errors": [], "counts": stack._counts(seed), "written": stack.PROFILE_FILE, "status": "draft"}
+    plan = stack.plan_init(["python-pytest"], str(repo), seed_root="x")  # a list of one seed is the single-seed path
+    assert plan == stack.plan_init("python-pytest", str(repo), seed_root="x")
+
+
+def test_composed_command_runs_each_stack(repo, capsys, monkeypatch, tmp_path):
+    def seed(sid, marker):
+        p = profile(stacks=[{"id": sid, "root": ".", "commands": {"test": {"run": f"echo {sid} > {marker}", "source": "unverified"}}}])
+        p.pop("sources")
+        return p
+    monkeypatch.setattr(stack, "SEEDS_DIR", seeds_in(tmp_path, **{"python-pytest": seed("python", "ran-python"), "node-typescript": seed("typescript", "ran-node")}))
+    commit_all(repo, SPLIT)
+    assert init(capsys, "--seed", "python-pytest", "--seed", "node-typescript", "--apply")[0] == 0
+    cmd = stack.compose_test_command(written(repo))
+    assert cmd is not None and cmd.count("&&") >= 3
+    r = subprocess.run(["sh", "-c", cmd], cwd=repo, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert (repo / "backend" / "ran-python").read_text() == "python\n" and (repo / "web" / "ran-node").read_text() == "typescript\n"
+
+
+def test_fix_texts_do_not_suggest_dropping_a_stack():
+    old = re.compile(r"init\s+--seed\s+<name>")
+    files = [*(ROOT / "src" / "ado").glob("*.py"), *(ROOT / "commands").glob("*.md"), *(ROOT / "docs").glob("*.md"), *(ROOT / "rules").glob("*.md"),
+             ROOT / "README.md", ROOT / "AGENTS.md", ROOT / "CHANGELOG.md"]
+    assert len(files) > 20
+    for f in files:
+        assert not old.search(re.sub(r"\s+", " ", f.read_text(encoding="utf-8"))), f.name
+    from ado import strict
+    assert "--seed <a> --seed <b>" in strict._DRAFT_IT and "--from" in strict._DRAFT_IT and "every detected stack" in strict._DRAFT_IT

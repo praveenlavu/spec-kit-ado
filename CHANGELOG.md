@@ -46,11 +46,11 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   high-confidence root; in advisory mode drift and unprofiled roots are `notes` and the exit is 0. Commands in a profile are shell code that
   a human approves; the validator is a tripwire, not a sandbox. Nothing else acts on the profile yet; advisory behaviour is unchanged.
   See `docs/stack-kits.md` "The stack profile".
-- `ado stack init (--from FILE | --seed NAME [--root R]) [--stack ID] [--apply] [--force]`: creates the draft profile `ado.stack.json` from a
+- `ado stack init (--from FILE | --seed NAME [--seed NAME ...] [--root R]) [--stack ID] [--apply] [--force]`: creates the draft profile `ado.stack.json` from a
   seed (package data `src/ado/seeds/*.json`: `python-pytest`, `node-typescript`, `salesforce`; the name is matched against `stack.SEEDS`
   only, never joined into a path; `stack.seed_for` is a fixed table) or from a file under `.ado/` (a regular, non-symlink file). The
   profile is validated, `status` is forced to `draft` and `approval` dropped; a seed's root becomes `--root` or the detected root, then
-  is validated again. A local write (no ADO call, no gate: the draft is not trusted until approved): a preview by default that prints
+  is validated again. `--seed` is repeatable (one per detected stack, for example python and node at `.`): one draft with a stack per seed, each at its own detected root, the source ids renumbered into one namespace, the merged draft validated, a repeated seed refused; a single `--seed` is byte-identical to before, and every fix text (`stack-unprofiled` among them) now says to draft every detected stack instead of suggesting a single-seed `init` that would replace the other stack. A local write (no ADO call, no gate: the draft is not trusted until approved): a preview by default that prints
   `{ok, errors, counts}` only, `--apply` writes atomically with a read-back, an approved or changed profile (or one that still carries an approval) needs `--force`, and a symlinked `ado.stack.json` is refused.
   `stack.plan_init` and `stack.apply_init`. The `python-pytest` seed is researched (12 official sources re-fetched on 2026-10-31; test command `PYTHONPATH=src python3 -m pytest -q`, set `strict.test_timeout` >= 900); the `node-typescript` seed is researched too (10 official sources re-fetched on 2026-10-31; test command `npm ci --ignore-scripts && npm test`, set `strict.test_timeout` >= 900; npm only; `--ignore-scripts` also skips the project's own `prepare` and `postinstall`, so such a project must set its own test command); the `salesforce` seed is researched too (13 sources re-fetched on 2026-10-31, none from developer.salesforce.com, which refused automated fetches; test command `npm ci --ignore-scripts && npm run test:unit` for LWC Jest, set `strict.test_timeout` >= 900; `--ignore-scripts` also skips the project's own `prepare` and `postinstall`; Apex tests and deploys are `org_only` and never run by strict).
   See `docs/stack-kits.md` "Creating a profile".
@@ -129,7 +129,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   compares every pre-existing verb's output with baseline a0b3c9e on a project without `ado.stack.json` or a lockfile.
 - **Upgrade note (strict projects):** a strict project with no `ado.stack.json` now fails `strict check`. That includes link-on-merge
   `ado done` (merged tree, local config), which refuses `stack-profile-missing` for existing strict projects until the profile PR merges:
-  run `ado stack init --seed <name>` (or `speckit.ado.stack`, once installed), then a human runs `ado stack approve --apply`, and merge it first.
+  run `ado stack init --seed <a> --seed <b>` with one `--seed` per detected stack (or `speckit.ado.stack`, once installed), then a human runs `ado stack approve --apply`, and merge it first.
 - Config: `mode` (`"advisory"` default, or `"strict"`) and the `strict` object (`test_command`,
   `test_timeout`); in strict mode the effective `gate.block` and `review_block_on` are the
   project's lists plus the strict floor. Invalid values are a config error.
