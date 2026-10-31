@@ -1,6 +1,6 @@
 # ado bundle
 
-Installs the `ado` Spec Kit extension (12 `speckit.ado.*` commands) and the `ado-lifecycle`
+Installs the `ado` Spec Kit extension (13 `speckit.ado.*` commands) and the `ado-lifecycle`
 workflow, which runs an Azure DevOps story from spec to an open pull request.
 
 ## Install

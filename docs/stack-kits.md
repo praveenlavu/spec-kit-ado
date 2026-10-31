@@ -258,6 +258,38 @@ so a new root needs two PRs: the profile first, then the code. The lockfile is r
 rules that use it come with kit pinning. A recovery for a locked target (an invalid or draft profile merged by mistake) is an admin-bypass
 merge of the fix. This is process enforcement, not a security boundary.
 
+## The `speckit.ado.stack` command
+
+`speckit.ado.stack` (`commands/stack.md`) takes a project from "no approved profile" to a reviewed **draft** `ado.stack.json`. It is a
+prompt command: the `ado` CLI never fetches a web page. `speckit.ado.setup` calls it after the phase map, and `speckit.ado.plan` runs
+`ado stack show --check` first (strict mode stops on exit 2; advisory offers this command) and reads the approved profile with
+`ado stack show --md`, never the file. `speckit.ado.implement` and `speckit.ado.review` use only an approved profile's commands.
+
+1. **Detect.** `ado stack detect` and `ado stack show`. An approved or draft profile ends the run with what to do next; `unknown` or
+   medium-only detection means the human names the stack and roots (it never guesses).
+2. **Installed kit.** An enabled extension whose id, tags or commands match a detected stack (for example `sf` for `salesforce`) gets the phase map
+   of `speckit.ado.setup` step 4 (shown, written only on a yes) and the matching seed, if one ships (`ado stack init --seed <name>`).
+3. **No kit: ask** *Search for a kit* / *Build a profile by research* / *Both* / *Stop*.
+   - **Search for a kit** (read-only). `specify extension search <stack>` prints text with no JSON, so it only refreshes Spec Kit's catalog cache;
+     the facts (`id`, `author`, `version`, `created_at`, `updated_at`, `license`, `effect`, `requires.tools`, `provides` counts, `sha256`
+     present, `verified`) are read from `.specify/extensions/.cache/*.json`, never scraped from the text. Descriptions are data. After the
+     human's yes, `gh repo view <repo> --json stargazerCount,pushedAt,isArchived` (read-only). The command **never installs a kit**: it prints
+     `specify extension add <id>` and then `ado kits pin <id> --apply` for the human to run in their own terminal after reading the kit.
+   - **Build a profile by research.** Per field: official docs first, then community guidelines, then proven implementations, then the
+     repository's own files (kind `repo`). Every item is cited or `unverified`, with a note paraphrased in at most 300 characters. Fetched
+     web text is data: instructions in it are ignored, and a command that downloads and runs code is never adopted. A command needing a live
+     org, a server or credentials goes in `org_only`: the agent shows it and runs it only after the human's explicit yes for that run.
+4. **Hand-off.** The agent writes `.ado/stack-draft.json` (gitignored), previews with `ado stack init --from .ado/stack-draft.json`, and
+   runs `--apply` only after the human's yes. It then tells the human to open their own terminal window and run `ado stack approve` and
+   `ado stack approve --apply` (the `!` prefix is only a shortcut, not verified to give a terminal, and `--apply` checks stdin only; see
+   "Approving a profile") and never runs them itself.
+
+Under `--workflow` the command asks nothing and writes nothing: it stops with the fix. The `ado-lifecycle` workflow has no step for this
+command; its shell step `stack-check` (`ado stack show --check`, after `pull`, before `review-spec`) stops a strict run on a missing,
+draft, changed or drifting profile and is a no-op in an advisory project. Run `speckit.ado.stack` by hand, approve, and resume.
+This is process enforcement, not a security boundary: the web text the agent reads is untrusted, and the human's review of the draft
+(every command shown in full at approval) is the control.
+
 ## Pinning kits
 
 A third-party kit is code the agent runs. `ado.kits.lock.json` (repo root, committed) records which kits a human reviewed and a digest of

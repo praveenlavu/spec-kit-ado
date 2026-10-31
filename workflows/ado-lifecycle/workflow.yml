@@ -56,6 +56,12 @@ steps:
     input:
       args: "{{ inputs.story_id }} --workflow"
 
+  # Strict mode: stop here (before anything is reviewed or posted) unless the stack profile is approved, matches
+  # strict.test_command and covers every detected root. Advisory: exit 0 with notes. The fix is `speckit.ado.stack` by hand.
+  - id: stack-check
+    type: shell
+    run: "ado stack show --check"
+
   - id: review-spec
     type: gate
     message: "Review the spec, the open questions in ledger section 2 and the ledger's 'Needs human decision' list before approving."

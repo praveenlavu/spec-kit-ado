@@ -24,7 +24,7 @@
         ]
       },
       "provides": {
-        "commands": 12,
+        "commands": 13,
         "hooks": 2
       },
       "tags": ["azure-devops", "issue-tracking", "hitl", "workflow", "governance"],

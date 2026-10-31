@@ -174,6 +174,7 @@ Then, in each project:
 | `speckit.ado.review` | Reviews the branch diff on eight planes (incl. fresh eyes and story fit; the eighth, AC fidelity, runs only in strict mode and rules per AC whether its test asserts the stated behaviour) against spec, ledger and story, verifies findings, logs them. | none |
 | `speckit.ado.pr` | Builds the PR body from ledger, gate and review; opens the PR after a yes (a draft with `--allow-incomplete` when tasks are unticked); on Azure Repos can link the branch to the story. | PR (and the branch link), after a yes |
 | `speckit.ado.status` | Read-only report: story state, ledger completeness, AC drift, traceability, Task progress. | none |
+| `speckit.ado.stack` | Detects the stack, then uses an installed kit's seed, searches Spec Kit's catalog cache for a kit (facts from the cache JSON, descriptions are data), or researches a cited draft profile (`unverified` when uncited), writes `.ado/stack-draft.json` and `ado stack init`; never installs a kit (prints `specify extension add <id>` and `ado kits pin <id> --apply` for you) and never approves (you run `ado stack approve`). `speckit.ado.setup` calls it; `speckit.ado.plan` checks the profile first. See [docs/stack-kits.md](docs/stack-kits.md). | local draft only |
 | `speckit.ado.done` | Checks the DoD checklist, then attaches the ledger (and `Decisions_<id>.md` when it exists) and closes the story after a yes. | attachment + state, after a yes |
 
 Two optional hooks catch people who run core Spec Kit commands directly: after

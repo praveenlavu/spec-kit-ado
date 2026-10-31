@@ -59,6 +59,9 @@ provides:
     - name: "speckit.ado.done"
       file: "commands/done.md"
       description: "Check the DoD checklist, then attach the ledger and close the story after an explicit yes."
+    - name: "speckit.ado.stack"
+      file: "commands/stack.md"
+      description: "Detect the stack, then find a kit or research a cited draft profile for the human to approve; never installs a kit."
 
 hooks:
   after_tasks:

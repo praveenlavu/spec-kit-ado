@@ -26,7 +26,8 @@ rejecting any gate aborts the run.
 
 | Step | What happens | Gate |
 |---|---|---|
-| `pull` | Story to spec and DoD ledger | `review-spec` |
+| `pull` | Story to spec and DoD ledger | |
+| `stack-check` | Strict mode: `ado stack show --check` stops the run (exit 2) unless the stack profile is approved, matches `strict.test_command` and covers every detected root; advisory: exit 0 with notes. The fix is `speckit.ado.stack` by hand, the human's `ado stack approve --apply`, then `specify workflow resume` | `review-spec` |
 | `questions-loop` | Preview, then post the open questions to the story | `approve-questions` |
 | `plan` | Plan phase | |
 | `plan-questions-loop` | Preview, then post the questions the plan raised (the same comment is edited) | `approve-plan-questions` |
@@ -52,7 +53,7 @@ keeps the line in ledger section 2 for review, and so the `open_questions` gate 
 Each such assumption (and every other assumption or decision the plan and implement steps make) is also recorded with
 `ado decisions <id> --add` in the story's own file `<dod_path>/Decisions_<id>.md`, which `ado done` attaches to the story next to the ledger.
 
-**Strict mode.** `strict-check-implement`, `decisions-loop`, `strict-verify` and `wait-po-validation` belong to strict mode
+**Strict mode.** `stack-check`, `strict-check-implement`, `decisions-loop`, `strict-verify` and `wait-po-validation` belong to strict mode
 (`"mode": "strict"` in `ado.config.json`). The CLI answers in an advisory project, not shell conditionals: `ado strict check` and
 `ado strict verify` exit 0 with `mode is advisory`, and `decisions-loop` is a no-op when there is no decisions file; when there is one the post happens in every mode, behind the gate (`ado decisions <id> --post --if-any`
 exits 0 with nothing to post; its preview says so, approve to continue). Because the plan and implement prompts record `D<n>` lines in every mode,

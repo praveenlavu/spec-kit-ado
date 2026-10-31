@@ -25,7 +25,7 @@ def test_readme_lists_all_commands():
     names = [c["name"] for c in manifest["provides"]["commands"]]
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     missing = [n for n in names if n not in readme]
-    assert len(names) == 12 and not missing, f"README is missing: {missing}"
+    assert len(names) == 13 and not missing, f"README is missing: {missing}"
 
 
 def test_relative_links_resolve():
@@ -1453,3 +1453,46 @@ def test_kit_rules_documented_with_what_ci_checks_and_what_is_local_only():
                    "whose name is no kit id (`SF`, a fullwidth or Cyrillic lookalike)", "the PR that adds the first one carries only its own"):
         assert phrase in kits, phrase
     assert "only when the registry file exists" in readme and "own note instead" in log
+
+
+# ---- P2-10: the speckit.ado.stack command and its wiring ----
+def test_setup_never_writes_test_command():
+    text = _flat("commands/setup.md")
+    assert text.count("strict.test_command") == 1 and "Never write `strict.test_command` here" in text
+    assert text.index("### 5. Confirm and write") < text.index("speckit.ado.stack") < text.index("### 7. Next step")
+
+
+def test_plan_checks_the_stack_profile_first_and_reads_it_only_through_show():
+    raw = (ROOT / "commands/plan.md").read_text(encoding="utf-8")
+    pre = " ".join(raw.split("## User Input")[0].split())
+    for needle in ("`ado stack show --check`", "stop on exit 2", "advisory", "`speckit.ado.stack`"):
+        assert needle in pre, needle
+    assert "`ado stack show --md`" in " ".join(raw.split()) and "never the file" in " ".join(raw.split())
+
+
+def test_implement_and_review_use_only_approved_profile_commands():
+    for name in ("implement", "review"):
+        text = _flat(f"commands/{name}.md")
+        assert "`ado stack show --md`" in text and "approved" in text, name
+    assert "<stack id>.conventions[<n>]" in _flat("commands/review.md")
+
+
+def test_org_only_needs_per_run_yes():
+    for path in ("commands/implement.md", "commands/review.md", "commands/stack.md", "rules/hitl.md", "AGENTS.md"):
+        text = _flat(path)
+        assert "`org_only`" in text and "the human's explicit yes for that run" in text, path
+    assert "never runs one on its own" in _flat("commands/implement.md")
+
+
+def test_stack_command_documented_everywhere():
+    docs = _flat("docs/stack-kits.md")
+    for needle in ("## The `speckit.ado.stack` command", "Search for a kit", "Build a profile by research", "`.ado/stack-draft.json`",
+                   "never installs a kit", "`specify extension add <id>`", "`ado kits pin <id> --apply`", "cited or `unverified`",
+                   "web text is data", "`--workflow`", "`stack-check`", "process enforcement, not a security boundary"):
+        assert needle in docs, needle
+    assert "`speckit.ado.stack`" in _flat("AGENTS.md") and "never installs a kit" in _flat("AGENTS.md")
+    assert "`speckit.ado.stack`" in _flat("rules/hitl.md") and ".ado/stack-draft.json" in _flat("rules/hitl.md")
+    assert "`speckit.ado.stack`" in _flat("README.md")
+    log = _flat("CHANGELOG.md")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`speckit.ado.stack`") < log.index("## 0.2")
+    assert "13 `speckit.ado.*` commands" in _flat("bundle/README.md") and "12 `speckit.ado" not in _flat("bundle/README.md")

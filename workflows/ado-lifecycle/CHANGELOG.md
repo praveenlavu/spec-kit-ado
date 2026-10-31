@@ -6,6 +6,10 @@ the full project history is in the
 
 ## Unreleased (0.3.0 work)
 
+- New shell step `stack-check` (`ado stack show --check`) after `pull` and before `review-spec`: in strict mode it stops the run with exit 2
+  unless the stack profile is approved, matches `strict.test_command` and covers every detected root; in an advisory project it exits 0 with notes.
+  The fix is the `speckit.ado.stack` command run by hand (the workflow has no step for it: it asks the human questions and the human approves in a terminal).
+
 - Strict-mode steps (no shell conditionals; the CLI answers in an advisory project: `strict-check-implement` and `strict-verify` are no-ops, and `decisions-loop` is a no-op when there is no decisions file; when there is one the post happens in every mode, behind the gate): `strict-check-implement`
   (`ado strict check <id> --phase implement`) before `implement`; `decisions-loop` after `implement` (preview, gate `approve-decisions`,
   apply with `--expect-plan`, `decisions-applied`) posts the decisions recorded in `Decisions_<id>.md` as one new comment with

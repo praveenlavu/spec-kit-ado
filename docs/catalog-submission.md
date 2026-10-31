@@ -37,7 +37,7 @@ components from them. The release therefore carries two install-allowed catalogs
 | Documentation URL | `https://github.com/praveenlavu/spec-kit-ado/blob/main/README.md` |
 | Changelog URL | `https://github.com/praveenlavu/spec-kit-ado/blob/main/CHANGELOG.md` |
 | Required Spec Kit Version | `>=0.9.0` |
-| Number of Commands | `12` |
+| Number of Commands | `13` |
 | Number of Hooks | `2` |
 | Tags | `azure-devops, issue-tracking, hitl, workflow, governance` |
 
@@ -89,7 +89,7 @@ components from them. The release therefore carries two install-allowed catalogs
 
 **Test scenarios:**
 1. Installed the ado CLI with pipx from the v0.2.0 tag
-2. Installed the extension with `specify extension add ado --from <download URL>`; 12 commands and 2 hooks registered
+2. Installed the extension with `specify extension add ado --from <download URL>`; 13 commands and 2 hooks registered
 3. Ran /speckit.ado.setup and /speckit.ado.pull on a test story
 4. Ran ado push and ado done without --apply and confirmed no writes; applied after review
 5. Ran the unit test suite (no network): <N> passed
@@ -132,7 +132,7 @@ specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/arc
       ]
     },
     "provides": {
-      "commands": 12,
+      "commands": 13,
       "hooks": 2
     },
     "tags": ["azure-devops", "issue-tracking", "hitl", "workflow", "governance"],
@@ -262,7 +262,7 @@ community catalogs are discovery-only, so "None" would fail the submission check
 **Key Features**
 
 ```markdown
-- Installs the ado extension (12 speckit.ado.* commands, 2 optional hooks)
+- Installs the ado extension (13 speckit.ado.* commands, 2 optional hooks)
 - Installs the ado-lifecycle workflow: spec, plan, tasks, push, implement, gate, review, PR (the story closes after merge)
 - Every Azure Boards or PR change in the workflow is a dry-run preview, a gate step that shows the plan file, then an apply step; rejecting any gate aborts the run
 ```

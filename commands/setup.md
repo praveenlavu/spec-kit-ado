@@ -83,7 +83,13 @@ secrets). Never write `strict.test_command` here: once a project has a stack pro
 comes only from `ado stack approve --apply`, which the human runs in their own terminal
 (a hand edit would differ from the approved command, which strict mode reports).
 
-### 6. Next step
+### 6. Stack profile
+
+Run `speckit.ado.stack` (pass `--workflow` if this command was given it): it detects the stack, offers an installed
+kit or a kit search or a researched draft profile, and tells the human how to approve it. It installs nothing and
+approves nothing. Skip it only if the human says so, and say that strict mode needs an approved profile.
+
+### 7. Next step
 
 Suggest `speckit.ado.constitution`, then `speckit.ado.pull <id>`.
 

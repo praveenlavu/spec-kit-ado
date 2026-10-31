@@ -28,7 +28,7 @@ def _steps():
 
 def test_step_order_and_ids():
     ids = [s["id"] for s in _steps()]
-    assert ids == ["pull", "review-spec",
+    assert ids == ["pull", "stack-check", "review-spec",
                    "questions-loop", "questions-preview", "approve-questions", "questions-apply", "questions-applied", "plan",
                    "plan-questions-loop", "plan-questions-preview", "approve-plan-questions", "plan-questions-apply", "plan-questions-applied",
                    "wait-po-answers", "plan-with-answers",
@@ -70,7 +70,7 @@ def test_no_gate_message_interpolates():
 
 def test_shell_steps_only_interpolate_story_id():
     runs = [s["run"] for s in _steps() if s.get("type") == "shell"]
-    assert len(runs) == 26
+    assert len(runs) == 27
     for run in runs:
         assert all(e.strip() == "inputs.story_id" for e in re.findall(r"\{\{(.*?)\}\}", run))
         assert "{%" not in run
@@ -454,3 +454,27 @@ def test_strict_steps_are_noops_in_advisory(tmp_path, monkeypatch, capsys):
 def test_only_strict_verify_sets_a_step_timeout():
     # engine defaults: shell 300 s (fine for the ado calls, which are local or one HTTP round trip), a command step has none (not captured)
     assert [s["id"] for s in _steps() if "timeout" in s] == ["strict-verify"]
+
+
+def test_stack_check_follows_pull_and_precedes_review_spec():
+    ids = [s["id"] for s in _steps()]
+    assert ids[:3] == ["pull", "stack-check", "review-spec"]
+    step = _steps()[1]
+    assert step["type"] == "shell" and step["run"] == "ado stack show --check" and "timeout" not in step
+
+
+def test_stack_check_is_a_noop_in_advisory(tmp_path, monkeypatch, capsys):
+    import json
+    from ado import __main__ as m
+    (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam"}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    run = {s["id"]: s for s in _steps()}["stack-check"]["run"]
+    assert m.main(shlex.split(run)[1:]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "none"
+
+
+@pytest.mark.parametrize("path", ["workflows/ado-lifecycle/README.md", "workflows/ado-lifecycle/CHANGELOG.md"])
+def test_workflow_docs_describe_stack_check(path):
+    text = " ".join((ROOT / path).read_text(encoding="utf-8").split())
+    assert "stack-check" in text and "ado stack show --check" in text and "speckit.ado.stack" in text

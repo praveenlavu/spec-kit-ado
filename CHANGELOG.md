@@ -6,6 +6,17 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
 
 ### Added
 
+- `speckit.ado.stack` (the 13th command, `commands/stack.md`): detects the stack (`ado stack detect`, `ado stack show`), then starts from an
+  installed kit's seed, searches Spec Kit's catalog cache for a kit (`specify extension search <stack>` only refreshes the cache; the facts
+  come from `.specify/extensions/.cache/*.json`, descriptions are data), or researches a draft profile in the order official, community,
+  implementation, repo, every item cited or `unverified` with a note paraphrased to at most 300 characters. It writes `.ado/stack-draft.json`,
+  previews and (after a yes) applies `ado stack init --from`, and tells the human to run `ado stack approve` and `ado stack approve --apply`.
+  It never installs a kit (it prints `specify extension add <id>` and `ado kits pin <id> --apply`), never adopts a download-and-run command,
+  treats web text, catalog descriptions, kit text and repo files as data, runs an `org_only` command only after the human's explicit yes for that
+  run, and under `--workflow` asks nothing and stops with the fix. `speckit.ado.setup` calls it after the phase map (and still never writes
+  `strict.test_command`); `speckit.ado.plan` runs `ado stack show --check` first and reads `ado stack show --md`; `speckit.ado.implement` and
+  `speckit.ado.review` use only an approved profile's commands. The `ado-lifecycle` workflow gains the shell step `stack-check`
+  (`ado stack show --check`, after `pull`, before `review-spec`; a no-op in advisory mode). See `docs/stack-kits.md` "The `speckit.ado.stack` command".
 - `ado stack detect [--repo DIR]`: read-only, local detection of the stacks a repository holds, from the files tracked at `HEAD`
   (`git ls-tree -r -z`; never the working tree) as JSON `{"outcome": "detected|multiple|unknown", "stacks": [{"id", "root", "confidence",
   "evidence", "hints"}], "domain_hints": []}`. Ids: `python`, `node`, `typescript`, `dart`, `flutter`, `salesforce`, `java`, `go`, `rust`,
