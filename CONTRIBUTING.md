@@ -12,11 +12,11 @@
 
   ```bash
   python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"   # once
-  .venv/bin/pytest -q
+  .venv/bin/pytest -q -n auto
   ```
 
 - **No third-party runtime dependencies.** The `ado` CLI is Python standard library
-  only; `pytest` and `pyyaml` stay in the `dev` extra.
+  only; `pytest`, `pytest-xdist` (parallel runs, about 3x faster) and `pyyaml` stay in the `dev` extra.
 - **No secrets, no client data.** Never commit a token, an `ado.config.json` with real
   values, or customer data. Examples use the fictional `contoso` organization, `Fabrikam`
   project and work item `1001`.
