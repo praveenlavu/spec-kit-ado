@@ -1007,6 +1007,8 @@ def _d(n, text, status="open", kind="decision", posted=False, used=""):
     """One decisions-file line in the exact grammar."""
     d = {"id": f"D{n}", "kind": kind, "text": text, "why": "because", "status": status, "by": "" if status == "open" else "PO",
          "note": "", "posted": None, "used": used}
+    if decisions._SUP.match(text):
+        d["supersedes"] = "D" + decisions._SUP.match(text).group(1)  # its marker covers the id as `parse_decisions` will read it
     if posted:
         d["posted"] = {"comment_id": 7, "hash": decisions.marker_hash(d)}
     return decisions.render_line(d) + "\n"
@@ -1687,3 +1689,123 @@ def test_verify_override_never_covers_l1(tmp_path, git_env, monkeypatch):
     monkeypatch.setattr(strict, "run_configured", _boom)
     res = _verify(tmp_path, client)
     assert res["ok"] is False and "evidence-missing" in _vrules(res) and "note" not in res  # L1 is never overridable
+
+
+# ---- V3-16a: `supersedes D<n>: ` lets the developer answer a PO rejection ----
+def _sup(n, target, status="open", posted=True):
+    return _d(n, f"supersedes D{target}: use the v2 api as asked", status=status, posted=posted)
+
+
+def test_supersedes_clears_a_rejected_decision_for_pr(tmp_path, git_env):
+    rej = _d(1, "use the v1 api", status="rejected")
+    client, _ = _story(tmp_path, git_env, dec=rej)
+    assert _rules(_pr(tmp_path, client)) == ["decision-rejected"]
+    DEC(tmp_path).write_text(rej + _sup(2, 1))
+    assert _pr(tmp_path, client) == {"phase": "pr", "mode": "strict", "ok": True, "findings": [], "overrides_used": []}
+    DEC(tmp_path).write_text(rej + _sup(2, 1, posted=False))  # the PO must have seen the answer
+    res = _pr(tmp_path, client)
+    assert _rules(res) == ["supersedes-unposted"] and "D2" in res["findings"][0]["detail"] and "--post" in res["findings"][0]["fix"]
+    assert "v2 api" not in json.dumps(res) and "v1 api" not in json.dumps(res)  # ids only
+    DEC(tmp_path).write_text(rej + _sup(2, 1).replace("v2 api", "v3 api"))  # an edited line no longer matches its marker
+    assert _rules(_pr(tmp_path, client)) == ["supersedes-unposted"]
+    # the old line is never edited: the audit trail stays in the file
+    assert "D1: use the v1 api → rejected" in DEC(tmp_path).read_text()
+
+
+def test_superseder_must_be_posted_and_resolved_for_done(tmp_path, git_env):
+    rej = _d(1, "use the v1 api", status="rejected")
+    client, _ = _story(tmp_path, git_env, dec=rej + _sup(2, 1))
+    res = _pr(tmp_path, client, "done")
+    assert _rules(res) == ["decision-open"] and "D2" in res["findings"][0]["detail"] and "D1" not in res["findings"][0]["detail"]
+    DEC(tmp_path).write_text(rej + _sup(2, 1, status="validated"))
+    assert _pr(tmp_path, client, "done")["ok"] is True
+    DEC(tmp_path).write_text(rej + _sup(2, 1, posted=False))
+    assert _rules(_pr(tmp_path, client, "done")) == ["supersedes-unposted", "decision-open"]
+    # an open decision that is answered is not waited for any more, its superseder is
+    DEC(tmp_path).write_text(_d(1, "still open", posted=True) + _sup(2, 1, status="validated"))
+    assert _pr(tmp_path, client, "done")["ok"] is True
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_rejected_superseder_reactivates_the_original(tmp_path, git_env, phase):
+    client, _ = _story(tmp_path, git_env, dec=_d(1, "use the v1 api", status="rejected") + _sup(2, 1, status="rejected"))
+    res = _pr(tmp_path, client, phase)
+    assert _rules(res) == ["decision-rejected"] and "D1, D2" in res["findings"][0]["detail"]
+    DEC(tmp_path).write_text(_d(1, "use the v1 api", status="rejected") + _sup(2, 1, status="rejected") + _sup(3, 2))
+    assert _pr(tmp_path, client, "pr")["ok"] is True  # D3 answers the rejection of D2, which stood in for D1
+
+
+_SUP_BAD = {"cycle": lambda: _d(1, "supersedes D2: a", posted=True) + _d(2, "supersedes D1: b", posted=True),
+            "self": lambda: _d(2, "supersedes D2: a", posted=True),
+            "lower-id": lambda: _d(1, "supersedes D2: a", posted=True) + _d(2, "b", status="rejected"),
+            "unknown": lambda: _d(2, "supersedes D9: a", posted=True),
+            "override": lambda: _d(1, "skip l2", kind="override", posted=True) + _sup(2, 1),
+            "list-prefix": lambda: _d(1, "x", status="rejected") + "1. " + _sup(2, 1),
+            "quote-prefix": lambda: _d(1, "x", status="rejected") + "> " + _sup(2, 1),
+            "prefix-no-arrow": lambda: _d(1, "x", status="rejected") + "1. D2: supersedes D1: answer\n"}
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+@pytest.mark.parametrize("case", sorted(_SUP_BAD))
+def test_chain_and_cycle_and_self_reference_and_unknown_target(tmp_path, git_env, phase, case):
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + _SUP_BAD[case]())
+    res = _pr(tmp_path, client, phase)
+    assert "decisions-invalid" in _rules(res) and res["ok"] is False
+    assert "v2 api" not in json.dumps(res)
+
+
+def test_chain_of_superseders_is_valid(tmp_path, git_env):
+    dec = _d(1, "x", status="rejected") + _sup(2, 1, status="rejected") + _sup(3, 2, status="validated")
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + dec)
+    assert _pr(tmp_path, client, "done")["ok"] is True
+
+
+def test_override_cannot_be_superseded(tmp_path, git_env):
+    skip = _d(1, "skip placeholder", kind="override", posted=True)
+    client, _ = _story(tmp_path, git_env, dec=skip + _sup(2, 1))
+    assert "decisions-invalid" in _rules(_pr(tmp_path, client))
+    ctx = strict._Ctx(client, 1001, str(tmp_path), "pr", "HEAD", None, False)
+    assert strict.overrides(ctx)["placeholder"] == "D1"  # still in force: the superseder dropped nothing
+
+
+def test_hidden_supersedes_line_flag_only_fires_on_a_non_decision_line(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + _d(1, "a")
+                       + "Prose that says supersedes D1 and D2: nothing\n")
+    assert _pr(tmp_path, client)["ok"] is True
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+@pytest.mark.parametrize("case", ["validated", "assumption", "rejected", "copied-marker"])
+def test_every_superseder_needs_a_matching_marker_whatever_its_status(tmp_path, git_env, phase, case):
+    rej = _d(3, "use the v1 api", status="rejected")
+    hand = {"validated": "- [x] D9: supersedes D3: use v2 → validated · by: PO · note: ok\n",  # the reviewer's two-line repro
+            "assumption": "- [ ] D9: supersedes D3: use v2 → _(open)_ · kind: assumption · why: w\n",
+            "rejected": "- [x] D9: supersedes D3: use v2 → rejected · by: PO · note: no\n",
+            "copied-marker": _sup(9, 3, status="rejected").replace("D9", "D10")}[case]
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + rej + hand)
+    res = _pr(tmp_path, client, phase)
+    assert "supersedes-unposted" in _rules(res) and res["ok"] is False
+    finding = next(f for f in res["findings"] if f["rule"] == "supersedes-unposted")
+    assert ("D10" if case == "copied-marker" else "D9") in finding["detail"] and "use v2" not in json.dumps(res)
+    posted = {"validated": _sup(9, 3, status="validated"), "assumption": _d(9, "supersedes D3: use v2", kind="assumption", posted=True),
+              "rejected": _sup(9, 3, status="rejected"), "copied-marker": _sup(10, 3, status="rejected")}[case]
+    DEC(tmp_path).write_text(decisions.render_file(1001) + rej + posted)
+    assert "supersedes-unposted" not in _rules(_pr(tmp_path, client, phase))  # with its marker the normal flow has no dead end
+
+
+def test_a_chain_linked_by_an_unposted_rejected_line_is_flagged(tmp_path, git_env):
+    dec = (_d(3, "x", status="rejected") + _sup(5, 3, status="rejected", posted=False) + _sup(7, 5))
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + dec)
+    res = _pr(tmp_path, client)
+    assert _rules(res) == ["supersedes-unposted"] and "D5" in res["findings"][0]["detail"] and "D7" not in res["findings"][0]["detail"]
+    DEC(tmp_path).write_text(decisions.render_file(1001) + _d(3, "x", status="rejected") + _sup(5, 3, status="rejected") + _sup(7, 5))
+    assert _pr(tmp_path, client)["ok"] is True
+
+
+def test_superseding_an_open_decision_the_po_never_saw_is_flagged(tmp_path, git_env):
+    client, _ = _story(tmp_path, git_env, dec=decisions.render_file(1001) + _d(4, "an open choice") + _sup(6, 4, status="validated"))
+    for phase in ("pr", "done"):
+        res = _pr(tmp_path, client, phase)
+        assert _rules(res) == ["supersedes-unposted"] and "D4" in res["findings"][0]["detail"] and "D6" not in res["findings"][0]["detail"]
+    DEC(tmp_path).write_text(decisions.render_file(1001) + _d(4, "an open choice", posted=True) + _sup(6, 4, status="validated"))
+    assert _pr(tmp_path, client, "done")["ok"] is True

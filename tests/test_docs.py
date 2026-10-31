@@ -1061,3 +1061,26 @@ def test_decisions_file_travels_with_the_pr_and_verify_honours_overrides_documen
         assert "`l2` also covers `test-command`" in text, doc
         assert "`ado strict verify` honours overrides like `check`" in text and "`verification skipped: overridden`" in text, doc
     assert "`strict-verify`" in _flat("README.md") and "timeout: 7200" in _flat("README.md")
+
+
+def test_supersedes_documented():
+    flat = _flat("README.md")
+    assert "**How to answer a PO rejection.**" in flat and "--add \"<what you do now>\" --kind decision --supersedes D3`" in flat
+    assert "`D5: supersedes D3: <text>`" in flat and "A rejected D5 re-activates D3" in flat and "`supersedes-unposted`" in flat
+    assert "[--supersedes D<n>]" in flat and "no live `supersedes` line answers it" in flat and "(so a cycle too)" in flat
+    assert "--supersedes D<n>" in _flat("commands/plan.md")
+    for doc in ("AGENTS.md", "rules/hitl.md", "commands/implement.md", "CHANGELOG.md"):
+        text = _flat(doc)
+        assert "--supersedes D<n>" in text and "supersedes D<n>: " in text, doc
+    assert "never hand-write the prefix" in _flat("AGENTS.md").lower() and "never by editing or deleting the rejected line" in _flat("rules/hitl.md")
+    assert "`decisions.effective`" in _flat("CHANGELOG.md") and "`supersedes-unposted`" in _flat("CHANGELOG.md")
+
+
+def test_supersedes_marker_rule_and_its_limit_documented():
+    flat = _flat("README.md")
+    row = flat.split("| `supersedes-unposted` |")[1].split("| `override-unposted`")[0]
+    assert "whatever its status or kind" in row and "**never checked against ADO** in this release" in row and "computed by hand passes" in row
+    para = flat.split("**How to answer a PO rejection.**")[1].split("**`done` after a squash merge:**")[0]
+    assert "`post D<n> first`" in para and "**never checked against ADO** in this release" in para and "a hand-computed marker passes" in para
+    assert "that rejected line keeps blocking" in para and "prints a `notice`" in para and "its id is part of the hash" in para
+    assert "post D<n> first" in _flat("AGENTS.md") and "never checked against ADO" in _flat("CHANGELOG.md")

@@ -500,18 +500,20 @@ def _hidden_lines(md, story_id):
         m = decisions._CAND.match(ln)
         if m:
             ids.append(m.group(2))
-        elif ln not in note and ("→" in ln or "->" in ln):
+        elif ln not in note:
             d = _D_TOKEN.search(ln)
-            odd = odd or (d is not None and _STATUS_ARROW.search(ln, d.end()) is not None)
+            odd = odd or decisions.SUP_HIDDEN.search(ln) is not None or (  # a supersedes line behind `1. ` or `> ` is not read
+                ("→" in ln or "->" in ln) and d is not None and _STATUS_ARROW.search(ln, d.end()) is not None)
     return odd or len(ids) != len(set(ids))
 
 
 def _decisions_ok(c):
-    if c.decisions_ok and not c.decisions["unparsed"] and not _hidden_lines(c.decisions_md, c.id):
+    if (c.decisions_ok and not c.decisions["unparsed"] and not _hidden_lines(c.decisions_md, c.id)
+            and not decisions.supersede_problem(c.decisions)):
         return []
     return [_finding("decisions-invalid", "the decisions file is unreadable (a symlink, outside the repository, over 1 MiB or not UTF-8), "
-                     "a D line breaks the grammar or repeats an id, a line that looks like a decision is not one, or a code fence or "
-                     "comment is left open in it, so its lines cannot all be judged",
+                     "a D line breaks the grammar or repeats an id, a line that looks like a decision is not one, a `supersedes` line "
+                     "names no decision, an override or a higher id, or a code fence or comment is left open in it, so its lines cannot all be judged",
                      f"repair `{decisions.decisions_file(c.cfg.dod_path, c.id)}` (`ado decisions {c.id}` shows what parses)")]
 
 
@@ -523,7 +525,7 @@ def _decisions_pr(c):
     """`decision-rejected` (any rejected line) and `override-unposted` (an override line without a `posted:` marker that
     still matches its text: the PO must have seen it). Ids only, never decision text."""
     out = _decisions_ok(c)
-    rejected = c.decisions["rejected"]
+    rejected = decisions.effective(c.decisions)["rejected"]  # a rejected line a live `supersedes` answers no longer blocks
     if rejected:
         out.append(_finding("decision-rejected", f"the PO rejected: {_ids_detail(rejected)}",
                             "change the work to match the PO's answer, or record a new decision; never re-word or delete a rejected line"))
@@ -531,11 +533,17 @@ def _decisions_pr(c):
     if unposted:
         out.append(_finding("override-unposted", f"override(s) not posted to the story: {_ids_detail(unposted)}",
                             f"post them with `ado decisions {c.id} --post` (preview, yes, then --apply)"))
+    answers = decisions.supersede_unposted(c.decisions)  # every superseder, whatever its status, and every open line it retires
+    if answers:
+        out.append(_finding("supersedes-unposted", f"decision(s) in a supersedes relation not posted to the story (no `posted:` marker that "
+                            f"matches the line): {_ids_detail(answers)}",
+                            f"post an open line with `ado decisions {c.id} --post` (preview, yes, then --apply) before it is resolved; a "
+                            "resolved line that was never posted is recorded again as a new open decision"))
     return out
 
 
 def _decisions_done(c):
-    still = c.decisions["open"]
+    still = decisions.effective(c.decisions)["open"]
     if not still:
         return []
     return [_finding("decision-open", f"decision(s) the PO has not validated or rejected yet: {_ids_detail(still)}",

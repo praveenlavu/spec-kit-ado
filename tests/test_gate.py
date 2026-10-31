@@ -908,3 +908,15 @@ def test_gate_reads_decisions_file_confined_and_key_absent_without_file(cfg, tmp
     assert run()["open_decisions"] == ["?"]
     f.write_text(_dfile(_D_VAL))
     assert run()["open_decisions"] == []
+
+
+def test_open_decisions_use_the_effective_set_and_fail_closed_on_a_bad_supersedes():
+    rej, answer = _D_REJ, "- [ ] D5: supersedes D3: answered → _(open)_ · kind: decision · why: w"
+    assert _gd(rej)["open_decisions"] == ["D3"]
+    assert _gd(rej, answer)["open_decisions"] == ["D5"]  # D3 is answered: only the new decision is open
+    assert _gd(rej, answer, block=["open_decisions"])["blocking"] is True  # D5 itself is still open
+    assert _gd(rej, "- [x] D5: supersedes D3: answered → validated · by: PO · note: ok")["open_decisions"] == []
+    assert _gd(rej, "- [x] D5: supersedes D3: answered → rejected · by: PO · note: no")["open_decisions"] == ["D3", "D5"]
+    bad = _gd("- [ ] D1: supersedes D2: x → _(open)_ · kind: decision · why: w", _D_REJ.replace("D3", "D2"), block=["open_decisions"])
+    assert "?" in bad["open_decisions"] and bad["blocking"] is True  # a lower-id superseder is invalid: fail closed
+    assert "?" in _gd("- [ ] D5: supersedes D9: x → _(open)_ · kind: decision · why: w")["open_decisions"]

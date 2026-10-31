@@ -20,6 +20,8 @@ _KEYS = ("kind", "why", "by", "note", "posted", "used")
 _SEP = re.compile(r"\s*·\s*(?=(?:" + "|".join(_KEYS) + r")\s*:)")
 MAX_LINE = 2000  # a longer D line is malformed: the regexes below backtrack quadratically over whitespace runs
 _POSTED = re.compile(r"(\d+):([0-9a-f]{8})")
+_SUP = re.compile(r"supersedes D([0-9]{1,6}): ")  # the only place a supersedes relation is read from: the start of the text
+SUP_HIDDEN = re.compile(r"\bD\d+(?!\d)\s*:\s*supersedes\s+D\d")  # the same words on a line that is not a decision line
 
 
 def decisions_file(dod_dir, story_id):
@@ -41,15 +43,74 @@ def line_hash(text):
 
 
 def marker_hash(d):
-    """The hash a `posted:` marker carries for the parsed decision `d`: the text alone, but for an override the id, the text
-    and the reason (what the PO read): an edited reason or a marker copied from another line no longer matches."""
-    return line_hash(f"{d['id']}|{d['text']}|{d['why']}" if d["kind"] == "override" else d["text"])
+    """The hash a `posted:` marker carries for the parsed decision `d`: the text alone, but for an override or a superseder the
+    id, the text and the reason (what the PO read): an edited reason or a marker copied from another line no longer matches."""
+    return line_hash(f"{d['id']}|{d['text']}|{d['why']}" if d["kind"] == "override" or d.get("supersedes") else d["text"])
+
+
+_STATES = ("open", "validated", "rejected")
+
+
+def _answers(parsed):
+    """(entries by id, {target: [superseder ids]} over the valid edges, a bad edge was seen, {id: stands}). An edge is bad when its
+    target is unknown or an override, or its superseder id is not higher (that covers self-reference and cycles); a bad edge
+    changes nothing here. A decision `stands` unless it is rejected and no decision that stands supersedes it: the head of a chain
+    answers everything below it."""
+    ents = {d["id"]: d for k in _STATES for d in parsed[k]}
+    by, bad = {}, False
+    for d in ents.values():
+        t = d.get("supersedes")
+        if t is None:
+            continue
+        if t not in ents or ents[t]["kind"] == "override" or int(t[1:]) >= int(d["id"][1:]):
+            bad = True
+        else:
+            by.setdefault(t, []).append(d["id"])
+    stands = {}
+    for i in sorted(ents, key=lambda i: -int(i[1:])):  # a superseder has the higher id, so it is decided first
+        stands[i] = ents[i]["status"] != "rejected" or any(stands[s] for s in by.get(i, ()))
+    return ents, by, bad, stands
+
+
+def supersede_problem(parsed):
+    """True when a `supersedes D<n>: ` line is invalid: unknown target, an override as target, a superseder that is not
+    higher than its target (self-reference, a cycle). Strict mode reports it as `decisions-invalid`, the gate fails closed."""
+    return _answers(parsed)[2]
+
+
+def _stale(d):
+    return not d["posted"] or d["posted"]["hash"] != marker_hash(d)
+
+
+def supersede_unposted(parsed):
+    """The decisions in a supersedes relation the PO has not seen as they read, by id order: every line that supersedes another
+    (whatever its status or kind) and every open line an effective superseder drops, each without a `posted:` marker or with one
+    that no longer matches `marker_hash`. The marker is a local claim, never checked against ADO."""
+    kept = {d["id"] for d in effective(parsed)["open"]}
+    out = [d for k in _STATES for d in parsed[k] if _stale(d) and (d.get("supersedes") or (k == "open" and d["id"] not in kept))]
+    return sorted(out, key=lambda d: int(d["id"][1:]))
+
+
+def masked_by(parsed, d_id):
+    """The id of the decision that stands as superseder of `d_id` (so its own verdict is not counted now), else None."""
+    _, by, _, stands = _answers(parsed)
+    return next((s for s in by.get(d_id, ()) if stands[s]), None)
+
+
+def effective(parsed):
+    """`parsed` without the decisions a live superseder answers (a superseded line stays in the file, only the set the gates
+    count changes). A superseder is live when it is not rejected, or when it is itself answered by a live one; a rejected
+    superseder with nothing live above it re-activates its target. Invalid edges drop nothing."""
+    _, by, _, stands = _answers(parsed)
+    gone = {t for t, ss in by.items() if any(stands[s] for s in ss)}
+    return {**{k: [d for d in parsed[k] if d["id"] not in gone] for k in _STATES}, "unparsed": parsed["unparsed"]}
 
 
 def unposted(parsed):
     """The lines the PO has not seen as they now read: the open lines, then the override lines that are open or validated
     (a validated override still has to reach the thread), each without a `posted:` marker or with one that no longer matches.
-    One predicate for `plan_post` and the strict `override-unposted` rule."""
+    An open line a superseder answers stays in: the PO must see it before it is retired. One predicate for `plan_post` and the
+    strict `override-unposted` rule."""
     lines = parsed["open"] + [d for d in parsed["validated"] if d["kind"] == "override"]
     return [d for d in lines if not d["posted"] or d["posted"]["hash"] != marker_hash(d)]
 
@@ -81,10 +142,11 @@ def _line(raw):
            or (done and not kv.get("by")) or (not done and ("by" in kv or "note" in kv)))
     if bad:
         return None
+    sup = _SUP.match(text)
     return {"id": f"D{m.group(2)}", "kind": kind, "text": text, "why": kv.get("why", ""),
             "status": "open" if not done else s.group(1), "by": kv.get("by", ""), "note": kv.get("note", ""),
             "posted": {"comment_id": int(posted.group(1)), "hash": posted.group(2)} if posted else None,
-            "used": kv.get("used", "")}
+            "used": kv.get("used", ""), **({"supersedes": f"D{sup.group(1)}"} if sup else {})}
 
 
 def has_decision_lines(md):
@@ -95,7 +157,8 @@ def has_decision_lines(md):
 def parse_decisions(md):
     """The decisions file -> {'open': [...], 'validated': [...], 'rejected': [...], 'unparsed': bool}. Lines inside code
     fences or <!-- --> comments are ignored; the first line of a duplicate id wins. `unparsed` is true when a `D` line
-    breaks the grammar (it is left out) or a fence or comment is left open. Empty text -> all empty."""
+    breaks the grammar (it is left out) or a fence or comment is left open. A text that starts with `supersedes D<n>: `
+    adds `supersedes: "D<n>"` to its entry (no other entry has the key). Empty text -> all empty."""
     out = {"open": [], "validated": [], "rejected": []}
     body, out["unparsed"] = _visible(md)
     seen = set()
@@ -312,12 +375,32 @@ MAX_TEXT = 1500
 _ADD_KINDS = ("decision", "assumption")  # `override` is only created by `add_override` (the strict override command)
 
 
-def add(md, kind, text, why="", _kinds=_ADD_KINDS, _min_why=0):
+def _supersedes_target(md, target):
+    """Refuse (ValueError, fixed texts) unless `target` is a decision of `md` the developer may answer: it exists, is not an
+    override, is rejected or open (not validated), and no live decision answers it yet."""
+    if not re.fullmatch(r"D[0-9]{1,6}", target if isinstance(target, str) else ""):
+        raise ValueError("--supersedes must be D<n>: the letter D and one to six digits")
+    ents, by, _, stands = _answers(parse_decisions(md))
+    if target not in ents:
+        raise ValueError("--supersedes names a decision that is not in the decisions file")
+    if ents[target]["kind"] == "override":
+        raise ValueError("--supersedes cannot answer an override")
+    if ents[target]["status"] == "validated":
+        raise ValueError("--supersedes can only answer a rejected or open decision, not a validated one")
+    if ents[target]["status"] == "open" and _stale(ents[target]):
+        raise ValueError(f"post {target} first (`ado decisions <id> --post`): the PO has not seen it, so it cannot be superseded")
+    live = [s for s in by.get(target, ()) if stands[s]]
+    if live:
+        raise ValueError(f"{target} is already superseded by {live[0]}: supersede {live[0]} instead, or have the PO reject it first")
+
+
+def add(md, kind, text, why="", _kinds=_ADD_KINDS, _min_why=0, supersedes=None):
     """(the file text with one new open `D<n>` line appended, "D<n>"). n = highest id in the file + 1 (a malformed or
     duplicate line still counts), grammar-exact. @mentions and addresses are replaced as in a posted comment.
     ValueError (never echoing the text) for a bad kind, a text of 0 or over MAX_TEXT characters, a why over MAX_NOTE,
     control characters, line breaks, `<!--`, `-->`, code fences, or a line that would not read back (so a file with an
-    unclosed fence or comment, which would hide the new line, is refused too)."""
+    unclosed fence or comment, which would hide the new line, is refused too). `supersedes` ("D<n>"): the line's text then
+    starts with `supersedes D<n>: ` (see `_supersedes_target` for what is refused); the prefix cannot be typed by hand."""
     if kind not in _kinds:
         raise ValueError("--kind must be decision or assumption")
     for name, v in (("the text", text), ("--why", why)):  # before strip(), which would drop a trailing line break
@@ -331,10 +414,15 @@ def add(md, kind, text, why="", _kinds=_ADD_KINDS, _min_why=0):
         raise ValueError(f"the text must be 1 to {MAX_TEXT} characters")
     if not _min_why <= len(why) <= MAX_NOTE:
         raise ValueError(f"--why must be {f'{_min_why} to ' if _min_why else 'at most '}{MAX_NOTE} characters")
+    if _SUP.match(text):
+        raise ValueError("the text must not start with `supersedes D<n>: `; use --supersedes D<n>")
+    if supersedes is not None:
+        _supersedes_target(md, supersedes)
+        text = f"supersedes {supersedes}: {text}"
     nums = [int(n) for n in re.findall(r"(?m)^[ \t]*(?:<!--[ \t]*)?(?:[-*+][ \t]+)?\[[ xX]\][ \t]*D(\d+)", md)]  # raw text: an id inside a comment or fence is taken too
     d_id = f"D{max(nums, default=0) + 1}"
     new = {"id": d_id, "kind": kind, "text": text, "why": why, "status": "open", "by": "", "note": "",
-           "posted": None, "used": ""}
+           "posted": None, "used": "", **({"supersedes": supersedes} if supersedes is not None else {})}
     line = render_line(new)
     eol = "\r\n" if "\r\n" in md else "\n"
     new_md = md + ("" if not md or md.endswith(("\n", "\r")) else eol) + line + eol
@@ -368,8 +456,8 @@ def _apply(file_path, story_id, build):
     return d_id
 
 
-def apply_add(file_path, story_id, kind, text, why=""):
-    return _apply(file_path, story_id, lambda md: add(md, kind, text, why))
+def apply_add(file_path, story_id, kind, text, why="", supersedes=None):
+    return _apply(file_path, story_id, lambda md: add(md, kind, text, why, supersedes=supersedes))
 
 
 OVERRIDE_RULES = ("test-command", "l2", "open-question", "placeholder")  # the strict rules an override may skip

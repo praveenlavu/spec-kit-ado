@@ -338,7 +338,7 @@ def _decisions_path(dod_path, story_id, if_any=False):
 def _add_decision(args):
     """`decisions --add`: a local write of one line (creates the file). No token, no request."""
     path = decisions.decisions_file(Config.load().dod_path, args.id)
-    d_id = decisions.apply_add(path, args.id, args.kind, args.add, args.why or "")
+    d_id = decisions.apply_add(path, args.id, args.kind, args.add, args.why or "", args.supersedes)
     return {"id": d_id, "file": str(path)}
 
 
@@ -349,8 +349,14 @@ def _resolve_decision(args):
                          "(this shell has no terminal on stdin; a guard against accidents, not a security boundary)")
     path = _decisions_path(Config.load().dod_path, args.id)
     by, note = args.by if args.by is not None else "PO", args.note or ""
+    try:
+        masked = decisions.masked_by(decisions.parse_decisions(decisions._read(path)), args.resolve)
+    except (OSError, UnicodeError):
+        masked = None  # apply_resolve reports an unreadable file
     decisions.apply_resolve(path, args.resolve, args.verdict, by, note, args.force)
-    return {"id": args.id, "resolved": args.resolve, "status": args.verdict, "by": by.strip(), "note": note.strip()}
+    return {"id": args.id, "resolved": args.resolve, "status": args.verdict, "by": by.strip(), "note": note.strip(),
+            **({"notice": f"{args.resolve} is superseded by {masked}: this verdict is masked while {masked} stands "
+                          f"(a rejected {masked} would bring it back)"} if masked else {})}
 
 
 def _override(args):
@@ -478,6 +484,8 @@ def main(argv=None):
                    "<dod_path>/Decisions_<id>.md (created when missing). A local write; needs --kind")
     p.add_argument("--kind", help="with --add: decision or assumption")
     p.add_argument("--why", help="with --add: the reason (at most 300 characters)")
+    p.add_argument("--supersedes", metavar="D<n>", help="with --add: this decision answers the rejected (or still open) D<n>: the "
+                   "line starts with `supersedes D<n>: ` and the old line is left as it is")
     p.add_argument("--resolve", metavar="D<n>", help="a human records the PO's verdict on this line (local edit of the decisions file; "
                    "with --validated|--rejected, optional --by and --note). Refuses without a terminal so an agent "
                    "shell cannot do it by accident; this is not a security boundary, the strict gate and the git "
@@ -576,8 +584,8 @@ def main(argv=None):
             parser.error("--add cannot be combined with --post, --apply, --plan-out, --expect-plan or --resolve options")
         if args.add is not None and args.kind is None:
             parser.error("--add needs --kind decision|assumption")
-        if args.add is None and (args.kind is not None or args.why is not None):
-            parser.error("--kind and --why need --add")
+        if args.add is None and (args.kind is not None or args.why is not None or args.supersedes is not None):
+            parser.error("--kind, --why and --supersedes need --add")
         if args.if_any and (args.add is not None or args.resolve or not (args.post or args.plan_out)):
             parser.error("--if-any needs --post or --plan-out and cannot be combined with --add or --resolve")
         if args.resolve and (args.post or args.apply or args.plan_out or args.expect_plan):

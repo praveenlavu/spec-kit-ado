@@ -57,7 +57,8 @@ dir, scope, and this instruction set:
   default, an interpretation, a deviation from the plan), or rely on an assumption, record it with
   `ado decisions <id> --add "<text>" --kind decision|assumption --why "<reason>"` (a local write into
   `<dod_path>/Decisions_<id>.md`; no names, @mentions or emails). Never only in prose, a commit message or chat, and never
-  by hand-writing a `D<n>` line. The file is committed with the work.
+  by hand-writing a `D<n>` line. The file is committed with the work. When the PO rejects one, never edit or delete it: record the answer with
+  `ado decisions <id> --add "<text>" --kind decision --supersedes D<n>` (the PO sees `supersedes D<n>: <text>` in the posted comment).
 - One task → one commit whose message names the task ID and the AC it satisfies, and ends
   with the story reference `AB#<id>` (the story id; exactly that form, so Azure Boards and
   the Azure Boards GitHub app link the commit to the story). Example:

@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from .config import ConfigInvalid
-from .decisions import has_decision_lines, parse_decisions
+from .decisions import effective, has_decision_lines, parse_decisions, supersede_problem
 from .dod import _visible, ac_hash, ac_lines, ledger_ac_hash, section, unclosed
 from .prs import _AB_REF, _GIT_ENV
 from .questions import UNPARSED_NOTE, parse_questions
@@ -339,9 +339,10 @@ def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, 
     # An AC row with no test, or none that exists, fails; no rows at all stays "not evaluated".
     qs = parse_questions(ledger_md)
     open_q = [q["id"] for q in qs["open"]]
-    ds = parse_decisions(decisions_md or "")  # open and rejected are both unresolved; reported only when the file has D lines
-    open_d = [d["id"] for d in sorted(ds["open"] + ds["rejected"], key=lambda d: int(d["id"][1:]))]
-    open_d += ["?"] * (ds["unparsed"] or decisions_unreadable)  # fail closed: a malformed D line, an unclosed fence or comment, an unreadable file
+    ds = parse_decisions(decisions_md or "")  # open and rejected are both unresolved (a decision a live `supersedes` answers is not); reported only when the file has D lines
+    eff = effective(ds)
+    open_d = [d["id"] for d in sorted(eff["open"] + eff["rejected"], key=lambda d: int(d["id"][1:]))]
+    open_d += ["?"] * (ds["unparsed"] or decisions_unreadable or supersede_problem(ds))  # fail closed: a malformed D line, an unclosed fence or comment, an unreadable file, a bad supersedes
     no_story, commits_note = commits or ([], None)
     open_ledger = unclosed(ledger_md)  # fail closed: counts as an open-questions finding, so `gate.block` can stop on it
     found = {"ac_traceability": trace["unmapped"], "assertion": gaps, "ac_drift": drift["drift"],

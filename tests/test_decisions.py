@@ -741,3 +741,187 @@ def test_if_any_flag_combinations_exit_2(capsys):
         with pytest.raises(SystemExit) as e:
             main(argv)
         assert e.value.code == 2
+
+
+# ---- V3-16a: `supersedes D<n>: ` answers a rejected (or open) decision ----
+def _dl(n, text, status="open", kind="decision", posted=False):
+    """One decisions-file line (exact grammar) for `D<n>`; `posted`: with the marker the PO's thread would give it."""
+    d = {"id": f"D{n}", "kind": kind, "text": text, "why": "w", "status": status, "by": "" if status == "open" else "PO",
+         "note": "", "posted": None, "used": ""}
+    if posted:
+        d["posted"] = {"comment_id": 7, "hash": decisions.marker_hash(_first(d))}
+    return decisions.render_line(d) + "\n"
+
+
+def _first(d):
+    """The entry `parse_decisions` reads back from `d` (so a supersedes prefix is seen)."""
+    p = decisions.parse_decisions(decisions.render_line(d) + "\n")
+    return (p["open"] + p["validated"] + p["rejected"])[0]
+
+
+def _parse(*lines):
+    return decisions.parse_decisions(decisions.render_file(1001) + "".join(lines))
+
+
+def _ids(parsed):
+    return [d["id"] for k in ("open", "validated", "rejected") for d in parsed[k]]
+
+
+def test_parse_extracts_supersedes_only_from_the_exact_prefix():
+    r = _parse(_dl(3, "x", "rejected"), _dl(5, "supersedes D3: use v2"), _dl(6, "supersedes D999999: a"))
+    [d5, d6] = r["open"]
+    assert d5["supersedes"] == "D3" and d5["text"] == "supersedes D3: use v2" and d6["supersedes"] == "D999999"
+    assert "supersedes" not in r["rejected"][0]  # no key at all on an ordinary line: v0.2 listings stay byte-identical
+    for text in ("Supersedes D3: a", "supersedes d3: a", "supersedes  D3: a", "supersedes D3 : a", "supersedes D3:a", "supersedes D3 a",
+                 "please supersedes D3: a", "supersedes D1234567: a", "supersedes D: a", "supersedes D３: a", "supersedes D٣: a",
+                 "supersedes D3:"):
+        assert _parse(_dl(5, text))["open"][0].get("supersedes") is None, text
+    line = _dl(5, "supersedes D3: use v2").rstrip()
+    assert decisions.render_line(_parse(line)["open"][0]) == line  # the grammar is unchanged: it round-trips
+
+
+def test_effective_drops_the_superseded_entry_unless_the_superseder_is_rejected():
+    base = (_dl(3, "x", "rejected"),)
+    assert _ids(decisions.effective(_parse(*base, _dl(5, "supersedes D3: y")))) == ["D5"]  # open is live
+    assert _ids(decisions.effective(_parse(*base, _dl(5, "supersedes D3: y", "validated")))) == ["D5"]
+    assert _ids(decisions.effective(_parse(*base, _dl(5, "supersedes D3: y", "rejected")))) == ["D3", "D5"]  # re-activated
+    plain = _parse(_dl(1, "a"), _dl(2, "b", "validated"), _dl(3, "c", "rejected"))
+    assert decisions.effective(plain) == plain  # nothing superseded: the same entries
+    assert decisions.effective(_parse(*base))["unparsed"] is False
+    assert decisions.effective({**_parse(*base), "unparsed": True})["unparsed"] is True
+
+
+def test_chain_and_cycle_and_self_reference_and_unknown_target():
+    d3 = _dl(3, "x", "rejected")
+    # chain: D7 answers D5 which answers D3; a live head clears the whole chain, a rejected head re-opens the one below it
+    chain = lambda s5, s7: _parse(d3, _dl(5, "supersedes D3: a", s5), _dl(7, "supersedes D5: b", s7))
+    assert _ids(decisions.effective(chain("open", "open"))) == ["D7"]
+    assert _ids(decisions.effective(chain("rejected", "open"))) == ["D7"]  # D7 stands in for the rejected D5, which stood in for D3
+    assert _ids(decisions.effective(chain("rejected", "rejected"))) == ["D3", "D5", "D7"]
+    assert _ids(decisions.effective(chain("open", "rejected"))) == ["D5", "D7"]  # D7 rejected: D5 is back, and D5 still answers D3
+    assert decisions.supersede_problem(_parse(_dl(1, "supersedes D2: a"), _dl(2, "supersedes D1: b"))) is True  # cycle
+    for lines in ((_dl(2, "supersedes D2: a"),),  # self-reference
+                  (_dl(1, "supersedes D2: a"), _dl(2, "b", "rejected")),  # a lower id supersedes a higher one
+                  (_dl(2, "supersedes D9: a"),),  # unknown target
+                  (_dl(2, "supersedes D0: a"),)):
+        p = _parse(*lines)
+        assert decisions.supersede_problem(p) is True and decisions.effective(p) == p, lines  # invalid edges drop nothing
+    assert decisions.supersede_problem(_parse(d3, _dl(5, "supersedes D3: a"))) is False
+    assert decisions.supersede_problem(_parse(_dl(1, "a"))) is False
+
+
+def test_override_cannot_be_superseded():
+    p = _parse(_dl(1, "skip l2", kind="override"), _dl(2, "supersedes D1: a"))
+    assert decisions.supersede_problem(p) is True
+    assert _ids(decisions.effective(p)) == ["D1", "D2"]  # the override stays in the set
+
+
+def test_unposted_keeps_an_answered_open_decision_the_po_never_saw():
+    p = _parse(_dl(3, "old", "rejected"), _dl(4, "old open"), _dl(5, "supersedes D4: new"))
+    assert [d["id"] for d in decisions.unposted(p)] == ["D4", "D5"]  # answering D4 must not hide it from the PO
+    assert decisions.plan_post(None, 1001, p)["lines"] == ["D4", "D5"]
+    p = _parse(_dl(4, "old open", posted=True), _dl(5, "supersedes D4: new"))
+    assert [d["id"] for d in decisions.unposted(p)] == ["D5"]
+    p = _parse(_dl(4, "old open"), _dl(5, "supersedes D4: new", "rejected"))
+    assert [d["id"] for d in decisions.unposted(p)] == ["D4"]
+    assert "supersedes D4: new" in decisions.plan_post(None, 1001, _parse(_dl(4, "a", "rejected"), _dl(5, "supersedes D4: new")))["html"]
+
+
+def _addmd(md, text="my reply", supersedes=None, kind="decision"):
+    return decisions.add(md, kind, text, "w", supersedes=supersedes)
+
+
+def test_add_supersedes_flag_validates_target_exists_and_is_rejected_or_open():
+    md = (decisions.render_file(1001) + _dl(1, "a", "rejected") + _dl(2, "b", posted=True) + _dl(3, "c", "validated")
+          + _dl(4, "skip l2", kind="override"))
+    new, d_id = _addmd(md, supersedes="D1")
+    assert d_id == "D5" and new.endswith("- [ ] D5: supersedes D1: my reply → _(open)_ · kind: decision · why: w\n")
+    assert decisions.parse_decisions(new)["open"][-1]["supersedes"] == "D1" and not decisions.supersede_problem(decisions.parse_decisions(new))
+    assert _addmd(md, supersedes="D2")[1] == "D5"  # an open target too
+    for bad, msg in (("D9", "not in the decisions file"), ("D3", "rejected or open"), ("D4", "override"), ("3", "D<n>"), ("D", "D<n>"),
+                     ("d1", "D<n>"), ("D1234567", "D<n>"), ("D１", "D<n>"), ("D1 ", "D<n>"), ("", "D<n>")):
+        with pytest.raises(ValueError) as e:
+            _addmd(md, supersedes=bad)
+        assert msg in str(e.value) and "my reply" not in str(e.value), bad
+    # a second LIVE superseder of the same target is refused, naming the existing one
+    md2, _ = _addmd(md, supersedes="D1")
+    with pytest.raises(ValueError, match="D5"):
+        _addmd(md2, supersedes="D1")
+    with pytest.raises(ValueError, match="post D5 first"):  # D5 is open and the PO has not seen it
+        _addmd(md2, supersedes="D5")
+    md2p = decisions._marked(md2, decisions.plan_post(None, 1001, decisions.parse_decisions(md2))["hashes"], 7)
+    assert _addmd(md2p, supersedes="D5")[1] == "D6"  # a chain is fine once D5 is posted
+    # once that superseder is rejected it is not live: the target may be answered again
+    md3 = md2.replace("- [ ] D5: supersedes D1: my reply → _(open)_ · kind: decision · why: w",
+                      "- [x] D5: supersedes D1: my reply → rejected · by: PO · note: no")
+    assert decisions.parse_decisions(md3)["rejected"][-1]["id"] == "D5"
+    assert _addmd(md3, supersedes="D1")[1] == "D6"
+    # the prefix cannot be typed by hand, with or without the flag
+    for sup in (None, "D1"):
+        with pytest.raises(ValueError, match="supersedes D<n>"):
+            _addmd(md, text="supersedes D1: sneaky", supersedes=sup)
+    assert decisions.add(md, "decision", "mentions supersedes D1: later", "w")[1] == "D5"  # only a leading prefix counts
+
+
+def test_add_supersedes_cli(tmp_path, monkeypatch, capsys):
+    f = _add_env(tmp_path, monkeypatch)
+    f.parent.mkdir()
+    f.write_text(decisions.render_file(1001) + _dl(1, "use v1", "rejected"))
+    assert _add("--supersedes", "D1", text="use v2 as the PO asked") == 0
+    assert json.loads(capsys.readouterr().out)["id"] == "D2"
+    assert f.read_text().endswith("- [ ] D2: supersedes D1: use v2 as the PO asked → _(open)_ · kind: decision · why: unspecified\n")
+    before = f.read_bytes()
+    assert _add("--supersedes", "D1") == 2 and _add("--supersedes", "D7") == 2 and _add("--supersedes", "x") == 2
+    assert f.read_bytes() == before
+    err = capsys.readouterr().err
+    assert "D2" in err and "not in the decisions file" in err
+    with pytest.raises(SystemExit) as e:
+        main(["decisions", "1001", "--supersedes", "D1"])
+    assert e.value.code == 2 and f.read_bytes() == before
+
+
+def test_a_superseder_marker_covers_its_id_so_a_copy_on_another_id_does_not_match():
+    d9 = _first({"id": "D9", "kind": "decision", "text": "supersedes D3: x", "why": "w", "status": "open", "by": "", "note": "",
+                 "posted": None, "used": ""})
+    d10 = {**d9, "id": "D10"}
+    assert decisions.marker_hash(d9) != decisions.marker_hash(d10)
+    plain = {**d9, "text": "x", "supersedes": None}
+    plain.pop("supersedes")
+    assert decisions.marker_hash(plain) == decisions.line_hash("x")  # an ordinary line: text only, as before
+
+
+def test_supersede_unposted_lists_every_superseder_and_every_open_target_without_a_matching_marker():
+    f = decisions.supersede_unposted
+    base = (_dl(3, "x", "rejected"),)
+    for status, kind in (("open", "decision"), ("validated", "decision"), ("rejected", "decision"), ("open", "assumption"),
+                         ("validated", "assumption")):
+        assert [d["id"] for d in f(_parse(*base, _dl(9, "supersedes D3: y", status, kind)))] == ["D9"], (status, kind)
+        assert f(_parse(*base, _dl(9, "supersedes D3: y", status, kind, posted=True))) == [], (status, kind)
+    # a copy of a posted line's text and marker on another id does not match
+    posted = _dl(9, "supersedes D3: y", "rejected", posted=True)
+    assert [d["id"] for d in f(_parse(*base, posted, posted.replace("D9", "D10")))] == ["D10"]
+    # an open target the effective set drops needs its own marker; an ordinary unposted open line is nobody's business here
+    assert [d["id"] for d in f(_parse(_dl(4, "old"), _dl(5, "supersedes D4: n", posted=True)))] == ["D4"]
+    assert f(_parse(_dl(4, "old", posted=True), _dl(5, "supersedes D4: n", posted=True))) == []
+    assert f(_parse(_dl(4, "old"), _dl(5, "supersedes D4: n", "rejected", posted=True))) == []  # not dropped: re-activated
+    assert f(_parse(_dl(1, "plain"), _dl(2, "plain too", "rejected"))) == []
+    chain = _parse(base[0], _dl(5, "supersedes D3: a", "rejected"), _dl(7, "supersedes D5: b", posted=True))
+    assert [d["id"] for d in f(chain)] == ["D5"]  # a chain linked by a line that was never posted
+
+
+def test_masked_by_names_the_standing_superseder():
+    p = _parse(_dl(3, "x", "rejected"), _dl(5, "supersedes D3: a"), _dl(6, "supersedes D3: b", "rejected"))
+    assert decisions.masked_by(p, "D3") == "D5" and decisions.masked_by(p, "D5") is None and decisions.masked_by(p, "D6") is None
+    assert decisions.masked_by(_parse(_dl(3, "x", "rejected"), _dl(5, "supersedes D3: a", "rejected")), "D3") is None
+
+
+def test_resolve_on_a_superseded_decision_prints_a_notice_and_changes_nothing_else(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, _dl(3, "x").rstrip() + "\n" + _dl(5, "supersedes D3: a").rstrip() + "\n" + _dl(6, "plain").rstrip())
+    _tty(monkeypatch)
+    assert _resolve(m, "D3", "--rejected") == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["notice"] == "D3 is superseded by D5: this verdict is masked while D5 stands (a rejected D5 would bring it back)"
+    d = decisions.parse_decisions(led.read_text(encoding="utf-8"))
+    assert [x["id"] for x in d["rejected"]] == ["D3"]  # the verdict is recorded as always
+    assert _resolve(m, "D6", "--validated") == 0
+    assert "notice" not in json.loads(capsys.readouterr().out)

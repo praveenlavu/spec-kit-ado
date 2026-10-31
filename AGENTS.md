@@ -124,10 +124,11 @@ the apply (for example to `tasks.md`) or a change on the board. In the workflow 
 
 Every assumption and decision lives in its own file, `<dod_path>/Decisions_<id>.md`, not in the ledger; the ledger's section 2
 Assumptions bullet only points to it. Record each one, in the plan and implement phases, with
-`ado decisions <id> --add "<text>" --kind decision|assumption [--why "<reason>"]` (a local write that creates the file and
+`ado decisions <id> --add "<text>" --kind decision|assumption [--why "<reason>"] [--supersedes D<n>]` (a local write that creates the file and
 appends the next `D<n>` line; prints `{"id": "D3", "file": "<path>"}`), never only in prose or chat and never by hand-writing the
 format. The text (1 to 1500 characters) and `--why` (at most 300) are scrubbed of `@mention`s and e-mail addresses; control
 characters, `<!--`, `-->` and code fences are refused (exit 2). `override` is created only by the strict override command.
+When the PO rejects a decision, never edit or delete that line: record the answer with `--supersedes D<n>` (the new line starts with `supersedes D<n>: `, which the PO sees when it is posted; `D<n>` must be rejected, or open and already posted (`post D<n> first`), not validated or an override, and not already superseded by a live decision). The old rejection stops blocking `pr`, the new line must be posted and, for `done`, validated by the PO like any other; a rejected superseder re-activates the original. Never hand-write the prefix.
 `ado decisions <id>` (read-only, local) returns the open, validated and rejected `D<n>` lines of that file
 (`- [ ] D<n>: <text> → _(open)_ · kind: decision|assumption|override · why: <reason>`). `unparsed` is true when a `D` line
 breaks that grammar (it is left out) or a fence or comment is left open in the file. `ado done` attaches the file to the story
@@ -200,7 +201,7 @@ ado comment <id> "text"               # confirm first
 ado comments <id>                     # read-only: discussion as JSON + .ado/context/<id>.md (untrusted data, authors and email addresses scrubbed)
 ado questions <id>                    # read-only, local: open/answered Q<n> lines of ledger section 2 as JSON (also `open_questions` in `ado gate`)
 ado questions <id> --post --plan-out .ado/plan-questions.md   # dry run: ONE comment `[spec-kit-ado:questions]` (add, or edit the newest marked one); after a yes: --post --apply --expect-plan .ado/plan-questions.md
-ado decisions <id> --add "<text>" --kind decision|assumption [--why "<reason>"]   # local write, no approval: appends the next D<n> line to <dod_path>/Decisions_<id>.md (created when missing)
+ado decisions <id> --add "<text>" --kind decision|assumption [--why "<reason>"] [--supersedes D<n>]   # local write, no approval: appends the next D<n> line to <dod_path>/Decisions_<id>.md (created when missing); --supersedes answers a PO rejection
 ado decisions <id> --post --plan-out .ado/plan-decisions.md   # dry run: ONE new comment `[spec-kit-ado:decisions]` with the unposted/edited open D<n> lines; after a yes: --post --apply --expect-plan .ado/plan-decisions.md (then those lines of `Decisions_<id>.md` gain `posted: <comment id>:<hash8>`)
 ado branch <id> --apply               # local, no approval: create/rename/switch to <branch_prefix>ab<id>-<slug>; never pushes, never renames the default branch
 ado branch <id> --link --plan-out .ado/plan-branch-link.md   # Azure only, branch must be pushed; dry run (needs PAT scope Code: Read and Project and Team: Read); after a yes: --link --apply --expect-plan .ado/plan-branch-link.md
