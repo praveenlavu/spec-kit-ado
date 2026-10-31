@@ -698,3 +698,46 @@ def test_add_counts_ids_hidden_in_comments_and_fences(tmp_path, monkeypatch):
                  encoding="utf-8")
     assert _add() == 0
     assert "- [ ] D21: Use cursor paging" in f.read_text(encoding="utf-8")
+
+
+# ---- V3-15: `--if-any` makes a missing decisions file a no-op for --post (the workflow's decisions-loop) ----
+def test_if_any_missing_file_is_a_noop_exit_0_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN)
+    led.unlink()
+    for argv in (["decisions", "1001", "--post", "--if-any"], ["decisions", "1001", "--if-any", "--plan-out", "p.md"]):
+        assert m.main(argv) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["action"] == "none" and out["lines"] == [] and out["applied"] is False and "no decisions file" in out["note"]
+    assert "nothing to post" in (tmp_path / "p.md").read_text(encoding="utf-8")
+    assert m.main(["decisions", "1001", "--post", "--if-any", "--apply", "--expect-plan", "p.md"]) == 0
+    assert json.loads(capsys.readouterr().out)["comment_id"] is None
+    assert _writes(fake) == [] and not led.exists()  # the apply never creates the file either
+
+
+def test_if_any_apply_refuses_when_the_file_appeared_after_the_empty_preview(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN)
+    led.unlink()
+    assert m.main(["decisions", "1001", "--post", "--if-any", "--plan-out", "p.md"]) == 0
+    led.write_text(_file(OPEN), encoding="utf-8")  # a decision was recorded between the preview and the apply
+    capsys.readouterr()
+    assert m.main(["decisions", "1001", "--post", "--if-any", "--apply", "--expect-plan", "p.md"]) == 2
+    assert "plan changed since approval" in capsys.readouterr().err and "D1" in (tmp_path / "p.md.new").read_text()
+    assert _writes(fake) == []
+
+
+def test_if_any_with_a_file_behaves_like_plain_post_and_without_it_a_missing_file_still_exits_2(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, OPEN)
+    assert m.main(["decisions", "1001", "--post", "--if-any"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "add" and out["lines"] == ["D1"] and "note" not in out
+    led.unlink()
+    assert m.main(["decisions", "1001", "--post"]) == 2
+    assert "no decisions file" in capsys.readouterr().err
+
+
+def test_if_any_flag_combinations_exit_2(capsys):
+    for argv in (["decisions", "1001", "--if-any"], ["decisions", "1001", "--if-any", "--add", "x", "--kind", "decision"],
+                 ["decisions", "1001", "--if-any", "--resolve", "D1", "--validated"]):
+        with pytest.raises(SystemExit) as e:
+            main(argv)
+        assert e.value.code == 2

@@ -660,7 +660,7 @@ PHASES = {
 
 # ---- override (D§7): `skip <rule>` lines of kind override; only these findings, never L1 or a missing spec/plan/tasks ----
 _COVERS = {"test-command": ("test-command",),
-           "l2": ("record-missing", "record-stale", "record-incomplete", "record-failed", "head-fails", "green-fails", "red-passes",
+           "l2": ("test-command", "record-missing", "record-stale", "record-incomplete", "record-failed", "head-fails", "green-fails", "red-passes",
                   "timeout", "runner-error"),
            "open-question": ("open-question",),
            "placeholder": ("placeholder",)}
@@ -675,6 +675,10 @@ def overrides(c):
         if d["kind"] == "override" and rule in _COVERS:
             out.update({f: d["id"] for f in _COVERS[rule]})
     return out
+
+
+def _used(ids):
+    return sorted(ids, key=lambda i: int(i[1:]))
 
 
 def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False):
@@ -897,8 +901,14 @@ def verify(client, story_id, record=True, base=None, repo="."):
         findings.append(_finding("evidence-missing", "ledger section 3 has no AC row", _EVIDENCE_FIX))
     if base is not None:
         findings += _range_findings(rows, repo, _resolve_base(repo, base))  # the same resolver as `check`: never a tag
+    cover, used = overrides(c), set()  # like `check`: the findings an override covers are dropped and the entry reported
+    findings = [f for f in findings if f["rule"] not in cover or used.add(cover[f["rule"]])]
     if findings:
-        return {"mode": mode, "ok": False, "findings": findings, "recorded": False}
+        return {"mode": mode, "ok": False, "findings": findings, "recorded": False, "overrides_used": _used(used)}
+    if "test-command" in cover or "record-missing" in cover:  # an `l2` / `test-command` override: no run, and no record to fake
+        used |= {cover[r] for r in ("test-command", "record-missing") if r in cover}
+        return {"mode": mode, "ok": True, "findings": [], "recorded": False, "overrides_used": _used(used),
+                "note": "verification skipped: overridden"}
     head = (_out(repo, "rev-parse", "--verify", "--quiet", "--end-of-options", "HEAD^{commit}") or b"").decode().strip()
     if not head:
         raise ValueError("cannot resolve HEAD to a commit; nothing written")
@@ -946,7 +956,8 @@ def verify(client, story_id, record=True, base=None, repo="."):
             findings.append(_finding("head-fails", f"the tests fail at HEAD {head[:12]} (exit {r['exit']}): a later commit broke them",
                                      "fix the code on this branch so the test command passes at HEAD, then re-run verify"))
     seconds = round(sum(r["seconds"] for r in runs.values() if r), 2)
-    out = {"mode": mode, "ok": not findings, "findings": findings, "recorded": False, "runs": len(runs), "seconds": seconds}
+    out = {"mode": mode, "ok": not findings, "findings": findings, "recorded": False, "runs": len(runs), "seconds": seconds,
+           "overrides_used": _used(used)}
     if findings or not record:
         return out
     cmd = hashlib.sha256(c.cfg.strict["test_command"].encode()).hexdigest()[:12]

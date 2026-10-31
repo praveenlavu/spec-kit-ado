@@ -274,9 +274,9 @@ def dispatch(client, args):
             questions.apply_post(client, args.id, plan)
         return {"id": args.id, "applied": args.apply, "action": plan["action"], "comment_id": plan["comment_id"]}
     if args.command == "decisions":  # read-only unless --post/--plan-out; only --apply writes (comment, then the file)
-        path = _decisions_path(client.config.dod_path, args.id)
+        path = _decisions_path(client.config.dod_path, args.id, args.if_any)  # None only with --if-any and no file
         try:
-            parsed = decisions.parse_decisions(path.read_text(encoding="utf-8"))
+            parsed = decisions.parse_decisions(path.read_text(encoding="utf-8") if path else "")
         except (OSError, UnicodeDecodeError) as e:
             raise ValueError(f"cannot read the decisions file {path} ({e.__class__.__name__})")
         if not (args.post or args.plan_out):
@@ -285,7 +285,7 @@ def dispatch(client, args):
         _plan(args, decisions.render_plan(args.id, plan, parsed["unparsed"]))
         res = decisions.apply_post(client, args.id, plan, path) if args.apply else {}
         return {"id": args.id, "applied": args.apply, "action": plan["action"], "lines": plan["lines"],
-                "comment_id": res.get("comment_id")}
+                "comment_id": res.get("comment_id"), **({"note": "no decisions file; nothing to post"} if path is None else {})}
     if args.command == "gate":
         path = dod.dod_file(client.config.dod_path, args.id)
         if not path.exists():
@@ -325,10 +325,12 @@ def _gate_base(cfg, args):
     return (strict._resolve_base(args.src, base) or base) if base is not None and cfg.mode == "strict" else base
 
 
-def _decisions_path(dod_path, story_id):
-    """The story's decisions file, which must exist (only `--add` creates it)."""
+def _decisions_path(dod_path, story_id, if_any=False):
+    """The story's decisions file, which must exist (only `--add` creates it); with `if_any` a missing file is None (a no-op)."""
     path = decisions.decisions_file(dod_path, story_id)
     if not path.exists():
+        if if_any:
+            return None
         raise ValueError(f"no decisions file at {path}; record one with `ado decisions {story_id} --add \"<text>\" --kind decision`")
     return path
 
@@ -470,6 +472,8 @@ def main(argv=None):
     p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
     p.add_argument("--expect-plan", metavar="PATH",
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+    p.add_argument("--if-any", action="store_true", help="with --post/--plan-out: a missing decisions file is a no-op "
+                   "(exit 0, nothing to post) instead of exit 2; the workflow's decisions-loop uses it")
     p.add_argument("--add", metavar="TEXT", help="record one assumption or decision: appends the next D<n> line to "
                    "<dod_path>/Decisions_<id>.md (created when missing). A local write; needs --kind")
     p.add_argument("--kind", help="with --add: decision or assumption")
@@ -574,6 +578,8 @@ def main(argv=None):
             parser.error("--add needs --kind decision|assumption")
         if args.add is None and (args.kind is not None or args.why is not None):
             parser.error("--kind and --why need --add")
+        if args.if_any and (args.add is not None or args.resolve or not (args.post or args.plan_out)):
+            parser.error("--if-any needs --post or --plan-out and cannot be combined with --add or --resolve")
         if args.resolve and (args.post or args.apply or args.plan_out or args.expect_plan):
             parser.error("--resolve cannot be combined with --post, --apply, --plan-out or --expect-plan")
         if args.resolve and not args.verdict:

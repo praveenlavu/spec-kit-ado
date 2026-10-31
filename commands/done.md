@@ -15,6 +15,7 @@ checklist is incomplete, and never sets the state if the attachment failed.
 - A ledger `<dod_path>/DoD_<id>.md` exists. The PR is merged (or the team's equivalent).
 - In strict mode run `ado strict check <id> --phase done` first and stop on exit 2 (`ado done` runs the same check itself, preview and apply, and refuses with exit 2, no plan file and no request; the working tree must hold the merged ledger and `Decisions_<id>.md`; an apply stamps `used` on the overrides it relied on, an uncommitted local change: commit the stamped decisions file afterwards): it adds `decision-open` (every decision line needs the PO's
   validated or rejected verdict) and, for a squash-merged PR, needs no red or green commit in git: it validates the verification record instead.
+  In the workflow the last gate, `wait-po-validation`, is where you wait for the product owner's verdicts: a human records each with `ado decisions <id> --resolve` in their own terminal, then this command runs; `ado done` refuses while any decision is open.
 - `<dod_path>/Decisions_<id>.md` is attached next to the ledger when it exists (`ado decisions <id> --add` creates it);
   without it nothing changes.
 

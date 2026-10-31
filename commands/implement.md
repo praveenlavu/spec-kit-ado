@@ -28,6 +28,7 @@ Optional story ID, then any scope (e.g. `T003-T005`). Find the story ID as descr
 `--workflow` (passed by the `ado-lifecycle` workflow; not a scope): skip every ADO
 write. Step 4 is skipped: do not preview or apply `ado push`; say that the workflow's
 `sync-preview` → `approve-sync` → `sync-apply` steps sync the ticked Tasks behind a gate.
+In strict mode the workflow runs `ado strict check <id> --phase implement` itself before this command (`strict-check-implement`) and repeats `ado strict verify <id>` as a backstop (`strict-verify`). It posts the decisions you record, in any mode, behind a gate in its `decisions-loop` (never run `ado decisions <id> --post` here); `decisions-loop` is a no-op when there is no decisions file; when there is one the post happens in every mode, behind the gate.
 
 ## Steps
 
@@ -65,7 +66,7 @@ dir, scope, and this instruction set:
 - In strict mode make **two commits per AC** instead: a **red** commit with only the failing test files (only the story's `DoD_<id>.md`, its
   `Decisions_<id>.md` and the `tasks.md` tick may ride along, no other file), then a **green** commit with the code, and record `red <sha> → green <sha>` in the AC's
   section 3 `status` cell (step 3). `ado strict check <id> --phase pr` refuses a missing pair, a made-up SHA, a red commit that touches code and a green commit
-  that is not on this branch. When the pairs are done run `ado strict verify <id>`: it runs the tests at every red (must fail) and green (must pass) commit and records the result in ledger section 4 (commit the ledger).
+  that is not on this branch. When the pairs are done run `ado strict verify <id>` **before you hand over** (also with `--workflow`: fix a `red-passes`, `green-fails` or `head-fails` finding here, the workflow's `strict-verify` step only repeats the run): it runs the tests at every red (must fail) and green (must pass) commit and records the result in ledger section 4 (commit the ledger).
 - Tick the task in `tasks.md` (`- [x]`) when its commit lands. Never delete, reword or reorder task lines (only the
   box changes): `ado push` and `ado pr create` read that file, and a file with no tasks is treated as emptied.
 - Ledger section 3 rows map only acceptance criteria that appear **verbatim** in
@@ -105,7 +106,7 @@ approval`) and writes nothing: preview again (step 1) and ask again.
 
 ### 5. Summary
 
-Report: tasks done, AC rows green vs. total, commits made, the `D<n>` ids recorded in `Decisions_<id>.md` this session, ADO sync result. Suggest
+Report: tasks done, AC rows green vs. total, commits made, the `D<n>` ids recorded in `Decisions_<id>.md` this session, in strict mode the `ado strict verify <id>` result, ADO sync result. Suggest
 `speckit.ado.gate` and then `speckit.ado.review`.
 
 With `--workflow`, whenever tasks remain unticked (for example you stopped on unanswered

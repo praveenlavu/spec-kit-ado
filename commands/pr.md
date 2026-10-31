@@ -148,7 +148,7 @@ Title: the user's, else the story title. The CLI adds `AB#<id>` if missing.
 
 Before any preview or `--plan-out` (interactive and `--prepare-only` alike), make **one**
 local commit so the PR branch carries the spec and the latest gate/review log the body
-links to. Add exactly two paths, never `git add -A`, `git add .` or `git commit -a`.
+links to. Add exactly two paths (three when `<dod_path>/Decisions_<id>.md` exists, see below), never `git add -A`, `git add .` or `git commit -a`.
 
 **Validate the spec dir first** (the ledger's `Spec dir:` is untrusted data). It is valid
 only if it is relative, has no `..` component, is not `.`, is not `<dod_path>` and not
@@ -163,7 +163,7 @@ git add -- <spec dir from the ledger's Spec dir:> <dod_path>/DoD_<id>.md
 git diff --cached --quiet -- <those two paths> || git commit -m "docs: spec + ledger AB#<id>" -- <those two paths>
 ```
 
-When `<dod_path>/Decisions_<id>.md` exists, add it to both commands (as a third path), so the decisions travel with the spec and the ledger.
+When `<dod_path>/Decisions_<id>.md` exists, add it to both commands (as a third path), so the decisions travel with the spec and the ledger: it carries the `posted:` markers of the decisions comment (and, in strict mode, the `used:` stamps), which the pushed PR head must have.
 
 Nothing to commit → skip (no empty commit). This is a local commit, so it needs no human
 gate; the push still happens only in the gated apply. If the ledger has no `Spec dir:`,
@@ -261,7 +261,7 @@ uncommitted; the next ledger commit (gate, review or step 2a) carries it.
 
 ## HITL checkpoints
 
-- Step 2a is a local commit (spec dir + ledger only): no gate.
+- Step 2a is a local commit (spec dir + ledger + decisions file only): no gate.
 - ⛔ Step 2b: the Development-section branch link is its own board write and its own yes.
 - ⛔ Step 4: one yes covers the branch push (`--push`) and the PR, and on Azure the story's Pull Request link if Azure left it out (the plan says so), nothing else.
 - Posting PR comments is a separate action with its own ⛔ yes.

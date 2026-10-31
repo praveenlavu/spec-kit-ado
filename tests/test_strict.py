@@ -1638,3 +1638,52 @@ def test_fidelity_rules_are_registered_in_pr_and_done_only_and_advisory_is_uncha
     assert not any(r.__name__.startswith("_fidelity") for r in strict.PHASES["implement"])
     res, _ = _check(tmp_path, phase="pr", ledger=_ledger(), mode="advisory")
     assert res == {"phase": "pr", "mode": "advisory", "ok": True, "findings": [], "note": "mode is advisory"}
+
+
+# ---- V3-15 fix round: `verify` honours overrides like `check`; `l2` also covers `test-command` ----
+def _boom(*a, **k):
+    raise AssertionError("an overridden verification must not run the tests")
+
+
+def test_l2_override_also_covers_the_test_command_finding(tmp_path):
+    assert strict._COVERS["l2"].count("test-command") == 1 and strict._COVERS["test-command"] == ("test-command",)
+    _with_decisions(tmp_path, _d(1, "skip l2", kind="override"))  # check: `skip l2` alone lets an unset strict.test_command through
+    res, _ = _check(tmp_path, test_command=None)
+    assert res["ok"] is True and res["overrides_used"] == ["D1"]
+
+
+@pytest.mark.parametrize("rules", [("test-command", "l2"), ("test-command",), ("l2",)])
+def test_verify_with_an_l2_or_test_command_override_is_skipped_and_records_nothing(tmp_path, git_env, monkeypatch, rules):
+    client, s = _scenario(tmp_path, git_env, command=None)
+    assert _vrules(_verify(tmp_path, client)) == ["test-command"]  # without the override: refused, as before
+    _with_decisions(tmp_path, *[_d(n + 2, f"skip {r}", kind="override") for n, r in enumerate(rules)])
+    monkeypatch.setattr(strict, "run_configured", _boom)
+    before = LEDGER(tmp_path).read_bytes()
+    res = _verify(tmp_path, client)
+    assert res["ok"] is True and res["findings"] == [] and res["recorded"] is False and res["note"] == "verification skipped: overridden"
+    assert res["overrides_used"] == [f"D{n + 2}" for n in range(len(rules))] and LEDGER(tmp_path).read_bytes() == before
+
+
+def test_verify_skips_when_a_command_is_set_but_l2_is_overridden(tmp_path, git_env, monkeypatch):
+    client, s = _scenario(tmp_path, git_env)
+    _with_decisions(tmp_path, _d(1, "skip l2", kind="override"))
+    monkeypatch.setattr(strict, "run_configured", _boom)
+    before = LEDGER(tmp_path).read_bytes()
+    res = _verify(tmp_path, client)
+    assert res["ok"] is True and res["recorded"] is False and res["note"] == "verification skipped: overridden" and res["overrides_used"] == ["D1"]
+    assert LEDGER(tmp_path).read_bytes() == before
+
+
+def test_verify_override_never_covers_l1_and_other_rules_do_not_skip(tmp_path, git_env, monkeypatch):
+    client, s = _scenario(tmp_path, git_env, command=None)
+    _with_decisions(tmp_path, _d(1, "skip placeholder", kind="override"))
+    res = _verify(tmp_path, client)  # an unrelated override neither covers `test-command` nor skips the run
+    assert _vrules(res) == ["test-command"] and res["overrides_used"] == []
+
+
+def test_verify_override_never_covers_l1(tmp_path, git_env, monkeypatch):
+    client, s = _scenario(tmp_path, git_env, ledger=_ledger_rows(("AC-1", "green")))
+    _with_decisions(tmp_path, _d(1, "skip l2", kind="override"), _d(2, "skip test-command", kind="override"))
+    monkeypatch.setattr(strict, "run_configured", _boom)
+    res = _verify(tmp_path, client)
+    assert res["ok"] is False and "evidence-missing" in _vrules(res) and "note" not in res  # L1 is never overridable

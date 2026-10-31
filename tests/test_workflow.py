@@ -34,10 +34,12 @@ def test_step_order_and_ids():
                    "wait-po-answers", "plan-with-answers",
                    "answers-questions-loop", "answers-questions-preview", "approve-answers-questions", "answers-questions-apply", "answers-questions-applied",
                    "review-plan", "tasks",
-                   "push-loop", "push-preview", "approve-push", "push-apply", "push-applied", "implement",
+                   "push-loop", "push-preview", "approve-push", "push-apply", "push-applied",
+                   "strict-check-implement", "implement",
+                   "decisions-loop", "decisions-preview", "approve-decisions", "decisions-apply", "decisions-applied", "strict-verify",
                    "sync-loop", "sync-preview", "approve-sync", "sync-apply", "sync-applied",
                    "gate", "gate-check", "refresh-context", "review", "review-review", "pr-clear", "pr-prepare",
-                   "pr-loop", "pr-preview", "approve-pr", "pr-apply", "pr-applied"]
+                   "pr-loop", "pr-preview", "approve-pr", "pr-apply", "pr-applied", "wait-po-validation"]
 
 
 def test_workflow_never_closes_the_story():
@@ -48,7 +50,7 @@ def test_workflow_never_closes_the_story():
 def test_every_apply_shell_preceded_by_gate_with_show_file():
     steps = _steps()
     applies = [i for i, s in enumerate(steps) if "--apply" in s.get("run", "")]
-    assert len(applies) == 6
+    assert len(applies) == 7
     for i in applies:
         gate = steps[i - 1]
         assert gate["type"] == "gate" and gate["show_file"].startswith(".ado/plan-")
@@ -56,19 +58,19 @@ def test_every_apply_shell_preceded_by_gate_with_show_file():
         preview = steps[i - 2]  # a CLI shell step writes the file the gate shows, never an agent
         assert preview["type"] == "shell"
         assert f"--plan-out {gate['show_file']}" in preview["run"] and "--apply" not in preview["run"]
-    assert [steps[i]["id"] for i in applies] == ["questions-apply", "plan-questions-apply", "answers-questions-apply", "push-apply", "sync-apply", "pr-apply"]
+    assert [steps[i]["id"] for i in applies] == ["questions-apply", "plan-questions-apply", "answers-questions-apply", "push-apply", "decisions-apply", "sync-apply", "pr-apply"]
 
 
 def test_no_gate_message_interpolates():
     gates = [s for s in _steps() if s.get("type") == "gate"]
-    assert len(gates) == 10
+    assert len(gates) == 12
     for g in gates:
         assert "{{" not in g["message"] and g["options"] == ["approve", "reject"] and g["on_reject"] == "abort"
 
 
 def test_shell_steps_only_interpolate_story_id():
     runs = [s["run"] for s in _steps() if s.get("type") == "shell"]
-    assert len(runs) == 21
+    assert len(runs) == 26
     for run in runs:
         assert all(e.strip() == "inputs.story_id" for e in re.findall(r"\{\{(.*?)\}\}", run))
         assert "{%" not in run
@@ -315,7 +317,7 @@ def test_implement_command_documents_incomplete_line():
 
 
 # ---- F22: an apply only ever applies the plan its gate showed; a resume re-previews ----
-LOOPS = {"questions": ".ado/plan-questions.md", "plan-questions": ".ado/plan-questions-after-plan.md", "push": ".ado/plan-push.md", "sync": ".ado/plan-sync.md", "pr": ".ado/plan-pr.md"}
+LOOPS = {"questions": ".ado/plan-questions.md", "plan-questions": ".ado/plan-questions-after-plan.md", "push": ".ado/plan-push.md", "decisions": ".ado/plan-decisions.md", "sync": ".ado/plan-sync.md", "pr": ".ado/plan-pr.md"}
 
 
 def _ado_cmd(run):
@@ -367,7 +369,7 @@ def test_applied_step_stops_the_run_only_while_the_plan_still_differs(tmp_path, 
 
 def test_approve_gate_messages_constant_and_truthful():
     by_id = {s["id"]: s for s in _steps()}
-    for gid in ("approve-questions", "approve-plan-questions", "approve-push", "approve-sync", "approve-pr"):
+    for gid in ("approve-questions", "approve-plan-questions", "approve-push", "approve-decisions", "approve-sync", "approve-pr"):
         msg = by_id[gid]["message"]
         assert "{{" not in msg and "full body" not in msg
         assert "If the preview starts with ⚠, open the file and read it in full before approving." in msg
@@ -381,3 +383,74 @@ def test_story_discussion_is_refreshed_right_before_the_review():
     assert ids.index("gate-check") < ids.index("refresh-context") == ids.index("review") - 1
     text = " ".join((ROOT / "commands/review.md").read_text(encoding="utf-8").split())
     assert "the `refresh-context` step has just done it" in text and "run `ado comments <id>`" in text and "story discussion not refreshed" in text
+
+
+# ---- V3-15: strict steps and the decisions triplet; every new step is a no-op the CLI answers in advisory mode ----
+def test_decisions_triplet_shape():
+    by_id = {s["id"]: s for s in _steps()}
+    f = ".ado/plan-decisions.md"
+    assert by_id["decisions-preview"]["run"] == f"ado decisions {STORY} --post --if-any --plan-out {f}"
+    assert by_id["decisions-apply"]["run"].startswith(f"ado decisions {STORY} --post --if-any --apply --expect-plan {f} || ")
+    assert by_id["decisions-apply"]["run"].endswith("{ [ $? -eq 2 ] && [ -e .ado/plan-decisions.md.new ]; }")  # the standard guard
+    gate = by_id["approve-decisions"]
+    assert gate["type"] == "gate" and gate["show_file"] == f and gate["options"] == ["approve", "reject"] and gate["on_reject"] == "abort"
+    assert "{{" not in gate["message"] and "nothing to post" in gate["message"]
+    assert "If the preview starts with ⚠, open the file and read it in full before approving." in gate["message"]
+    assert by_id["decisions-applied"]["run"] == (
+        "if [ -e .ado/plan-decisions.md.new ]; then echo 'spec-kit-ado: the decisions plan kept changing after approval; start a new run' >&2; exit 1; fi")
+    assert by_id["strict-check-implement"]["run"] == f"ado strict check {STORY} --phase implement"
+    assert by_id["strict-verify"]["run"] == f"ado strict verify {STORY}"
+    assert by_id["strict-verify"]["timeout"] == 7200  # the engine's shell default is 300 s: it would kill the test runs mid-way
+    assert by_id["strict-check-implement"]["type"] == by_id["strict-verify"]["type"] == "shell"
+    ids = [s["id"] for s in _wf()["steps"]]
+    assert ids.index("push-applied") < ids.index("strict-check-implement") == ids.index("implement") - 1
+    assert (ids.index("implement") < ids.index("decisions-loop") < ids.index("decisions-applied") < ids.index("strict-verify")
+            < ids.index("sync-loop") < ids.index("gate"))
+    assert ids.index("decisions-applied") == ids.index("decisions-loop") + 1 and ids.index("strict-verify") == ids.index("decisions-applied") + 1
+
+
+def test_wait_po_validation_gate_message():
+    gate = {s["id"]: s for s in _steps()}["wait-po-validation"]
+    assert gate["type"] == "gate" and gate["options"] == ["approve", "reject"] and gate["on_reject"] == "abort"
+    assert "show_file" not in gate and "{{" not in gate["message"]
+    assert gate["message"].startswith("Approve once the product owner has validated or rejected the posted decisions and you have recorded each with ")
+    assert ("`ado decisions <id> --resolve` and committed and pushed the resolved lines to the PR branch before the merge. "
+            "In strict mode `ado done` refuses while any is open; if nothing was posted just approve.") in gate["message"]
+    assert [s["id"] for s in _wf()["steps"]][-1] == "wait-po-validation"  # after the PR loop: the run still ends at the open PR
+    assert not [s for s in _steps() if s.get("command") == "speckit.ado.done" or "ado done" in s.get("run", "")]
+
+
+def _cli_argv(run, story=1001):
+    argv = shlex.split(run.split(" || ")[0].replace(STORY, str(story)))
+    assert argv[0] == "ado"
+    return argv[1:]
+
+
+def test_strict_steps_are_noops_in_advisory(tmp_path, monkeypatch, capsys):
+    # the YAML stays free of conditionals: in an advisory project (no mode, no decisions file) every new step is exit 0 and a note
+    import json
+    from ado import __main__ as m
+    from tests.conftest import FakeClient
+    (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam"}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    monkeypatch.setenv("ADO_TOKEN", "t")
+    made = []
+    monkeypatch.setattr(m, "AdoClient", lambda cfg: made.append(FakeClient(cfg)) or made[-1])
+    by_id = {s["id"]: s for s in _steps()}
+    for sid in ("strict-check-implement", "strict-verify"):
+        assert m.main(_cli_argv(by_id[sid]["run"])) == 0
+        assert json.loads(capsys.readouterr().out)["note"] == "mode is advisory"
+    assert m.main(_cli_argv(by_id["decisions-preview"]["run"])) == 0
+    assert json.loads(capsys.readouterr().out)["action"] == "none"
+    assert "nothing to post" in (tmp_path / ".ado/plan-decisions.md").read_text(encoding="utf-8")
+    assert m.main(_cli_argv(by_id["decisions-apply"]["run"])) == 0  # --expect-plan matches the empty plan: nothing to apply
+    out = json.loads(capsys.readouterr().out)
+    assert out["action"] == "none" and out["applied"] is True and out["comment_id"] is None and "no decisions file" in out["note"]
+    assert not (tmp_path / ".ado/plan-decisions.md.new").exists() and not (tmp_path / "dod").exists()
+    assert not [c for fc in made for c in fc.calls if c["method"] != "GET"]  # no ADO write, and nothing created locally
+
+
+def test_only_strict_verify_sets_a_step_timeout():
+    # engine defaults: shell 300 s (fine for the ado calls, which are local or one HTTP round trip), a command step has none (not captured)
+    assert [s["id"] for s in _steps() if "timeout" in s] == ["strict-verify"]

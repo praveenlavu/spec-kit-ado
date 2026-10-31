@@ -114,12 +114,15 @@ never at the end of the file) and never edit them. The `- open decisions:` line 
 - blocking: <yes | no>
 ```
 
-Then commit the ledger change (only the ledger file, never `git add -A`):
+Then commit the ledger change (only the ledger file and, when it exists, `<dod_path>/Decisions_<id>.md`; never `git add -A`):
 
 ```bash
 git add -- <dod_path>/DoD_<id>.md
 git commit -m "docs: gate log AB#<id>" -- <dod_path>/DoD_<id>.md
 ```
+
+When `<dod_path>/Decisions_<id>.md` exists, add it to both commands as a second path: the workflow's `decisions-loop` writes the `posted:` markers
+into it after `implement`, and without this commit the pushed PR head lacks them (CI reports `override-unposted`, and a later `--post` from another checkout posts everything again).
 
 ### 5. Next step
 

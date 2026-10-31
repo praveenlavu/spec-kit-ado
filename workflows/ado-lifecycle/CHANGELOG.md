@@ -4,6 +4,16 @@ Changes to the `ado-lifecycle` workflow. The workflow is versioned with the `ado
 the full project history is in the
 [repository CHANGELOG](https://github.com/praveenlavu/spec-kit-ado/blob/main/CHANGELOG.md).
 
+## Unreleased (0.3.0 work)
+
+- Strict-mode steps (no shell conditionals; the CLI answers in an advisory project: `strict-check-implement` and `strict-verify` are no-ops, and `decisions-loop` is a no-op when there is no decisions file; when there is one the post happens in every mode, behind the gate): `strict-check-implement`
+  (`ado strict check <id> --phase implement`) before `implement`; `decisions-loop` after `implement` (preview, gate `approve-decisions`,
+  apply with `--expect-plan`, `decisions-applied`) posts the decisions recorded in `Decisions_<id>.md` as one new comment with
+  `ado decisions <id> --post --if-any`; `strict-verify` (`ado strict verify <id>`) before `sync-loop`; and a last gate
+  `wait-po-validation` after the PR loop, where you wait for the product owner's verdicts, recorded by a human with
+  `ado decisions <id> --resolve` (then commit and push the resolved lines to the PR branch before the merge; in strict mode `ado done` refuses while any is open). `strict-verify` sets `timeout: 7200`. The run still ends at the open PR.
+- Needs the 0.3.0 `ado` CLI (`--if-any`, strict mode).
+
 ## 0.2.0 — 2026-10-29
 
 - New `integration` input (default `auto`), passed to every command step;

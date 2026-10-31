@@ -111,7 +111,7 @@ and the answered questions did not settle, is also recorded with
 `ado decisions <id> --add "<text>" --kind assumption|decision --why "<reason>"` (a local write that creates
 `<dod_path>/Decisions_<id>.md` and appends the next `D<n>` line; no names, @mentions or emails from the story). Never
 leave one only in prose, in section 2 or in chat, and never hand-write a `D<n>` line. Run `ado decisions <id>` first so a
-line that is already recorded is not added twice. In the Assumptions bullet, keep a one-line summary and the pointer to the file. Questions only the human can answer: ask them, and record the answers.
+line that is already recorded is not added twice. With `--workflow` the workflow posts every `D<n>` you record, here and in `implement`, in its `decisions-loop` after `implement`, behind a gate: never run `ado decisions <id> --post` yourself. In the Assumptions bullet, keep a one-line summary and the pointer to the file. Questions only the human can answer: ask them, and record the answers.
 With `--workflow`: write each the product owner can answer as an `owner: PO` `Q<n>` line in that bullet (see
 User Input) instead of asking, and each decision for the developer under `### Needs human decision`; replace the
 bullet's placeholder with the `Q<n>` lines, or with `none` when there are none.

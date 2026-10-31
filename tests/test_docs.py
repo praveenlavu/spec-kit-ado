@@ -997,3 +997,67 @@ def test_strict_verify_job_head_and_private_toolkit_documented():
     gh = _flat("docs/ci-github.md")
     assert "While `praveenlavu/spec-kit-ado` is private" in gh and "fail closed" in gh and "vendor or fork the workflow until the repo is public" in gh
     assert "`HEAD_SHA: $(System.PullRequest.SourceCommitId)`" in _flat("docs/ci-azure-pipelines.md")
+
+
+def test_prompts_strict_rules_and_workflow_wiring_documented():
+    """V3-15: every strict-mode prompt rule is conditional; the workflow steps are documented where the run is described."""
+    impl, plan, rev, done = (_flat(f"commands/{n}.md") for n in ("implement", "plan", "review", "done"))
+    assert "run `ado strict check <id> --phase implement` first and stop on exit 2, showing its findings and fixes" in impl
+    assert "make **two commits per AC**" in impl and "`red <sha> → green <sha>`" in impl and "only the failing test files" in impl
+    assert "`ado decisions <id> --add \"<text>\" --kind decision|assumption --why \"<reason>\"`" in impl
+    assert "run `ado strict verify <id>` **before you hand over**" in impl
+    assert "also with `--workflow`: fix a `red-passes`, `green-fails` or `head-fails` finding here" in impl
+    assert ("In strict mode the workflow runs `ado strict check <id> --phase implement` itself before this command (`strict-check-implement`) "
+            "and repeats `ado strict verify <id>` as a backstop (`strict-verify`). It posts the decisions you record, in any mode, behind a gate "
+            "in its `decisions-loop` (never run `ado decisions <id> --post` here)") in impl
+    assert ("With `--workflow` the workflow posts every `D<n>` you record, here and in `implement`, in its `decisions-loop` after `implement`, "
+            "behind a gate: never run `ado decisions <id> --post` yourself.") in plan
+    assert "In strict mode only, a choice the change makes that neither the story, an answered `Q<n>` nor a `D<n>` line in `Decisions_<id>.md` settles" in rev
+    assert "`unrecorded decision`" in rev and "`ado decisions <id>` (read-only;" in rev and "advisory mode: skip it silently" in rev
+    assert ("In the workflow the last gate, `wait-po-validation`, is where you wait for the product owner's verdicts: a human records each with "
+            "`ado decisions <id> --resolve` in their own terminal, then this command runs; `ado done` refuses while any decision is open.") in done
+    assert "In strict mode run `ado strict check <id> --phase pr`" in _flat("commands/pr.md")  # already there since V3-12: pinned, not duplicated
+    assert "the gate take a strict `ado.config.json` from the target branch instead of the PR's" in _flat("commands/gate.md")
+    wf, readme = _flat("workflows/ado-lifecycle/README.md"), _flat("README.md")
+    for step in ("strict-check-implement", "decisions-loop", "approve-decisions", "strict-verify", "wait-po-validation"):
+        assert f"`{step}`" in wf and f"`{step}`" in readme, step
+    assert "`ado decisions <id> --post --if-any`" in wf and "timeout: 7200" in wf and "300 s" in wf
+    assert "`ado decisions <id> --resolve` and commit and push the resolved lines to the PR branch before the merge" in wf
+    assert "In strict mode `ado done` refuses while any is open" in wf and "if nothing was posted just approve" in wf
+    assert "does not re-run `decisions-loop`" in wf and "post them by hand first" in wf
+    assert "The `ado` CLI 0.3.0 or later" in wf and "0.2.0 CLI" in wf
+    assert "Stopping, resuming and recovering" in wf and "`ado strict verify <id>`" in wf and "ado decisions <id> --post --if-any --plan-out .ado/plan-decisions.md" in wf
+    for doc in ("AGENTS.md", "rules/hitl.md", "CHANGELOG.md", "workflows/ado-lifecycle/CHANGELOG.md"):
+        text = _flat(doc)
+        assert "`decisions-loop`" in text and "`wait-po-validation`" in text and "`strict-verify`" in text, doc
+    for doc in ("AGENTS.md", "README.md", "rules/hitl.md", "CHANGELOG.md", "workflows/ado-lifecycle/README.md", "workflows/ado-lifecycle/CHANGELOG.md",
+                "workflows/ado-lifecycle/workflow.yml", "commands/implement.md"):
+        text = _flat(doc)
+        assert "a no-op when there is no decisions file; when there is one the post happens in every mode, behind the gate" in text, doc
+        assert "every new step is a no-op" not in text and "the new steps are no-ops" not in text, doc
+    for doc in ("AGENTS.md", "rules/hitl.md", "workflows/ado-lifecycle/README.md", "CHANGELOG.md"):
+        assert "commit and push the resolved lines to the PR branch before the merge" in _flat(doc), doc
+    assert "`wait-po-validation`" in _flat("commands/done.md")
+
+
+def test_decisions_if_any_documented():
+    row = next(x for x in (ROOT / "README.md").read_text(encoding="utf-8").splitlines() if x.startswith("| `decisions <id> --post"))
+    assert "--if-any" in row and "a missing decisions file is a no-op" in row
+    for doc in ("README.md", "AGENTS.md", "rules/hitl.md", "CHANGELOG.md"):
+        text = _flat(doc)
+        assert "--if-any" in text and "a missing decisions file is a no-op" in text, doc
+    wf = _flat("workflows/ado-lifecycle/README.md")
+    assert "--if-any" in wf and "no decisions file" in wf and "`wait-po-validation`" in _flat("rules/hitl.md")
+
+
+def test_decisions_file_travels_with_the_pr_and_verify_honours_overrides_documented():
+    pr, gate = _flat("commands/pr.md"), _flat("commands/gate.md")
+    assert "Add exactly two paths (three when `<dod_path>/Decisions_<id>.md` exists" in pr and "`posted:` markers" in pr
+    assert "(only the ledger file, never" not in gate and "the ledger file and, when it exists, `<dod_path>/Decisions_<id>.md`" in gate
+    assert "`posted:` markers" in gate and "add it to both commands as a second path" in gate
+    assert "(spec dir + ledger + decisions file only)" in pr
+    for doc in ("README.md", "AGENTS.md", "rules/hitl.md", "CHANGELOG.md", "docs/configuration.md"):
+        text = _flat(doc)
+        assert "`l2` also covers `test-command`" in text, doc
+        assert "`ado strict verify` honours overrides like `check`" in text and "`verification skipped: overridden`" in text, doc
+    assert "`strict-verify`" in _flat("README.md") and "timeout: 7200" in _flat("README.md")
