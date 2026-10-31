@@ -1092,3 +1092,59 @@ def test_ci_symlinked_kit_config_file_is_changed(tmp_path, monkeypatch, capsys, 
     os.symlink("../../../README.md", d / KIT / "sf-config.yml")
     commit(d, "AB#1001 link")
     assert _kit_rules(_run(capsys)[1]) == ["kit-changed"]
+
+
+# ---- P2-16d: a kit dir with no manifest is a note; a head config that is present but invalid is a finding ----
+NOMANIFEST = "kit dir without extension.yml"
+
+
+def test_ci_kit_dir_without_manifest_is_a_note_never_a_finding(tmp_path, monkeypatch, capsys, git_env):
+    _kci(tmp_path, monkeypatch, git_env, head_files={".specify/extensions/notes/README.md": "x\n", ".specify/extensions/other/commands/a.md": "x\n"})
+    for phase in ("implement", "pr", "done"):
+        rc, out = _run(capsys, phase=phase)
+        assert _kit_rules(out) == [] and out["warnings"] == [f"{NOMANIFEST} (notes, other)"], phase
+        if phase == "implement":
+            assert (rc, out["ok"]) == (0, True)
+    d = _sub(tmp_path, "locked")  # a locked kit is judged by its digest (here: unchanged), a dir with a manifest is judged as before, dot dirs are no kits
+    _kci(d, monkeypatch, git_env, head_files={".specify/extensions/.cache/x.json": "{}\n"})
+    out = _run(capsys)[1]
+    assert out["ok"] is True and "warnings" not in out
+    e = _sub(tmp_path, "invalid-id")  # a dir that is no valid kit id is the older `kit-unpinned` rule's business (#n), not this note
+    _kci(e, monkeypatch, git_env, head_files={".specify/extensions/BAD NAME/README.md": "x\n"})
+    out = _run(capsys)[1]
+    assert not any(NOMANIFEST in w for w in out.get("warnings", [])) and "BAD" not in json.dumps(out)
+
+
+# a tab or control character in the command, invalid JSON, a mode that is neither value: the validator refuses each
+BAD_HEAD_CONFIGS = {"tab": json.dumps({**STRICT, "strict": {"test_command": "echo SECRET-MARK\tx"}}),
+                    "control": json.dumps({**STRICT, "strict": {"test_command": "echo SECRET-MARK\x01x"}}),
+                    "invalid-json": '{"mode": "strict", SECRET-MARK',
+                    "bad-mode": json.dumps({**ORG, "mode": "SECRET-MARK"})}
+
+
+@pytest.mark.parametrize("name", BAD_HEAD_CONFIGS)
+def test_ci_head_config_present_but_invalid_is_config_invalid(tmp_path, monkeypatch, capsys, git_env, real_detect, name):
+    _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))}, head_cfg=BAD_HEAD_CONFIGS[name])
+    for phase in ("implement", "pr", "done"):
+        rc, out = _run(capsys, phase=phase)
+        got = [f for f in out["findings"] if f["rule"] == "config-invalid"]
+        assert rc == 2 and out["ok"] is False and len(got) == 1, (name, phase)
+        assert set(got[0]) == {"rule", "detail", "fix"} and "SECRET-MARK" not in json.dumps(out), (name, phase)  # a fixed text: nothing echoed
+        assert got[0]["detail"] == strict._CONFIG_BAD[0] and got[0]["fix"] == strict._CONFIG_BAD[1]
+    assert "SECRET-MARK" not in capsys.readouterr().err
+
+
+def test_ci_head_config_invalid_is_also_found_at_bootstrap_and_not_overridable(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, {}, head_cfg=BAD_HEAD_CONFIGS["tab"])  # the target has no profile yet: only the head copies are judged
+    rc, out = _run(capsys)
+    assert rc == 2 and "config-invalid" in _rules_of(out)
+    assert "config-invalid" not in strict._COVERS and all("config-invalid" not in rules for rules in strict._COVERS.values())
+
+
+def test_ci_head_config_absent_or_valid_is_no_config_invalid(tmp_path, monkeypatch, capsys, git_env, real_detect):
+    _ci(tmp_path, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))}, head_files={"ado.config.json": None})  # the PR deletes it
+    assert "config-invalid" not in _rules_of(_run(capsys)[1])
+    d = _sub(tmp_path, "valid")
+    _ci(d, monkeypatch, git_env, {"ado.stack.json": json.dumps(approve(profile()))})
+    rc, out = _run(capsys)
+    assert (rc, out["ok"]) == (0, True)

@@ -703,3 +703,25 @@ def test_apply_pin_compares_the_scan_with_the_plan(repo):
     with pytest.raises(ValueError, match="changed"):
         kits.apply_pin(repo, plan, "tech lead")
     assert not (repo / kits.LOCK_FILE).exists()
+
+
+# ---- P2-16d: the fix text names the command; a symlink refusal names the --dev install ----
+def test_verify_finding_fix_names_the_pin_command(repo, monkeypatch, capsys):
+    monkeypatch.chdir(repo)
+    out = kits.verify(repo, {"schema": 1, "kits": {}})
+    assert out["findings"] and {f["fix"] for f in out["findings"]} == {kits.FIX}
+    assert "`ado kits pin <id> --apply`" in kits.FIX and "own terminal window" in kits.FIX and "`ado kits pin <id>` previews it" in kits.FIX
+
+
+def test_pin_refused_for_symlink_says_a_dev_install_cannot_be_pinned(repo, monkeypatch, capsys):
+    tty(monkeypatch)
+    monkeypatch.chdir(repo)
+    skill = repo / ".claude/skills/speckit-sf-specify/SKILL.md"
+    cache = repo.parent / (repo.name + "-cache.md")
+    cache.write_text("skill sf\n")
+    skill.unlink()
+    os.symlink(cache, skill)
+    code, out, err = pin_cli(capsys, "sf")
+    assert code == 2 and err == "error: kits pin refused: symlink" + kits.SYMLINK_HINT + "\n" and "--dev" in err and "cannot be pinned" in err
+    code, out, err = pin_cli(capsys, "nokit")  # another refusal keeps the plain text
+    assert code == 2 and err == "error: kits pin refused: unknown\n"

@@ -453,7 +453,7 @@ def _kits_pin(args):
             kits.apply_pin(".", plan, args.by, code)
             out["applied"] = True
     except kits.KitError as e:
-        print(f"error: kits pin refused: {e.reason}", file=sys.stderr)
+        print(f"error: kits pin refused: {e.reason}" + (kits.SYMLINK_HINT if e.reason == "symlink" else ""), file=sys.stderr)
         return 2
     print(json.dumps(out, indent=2))  # after --apply: the pinned digests (dir_digest, agents_sha256) as written
     return 0
@@ -484,6 +484,8 @@ def _stack_init(args):
         print(json.dumps(out, indent=2))
         print(f"error: the profile is invalid ({len(plan['errors'])} error(s)); nothing written", file=sys.stderr)
         return 2
+    for warning in stack.init_warnings(plan, args.seed):
+        print(f"warning: {warning}", file=sys.stderr)
     if args.apply:
         out.update(stack.apply_init(".", plan, args.force))
         if args.from_file is not None and os.path.realpath(args.from_file) == os.path.realpath(stack.DRAFT_FILE):
@@ -493,6 +495,11 @@ def _stack_init(args):
                 print("warning: could not remove .ado/stack-draft.json", file=sys.stderr)
     print(json.dumps(out, indent=2))
     return 0
+
+
+def _timeout_info(cfg, command):
+    """The `strict.test_timeout` sentence of the approve summary (no behaviour change; a flat string, so the summary stays one JSON object); None when no command is written."""
+    return None if command is None else stack.timeout_text(cfg.strict["test_timeout"] if cfg else None)
 
 
 def _stack_approve(args):
@@ -511,13 +518,15 @@ def _stack_approve(args):
         cfg = Config.load()
         prep = stack.prepare_approve(".", "ado.config.json", args.by, args.story, cfg.dod_path)
         plan = prep["plan"]
-        print(stack.preview_text(plan["profile"], plan["test_command"], prep["config_command"], plan["version"], args.story, args.by, plan["status"]))
+        print(stack.preview_text(plan["profile"], plan["test_command"], prep["config_command"], plan["version"], args.story, args.by, plan["status"],
+                                 timeout=cfg.strict["test_timeout"]))
         if not stack.confirm_code(prep["code"]):
             raise ValueError(stack.E_NOT_CONFIRMED)
         res = stack.apply_approve(".", "ado.config.json", args.by, args.story, cfg.dod_path, prep["code"])
         print(json.dumps({"applied": True, "version": res["version"], "sha256": res["sha256"], "by": res["by"], "date": res["date"],
                           "decision": res["decision"], "test_command": res["config"],
-                          "command": stack._clean(res["test_command"], stack.MAX_PROFILE, markup=False) if res["test_command"] is not None else None}, indent=2))
+                          "command": stack._clean(res["test_command"], stack.MAX_PROFILE, markup=False) if res["test_command"] is not None else None,
+                          "test_timeout": _timeout_info(cfg, res["test_command"])}, indent=2))
         return 0
     try:
         cfg = Config.load()
@@ -528,11 +537,12 @@ def _stack_approve(args):
     plan = stack.plan_approve(".", cfg)
     if shown:
         print(stack.preview_text(plan["profile"], plan["test_command"], plan["config_command"], plan["version"], args.story, args.by,
-                                 plan["status"], bool(os.environ.get("ADO_CONFIG"))))
+                                 plan["status"], bool(os.environ.get("ADO_CONFIG")), cfg.strict["test_timeout"] if cfg else None))
     else:
         cmd = plan["test_command"]
         print(json.dumps({"applied": False, "status": plan["status"], "version": plan["version"], "counts": plan["counts"], "unverified": plan["unverified"],
                           "test_command": {"set": cmd is not None, "length": len(cmd) if cmd is not None else 0},
+                          "test_timeout": _timeout_info(cfg, cmd),
                           "note": "read the profile and approve it in your own terminal window (stdin and stdout both a terminal): `ado stack approve`, then `--apply`"}, indent=2))
     return 0
 
@@ -783,7 +793,7 @@ def main(argv=None):
             parser.error("--force needs --apply")
     if (args.command == "stack" and args.stack_command == "approve") or (args.command == "kits" and args.kits_command == "pin"):
         if not stack._ROLE.fullmatch(args.by):
-            parser.error("--by must be a role of 1 to 40 letters, digits and spaces")
+            parser.error(stack.E_ROLE)
         if getattr(args, "story", None) is not None and not stack.valid_story(args.story):
             parser.error("--story must be a work item id (digits only, no leading zero)")
     if args.command == "branch":

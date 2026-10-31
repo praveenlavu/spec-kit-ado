@@ -1371,7 +1371,7 @@ def test_stack_notes_in_the_gate_and_check_are_documented():
 def test_fix_round_docs_family_upgrade_note_and_gate_wording():
     flat = _flat("CHANGELOG.md")
     assert "link-on-merge `ado done`" in flat and "refuses `stack-profile-missing` for existing strict projects until the profile PR merges" in flat
-    assert "`ado stack init --seed <a> --seed <b>` with one `--seed` per detected stack (or `speckit.ado.stack`, once installed)" in flat
+    assert "`ado stack init --seed <a> --seed <b>` with one `--seed` per detected stack (or `speckit.ado.stack`)" in flat
     assert "target branch trust files are invalid" in flat and "by root and id family" in flat
     kits = _flat("docs/stack-kits.md")
     assert "`node` and `typescript`, `dart` and `flutter` are one each" in kits and "in that PR's own run" in kits
@@ -1709,3 +1709,40 @@ def test_polyglot_seeds_documented():
         assert needle in docs, needle
     assert "pass one `--seed` per stack in ONE command" in cmd and "a second `init` replaces the first" in cmd
     assert "`--seed` can be repeated, once per detected stack" in _flat("README.md") and "`--seed` is repeatable (one per detected stack" in _flat("CHANGELOG.md")
+
+
+# ---- P2-16d: review minors (texts, hints, small hardening) ----
+def test_stack_command_text_matches_the_preview_and_the_kit_field():
+    import json
+    from ado import stack
+    cmd = _flat("commands/stack.md")
+    # 1: the preview prints every command's `why`, not only a null `run`'s
+    assert "the preview prints every command's `why` under the command" in cmd
+    assert "only for a command whose `run` is `null`" not in cmd and "a `why` only for" not in cmd
+    # 4: a seed sets no `kit`; the validator accepts the key, so a `--from` draft can name it
+    assert "a seed sets no `kit`, so it stays null, and no flag sets it" in cmd and 'the draft names the kit as `"kit": "<id>"`' not in cmd
+    assert 'write the draft file as in step 4 with `"kit": "<id>"` on that stack and use `--from`' in cmd
+    for name in stack.SEEDS:
+        assert all(st.get("kit") is None for st in json.loads((ROOT / f"src/ado/seeds/{name}.json").read_text(encoding="utf-8"))["stacks"]), name
+    named = {"schema": 1, "version": 1, "status": "draft", "sources": {}, "stacks": [
+        {"id": "salesforce", "root": ".", "kit": "sf", "commands": {"test": {"run": "echo a", "source": "unverified"}}}]}
+    assert stack.plan_init(json.dumps(named).encode(), ".")["ok"] is True
+    named["stacks"][0]["kit"] = "Bad Kit"
+    assert stack.plan_init(json.dumps(named).encode(), ".")["errors"] == [{"path": "stacks[0].kit", "error": "must be null or 1 to 40 characters of a-z, 0-9 and -"}]
+    # 3: the timeout advice reaches the approve text of the command and the docs
+    assert "`strict.test_timeout` (the config's value, default 300 seconds)" in cmd and "usually needs 900 or more" in cmd
+    # 5: init warnings are passed on to the human
+    assert "one-line warnings on stderr" in cmd and "npm-only `node-typescript` seed" in cmd
+
+
+def test_review_minor_texts_are_documented_where_behaviour_changed():
+    kits, readme, log, agents = (_flat(d) for d in ("docs/stack-kits.md", "README.md", "CHANGELOG.md", "AGENTS.md"))
+    for needle in ("**The timeout line.**", "`test_timeout` (a string, null when no command is written)", "package-manager based test commands usually need 900 or more",
+                   "shorten the stack roots, or edit the draft's `test.run` to call one repo script", "a status of `none` or `draft` also adds a one-line `hint`",
+                   "A seed sets no `kit`", "one-line `warning:` texts on stderr", "(the `symlink` refusal says so)", "`config-invalid`", "`kit dir without extension.yml (<ids>)`",
+                   "never a finding"):
+        assert needle in kits, needle
+    assert "`hint`" in readme and "`config-invalid`" in readme and "`kit dir without extension.yml`" in readme and "`test_timeout` (the same sentence)" in readme
+    assert "shorten the roots, or edit the draft's `test.run` to call one repo script" in readme and "A seed sets no `kit`" in readme
+    assert "`config-invalid`" in agents and "Review minors (P2-16d)" in log and "`kit dir without extension.yml`" in log and "`config-invalid`" in log
+    assert "once installed" not in log and "once installed" not in _flat("commands/stack.md")

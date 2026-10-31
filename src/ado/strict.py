@@ -262,20 +262,22 @@ def _head_blob(repo, head, path, label):
 def _head_trust(cfg, repo, head):
     """For a strict target config: what the head commit holds of the trust files, against the target's. `{"profile": read_profile-like dict,
     "differs": the profile or strict.test_command differs from the target's, "changed": that or the lockfile differs, "lock": the head's lockfile
-    (bytes, None when absent, _UNREADABLE), "cmd": the head config's strict.test_command}`. An absent head config counts as no command; an unreadable file as different."""
+    (bytes, None when absent, _UNREADABLE), "cmd": the head config's strict.test_command, "config_invalid": the head's ado.config.json
+    exists but cannot be read or fails validation}`. An absent head config counts as no command; an unreadable file as different."""
     raw = _head_blob(repo, head, stack.PROFILE_FILE, _HEAD_LABEL)
     lock = _head_blob(repo, head, "ado.kits.lock.json", "ado.kits.lock.json at the head commit")
     try:
-        hc = Config.load_from_ref(head, repo) if head else None
-    except ConfigInvalid:
-        hc = None
+        hc, bad = (Config.load_from_ref(head, repo) if head else None), False
+    except ConfigInvalid:  # present but unreadable or invalid (the text is never kept): `config-invalid`, not "no command"
+        hc, bad = None, True
     cmd = hc.strict.get("test_command") if hc is not None else None
     if raw is _UNREADABLE:
         res = {"status": "unreadable", "profile": None, "errors": []}
     else:
         res = stack.read_profile(blob=raw) if raw is not None else {"status": "none", "profile": None, "errors": []}
     differs = raw != cfg.target_profile_blob or cmd != cfg.strict.get("test_command")
-    return {"profile": res, "lock": lock, "differs": differs, "changed": differs or lock != cfg.target_lock_blob, "cmd": cmd}
+    return {"profile": res, "lock": lock, "differs": differs, "changed": differs or lock != cfg.target_lock_blob, "cmd": cmd,
+            "config_invalid": bad}
 
 
 def _stack_note(cfg, trust):
@@ -315,10 +317,22 @@ def _no_test_fix(c):
 
 
 _DRAFT_IT = ("draft it for every detected stack: run `ado stack init --seed <a> --seed <b>` (one --seed per stack), "
-             "or edit a draft and use `--from` (or speckit.ado.stack, once installed)")
+             "or edit a draft and use `--from` (or run speckit.ado.stack)")
+_APPROVE_IT = f"review the draft; then {_APPROVE}"  # a draft exists: it needs approval, not another draft
+
+
+_CONFIG_BAD = ("ado.config.json at the head commit exists but cannot be read, or is invalid: merged, it would fail every later run",
+               "fix ado.config.json in the PR; any `ado` command run on the PR branch names the problem")
 
 
 def _head_findings(c, s):
+    """`config-invalid` when the head's ado.config.json is present but invalid (its text is never echoed), then `_head_profile_findings`."""
+    h = s["head"]
+    bad = [_finding("config-invalid", *_CONFIG_BAD)] if h and h["config_invalid"] else []
+    return bad + _head_profile_findings(c, s)
+
+
+def _head_profile_findings(c, s):
     """The head commit's copy, which becomes the target's on merge: when it differs from the target's (or the head config's
     strict.test_command does), it must itself be a valid, approved profile that agrees with the head's strict.test_command. Only adds
     findings; the target's verdict is never replaced. A head without a profile is fine at bootstrap (nothing to lock)."""
@@ -335,7 +349,7 @@ def _head_findings(c, s):
                                                   f"restore it, or {_DRAFT_IT}; then {_APPROVE}")]
     if st == "draft":
         return [_finding("stack-profile-draft", f"{at} is a draft: once merged it would fail every later PR",
-                         f"{_DRAFT_IT}; then {_APPROVE}")]
+                         _APPROVE_IT)]
     if st == "changed-since-approval":
         return [_finding("stack-profile-changed", f"{at} changed after it was approved (the recorded hash no longer matches)",
                          f"review the change; then {_APPROVE} to approve it again")]
@@ -367,7 +381,7 @@ def _stack_profile(c):
         out = [_finding("stack-profile-invalid", f"ado.stack.json is invalid ({n} error(s))",
                         "run `ado stack show` for the error positions and fix the file")]
     elif status == "draft":
-        out = [_finding("stack-profile-draft", "ado.stack.json is a draft: nobody has approved it", f"{_DRAFT_IT}; then {_APPROVE}")]
+        out = [_finding("stack-profile-draft", "ado.stack.json is a draft: nobody has approved it", _APPROVE_IT)]
     elif status == "changed-since-approval":
         out = [_finding("stack-profile-changed", "ado.stack.json changed after it was approved (the recorded hash no longer matches)",
                         f"review the change; then {_APPROVE} to approve it again")]
@@ -441,6 +455,7 @@ _KIT_PIN = "review the kit, then a human runs `ado kits pin <id> --apply` in the
 _KIT_REPIN = "review what changed, then a human re-pins it with `ado kits pin <id> --apply` in their own terminal window"
 _KIT_CI_ORDER = "; in CI merge the pin in a PR of its own before the kit change, because the lockfile that judges is the target branch's"
 KIT_UNTRACKED = "kit not in the repository: checked locally only"
+KIT_NO_MANIFEST = "kit dir without extension.yml"  # a note, never a finding: Spec Kit cannot load it, so nothing runs from it
 _KIT_LOCK_BAD = "ado.kits.lock.json at the head commit cannot be read, or is not a lockfile this version can trust: merged, it would fail every later run"
 _KIT_LOCK_GONE = "the PR deletes ado.kits.lock.json: merged, it would turn these rules into a note (write an empty `kits` object to unpin everything)"
 _KIT_LOCK_ENTRY = "ado.kits.lock.json at the target branch has an entry that cannot be read as a pin"
@@ -578,6 +593,8 @@ def _kits_ci(c):
             elif digest != pin["dir_digest"]:  # includes "changed": a symlink or submodule inside the kit dir, an odd mode or path
                 changed.append(kit_id)
     warn = [f"{KIT_UNTRACKED} ({_kit_ids(untracked)})"] if untracked else []
+    bare = sorted(n for n in present if stack._ID.fullmatch(n) and n not in manifests and n not in lock)  # locked ones are judged by their digest
+    warn += [f"{KIT_NO_MANIFEST} ({_kit_ids(bare)})"] if bare else []
     return _kit_result(unpinned, changed, problems, warn, ci=True)
 
 

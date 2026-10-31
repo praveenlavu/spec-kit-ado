@@ -567,3 +567,78 @@ def test_fix_texts_do_not_suggest_dropping_a_stack():
         assert not old.search(re.sub(r"\s+", " ", f.read_text(encoding="utf-8"))), f.name
     from ado import strict
     assert "--seed <a> --seed <b>" in strict._DRAFT_IT and "--from" in strict._DRAFT_IT and "every detected stack" in strict._DRAFT_IT
+
+
+# ---- P2-16d: unknown seed text, exit codes of the composed command, init warnings ----
+def test_unknown_seed_among_others_keeps_its_own_text(repo, capsys):
+    commit_all(repo, SPLIT)
+    texts = set()
+    for argv in (["--seed", "python-pytest", "--seed", "nope"], ["--seed", "nope", "--seed", "python-pytest"], ["--seed", "nope"]):
+        code, out, err = init(capsys, *argv, "--apply")
+        assert code == 2 and err.startswith("error: unknown seed; it must be one of: ") and "nope" not in err, argv  # the argument is never echoed
+        assert "not installed or cannot be read" not in err and not (repo / stack.PROFILE_FILE).exists()
+        texts.add(err)
+    assert len(texts) == 1
+
+
+@pytest.mark.parametrize("failing", ["first", "second"])
+def test_composed_command_propagates_failure(repo, capsys, monkeypatch, tmp_path, failing):
+    def seed(sid, code):
+        p = profile(stacks=[{"id": sid, "root": ".", "commands": {"test": {"run": f"exit {code}", "source": "unverified"}}}])
+        p.pop("sources")
+        return p
+    codes = {"first": (3, 0), "second": (0, 5)}[failing]
+    monkeypatch.setattr(stack, "SEEDS_DIR", seeds_in(tmp_path, **{"python-pytest": seed("python", codes[0]), "node-typescript": seed("typescript", codes[1])}))
+    commit_all(repo, SPLIT)
+    assert init(capsys, "--seed", "python-pytest", "--seed", "node-typescript", "--apply")[0] == 0
+    cmd = stack.compose_test_command(written(repo))
+    r = subprocess.run(["sh", "-c", cmd], cwd=repo, capture_output=True, text=True)
+    assert r.returncode == max(codes), (r.returncode, r.stderr)  # that stack's own exit code, not 0
+    ok = subprocess.run(["sh", "-c", stack.compose_test_command(profile(stacks=[
+        {"id": "a", "root": "backend", "commands": {"test": {"run": "exit 0", "source": "unverified"}}},
+        {"id": "b", "root": "web", "commands": {"test": {"run": "exit 0", "source": "unverified"}}}]))], cwd=repo, capture_output=True, text=True)
+    assert ok.returncode == 0  # control: both pass
+
+
+def long_draft(root_len):
+    """Two stacks whose roots are `root_len` characters of one segment each: the composed command grows with them."""
+    return profile(sources={}, stacks=[{"id": sid, "root": ch * root_len, "commands": {"test": {"run": "echo " + "x" * 90, "source": "unverified"}}}
+                                       for sid, ch in (("a", "r"), ("b", "s"))])
+
+
+def test_init_warns_when_the_composed_command_would_be_refused_at_approve(repo, capsys):
+    long = long_draft(150)
+    assert len(stack.compose_test_command(profile(sources={}, stacks=long["stacks"][:1])) or "") < 500
+    with pytest.raises(ValueError):
+        stack.compose_test_command(long)
+    path = draft_file(repo, long)
+    for flags in ((), ("--apply",)):  # preview and apply
+        code, out, err = init(capsys, "--from", path, *flags)
+        warnings = [ln for ln in err.splitlines() if ln.startswith("warning: ")]
+        assert code == 0 and json.loads(out)["ok"] is True and warnings == ["warning: " + stack._W_LONG], (flags, err)
+        draft_file(repo, long)  # --apply removes the draft file
+    assert "500" in stack._W_LONG and "shorten the roots" in stack._W_LONG and "one repo script" in stack._W_LONG
+    # the refusal at approve is actionable for a seed-built draft too, and a short draft gets no warning
+    with pytest.raises(ValueError) as e:
+        stack.plan_approve(repo)
+    assert "shorten the stack roots" in str(e.value) and "`test.run`" in str(e.value) and "one repo script" in str(e.value)
+    short = draft_file(repo, long_draft(5))
+    assert init(capsys, "--from", short)[2] == ""
+
+
+def test_init_warns_when_node_typescript_meets_a_yarn_or_pnpm_repository(repo, capsys):
+    cases = {"yarn": {"package.json": "{}\n", "yarn.lock": "\n"}, "pnpm": {"package.json": "{}\n", "pnpm-lock.yaml": "\n"},
+             "both": {"package.json": "{}\n", "yarn.lock": "\n", "package-lock.json": "{}\n"}}
+    for name, files in cases.items():
+        commit_all(repo, files)
+        for flags in ((), ("--apply", "--force")):
+            code, out, err = init(capsys, "--seed", "node-typescript", *flags)
+            assert code == 0 and err == "warning: " + stack._W_NPM + "\n", (name, flags, err)
+        assert init(capsys, "--seed", "python-pytest")[2] == ""  # another seed: no warning
+        draft_file(repo, profile(sources={}, stacks=[{"id": "typescript", "root": ".", "commands": {"test": {"run": "yarn test", "source": "unverified"}}}]))
+        assert init(capsys, "--from", ".ado/stack-draft.json")[2] == ""  # --from is the human's or agent's own text
+        git(repo, "rm", "-q", "-r", "-f", ".", "--ignore-unmatch")
+        git(repo, "commit", "-q", "-m", f"clean {name}", "--allow-empty")
+    commit_all(repo, {"package.json": "{}\n", "package-lock.json": "{}\n"})  # npm: the seed fits
+    assert init(capsys, "--seed", "node-typescript")[2] == ""
+    assert "npm only" in stack._W_NPM

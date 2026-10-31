@@ -220,7 +220,7 @@ def test_compose_over_500_refused():
     long = two_stacks("a" * 250, "b" * 250)  # each run is fine; the composed line is over 500
     with pytest.raises(ValueError) as e:
         stack.compose_test_command(long)
-    assert str(e.value) == "the composed test command is longer than 500 characters; point `test` at a repo script (kind `repo`)"
+    assert str(e.value) == "the composed test command is longer than 500 characters; shorten the stack roots, or edit the draft's `test.run` to call one repo script (kind `repo`)"
     assert "aaaa" not in str(e.value)
 
 
@@ -449,7 +449,7 @@ def test_show_an_over_long_composed_command_is_a_note(repo, capsys):
     put(repo, p)
     res = json.loads(show(capsys)[1])
     assert res["status"] == "approved" and res["test_command"]["profile"] is None
-    assert res["notes"] == ["stack-profile: the composed test command is longer than 500 characters; point `test` at a repo script (kind `repo`)"]
+    assert res["notes"] == ["stack-profile: the composed test command is longer than 500 characters; shorten the stack roots, or edit the draft's `test.run` to call one repo script (kind `repo`)"]
     config(repo, mode="strict")
     assert show(capsys, "--check")[0] == 2
 
@@ -618,3 +618,29 @@ def test_show_looks_for_unprofiled_roots_in_the_given_root_not_the_cwd(tmp_path,
     assert res["notes"] == ["stack-unprofiled: web (node) is a high-confidence root that no profile stack covers"]
     res, _, _ = stack.show(str(elsewhere))  # nothing there at all
     assert res["status"] == "none" and res["notes"] == []
+
+
+# ---- P2-16d: the next step when strict show --check has nothing to say ----
+def test_strict_show_hints_the_next_step_for_none_and_draft(repo, capsys):
+    commit_files(repo, {"pyproject.toml": "[project]\n"})
+    config(repo, mode="strict")
+    code, out, err = show(capsys, "--check")  # none
+    res = json.loads(out)
+    assert code == 2 and res["notes"] == [] and res["hint"] == stack._HINTS["none"] and "ado stack init --seed" in res["hint"]
+    assert "--seed <a> --seed <b>" in res["hint"] and "approves" in res["hint"] and err == "error: stack check failed: 1 finding(s)\n"  # the count is unchanged
+    put(repo, profile())
+    code, out, err = show(capsys, "--check")  # draft
+    res = json.loads(out)
+    assert code == 2 and res["notes"] == [] and res["hint"] == stack._HINTS["draft"] and "ado stack approve" in res["hint"] and "ado stack approve --apply" in res["hint"]
+    assert "terminal" in res["hint"] and err == "error: stack check failed: 1 finding(s)\n"
+    assert stack._HINTS["draft"] in show(capsys, "--md")[1]  # the text view carries it too
+    put(repo, approve(profile()))  # approved, invalid, changed and advisory: no hint
+    config(repo, mode="strict", test_command="PYTHONPATH=src python3 -m pytest -q")
+    assert "hint" not in json.loads(show(capsys, "--check")[1])
+    put(repo, "{bad")
+    assert "hint" not in json.loads(show(capsys)[1])
+    config(repo)  # advisory: the output is what it was
+    (repo / stack.PROFILE_FILE).unlink()
+    assert "hint" not in json.loads(show(capsys)[1])
+    put(repo, profile())
+    assert "hint" not in json.loads(show(capsys)[1]) and stack._HINTS["draft"] not in show(capsys, "--md")[1]

@@ -159,7 +159,9 @@ to change it, re-approve.
 
 **`--check`.** In strict mode it exits 2 (the JSON is still printed) unless the status is `approved`, there is no drift, and no
 high-confidence root detected at `HEAD` (see Detection) is missing from the profile's stacks; it also exits 2 when git cannot be read,
-because the roots could not be checked. In advisory mode the same findings are `notes` and the exit is 0.
+because the roots could not be checked. In advisory mode the same findings are `notes` and the exit is 0. In strict mode a status of `none`
+or `draft` also adds a one-line `hint` to the JSON (and to `--md`) with the next step (`ado stack init --seed <a> --seed <b>`, or a human's
+`ado stack approve`); it is not a note, so the finding count and the exit do not change.
 
 **Commands are shell code.** A command in the profile is shell code that a human approves by reading it, and strict CI runs it. The
 validator (one line of printable ASCII, a word list that refuses `sudo`, `curl`, `wget`, `eval`, `| sh`, `| bash`, backticks and `$(`)
@@ -189,6 +191,11 @@ trusted until a human approves it (and nothing reads a draft's text to the agent
   seed (pnpm, yarn, Java, Go, ...) is added to the draft by hand and `--from`; do not leave it out: strict mode reports its root as
   `stack-unprofiled`.
 - `--stack ID` names the stack of a single-stack profile (for example a stack detect cannot name).
+- A seed sets no `kit` (it stays `null`) and no flag sets it: `kit` is for reference only, and the validator accepts `null` or an id of 1 to 40
+  characters of a-z, 0-9 and `-`. To name the installed kit, write the draft file with `"kit": "<id>"` on that stack and use `--from`.
+- `init` (preview and `--apply`) prints one-line `warning:` texts on stderr when `--seed node-typescript` meets a repository whose detected
+  package manager is yarn, pnpm or ambiguous (the seed is npm only), and when the composed test command is over 500 characters (only
+  `approve` refuses it; shorten the roots, or edit the draft's `test.run` to call one repo script).
 
 Both forms validate the profile like `ado stack show`, force `status` to `draft` and drop any `approval`. Without `--apply` the command
 is a preview: it prints `{ok, errors, counts}` (an error is a rule and a position such as `stacks[0].root`, never a value) and writes
@@ -258,13 +265,18 @@ exists. It changes what strict CI runs, so the agent never runs it: after `ado s
   **The `UNVERIFIED` count is a lower bound.** It counts only items whose source is the literal `unverified`. A claim marked unverified
   inside a command's `why` is not counted, but the preview prints every command's `why` under the command. Read every `why` before you
   approve (the shipped seeds each have such claims: see "Seed profiles").
+  **The timeout line.** Under the composed command the preview prints `Strict runs use strict.test_timeout seconds (config says N, default 300);
+  package-manager based test commands usually need 900 or more.` The non-terminal summary and the `--apply` result carry the same facts as
+  `test_timeout` (a string, null when no command is written). Nothing changes: the human edits `strict.test_timeout` in
+  `ado.config.json` if the run needs it.
 - **`--apply`** refuses (exit 2, fixed text) unless stdin and stdout are both terminals, before it reads any file or the config, and refuses when
   `ADO_CONFIG` is set. It sets `status: approved`, raises `version` by 1 and writes `approval {by, date, sha256, decision}`: `--by` is a
   role (letters, digits and spaces with at least one letter or digit, at most 40, default `tech lead`; the validator also refuses any other `approval.by`), `sha256` is the
   hash of the profile as written, `decision` is `US<id> D<n>` when `--story` is given. A draft, a changed or an already approved profile can
   be approved; each approval is a new version.
 - **The config.** `strict.test_command` becomes the composed command, or is removed when no stack defines `test.run`; a composed command
-  over 500 characters is refused before anything is written (point `test` at a repo script, kind `repo`). The config is parsed and
+  over 500 characters is refused before anything is written (shorten the stack roots, or edit the draft's `test.run` to call one repo script,
+  kind `repo`). The config is parsed and
   written back with the parsed values and key order of every other key unchanged and its indent, line terminator and trailing newline
   kept (spacing may change). The new text is read back and checked by the config validator before it replaces the file (atomic, same
   mode). A missing, invalid, duplicate-key, symlinked or non-regular config is refused and left as it was.
@@ -329,6 +341,9 @@ command or the verdict **in that PR's own run**. The PR's copies are judged as w
 head's profile or `strict.test_command` differs from the target's, `strict check` also refuses a head profile that is invalid, unreadable,
 a draft, changed since approval, deleted, or that does not compose to the head's `strict.test_command` (a null `test` with no command is
 consistent; a null `test` with a command is drift), with the same `stack-profile-*` ids and the detail "at the head commit". These findings only add to the target's verdict.
+The head's `ado.config.json` is read the same way: one that is present but cannot be read or fails validation (a tab or control character in
+`strict.test_command`, invalid JSON) is the finding `config-invalid`, with a fixed text that echoes none of the file, so the PR is blocked at
+once instead of failing every later run after the merge (an absent file is no finding; advisory targets are unchanged). It cannot be overridden.
 `ado strict verify` runs only the ledger, L1 and test-command rules and applies no stack or kit rule. Protect the files on the target
 branch like `ado.config.json`.
 
@@ -400,7 +415,7 @@ each, and `ado kits verify` compares the installed kits with it. `ado kits pin` 
   source) gives `ident`, `filter` or `working-tree-encoding` (`git hash-object` would rewrite the file or run a filter driver, so the local
   value could differ from the committed one; `text` and `eol` are fine; the check runs before anything is hashed), a symlink or other non-regular file, a file over 16 MiB,
   a registry entry that is a symlink, corrupt, over 1 MiB or has a duplicate key. A kit installed with `specify extension add --dev`
-  has symlinked agent copies, so it **cannot be pinned**: reinstall without `--dev`. An `.registry` entry without `enabled` counts as
+  has symlinked agent copies, so it **cannot be pinned** (the `symlink` refusal says so): reinstall without `--dev`. An `.registry` entry without `enabled` counts as
   enabled (as upstream); an id that is not `[a-z0-9-]{1,40}` is reported as `unpinned` (`id: null`), never skipped; `ado` itself is not a
   kit.
 - **The lockfile is read as hostile too:** at most 256 KiB, no duplicate key, schema 1, kit ids and 64-hex digests checked; `source`
@@ -482,7 +497,8 @@ the files judged are the ones git **tracks** at the PR head:
 
 A locked kit with **no tracked files** at the head is a warning, `kit not in the repository: checked locally only (<ids>)`, not a finding (a
 repository that commits no kit dirs is legitimate); that includes a PR that deletes the whole kit dir, so review a PR that removes tracked kit
-files. The kit rules are in the same `warnings` list as the other notes.
+files. A tracked `.specify/extensions/<valid-id>/` directory with no tracked `extension.yml` that the lockfile does not list is not a loadable kit: it is the
+note `kit dir without extension.yml (<ids>)`, never a finding. The kit rules are in the same `warnings` list as the other notes.
 
 **A PR cannot change what CI accepts by editing the lockfile.** The target's lockfile judges that PR's run, so re-pinning a tampered kit in the
 same PR still gives `kit-changed`, and adding a kit and its pin together still gives `kit-unpinned`: a new kit takes two PRs, the pin first (its

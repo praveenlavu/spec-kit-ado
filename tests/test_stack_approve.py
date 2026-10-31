@@ -833,3 +833,61 @@ def test_a_file_starting_with_blank_space_keeps_its_real_indent(repo, monkeypatc
     assert approve_cli(capsys, "--apply")[0] == 0
     lines = (repo / "ado.config.json").read_text(encoding="utf-8").split("\n")
     assert lines[0] == "{" and lines[1] == '    "organization": "contoso",'
+
+
+# ---- P2-16d: the timeout line, the quoting sentence for several stacks only, one role text ----
+SENTENCE = "Strict runs use strict.test_timeout seconds (config says {n}, default 300); package-manager based test commands usually need 900 or more."
+
+
+def test_preview_names_the_strict_timeout(repo, monkeypatch, capsys):
+    setup(repo, two_stack_profile())  # CONFIG says strict.test_timeout 900
+    tty(monkeypatch, True)
+    code, out, err = approve_cli(capsys)
+    assert code == 0 and SENTENCE.format(n=900) in out and out.index("strict.test_command to be written") < out.index(SENTENCE.format(n=900))
+    setup(repo, two_stack_profile(), cfg={k: v for k, v in CONFIG.items() if k != "strict"})  # no strict object: the default 300
+    assert SENTENCE.format(n=300) in approve_cli(capsys)[1]
+    # a profile with no test command writes no command, so there is nothing to time
+    setup(repo, profile(stacks=[{"id": "python", "root": ".", "commands": {"test": {"run": None, "why": "none", "source": "unverified"}}}]))
+    assert "strict.test_timeout" not in approve_cli(capsys)[1]
+    assert stack.timeout_text(None).endswith("usually need 900 or more.") and "config says nothing here" in stack.timeout_text(None)
+
+
+def test_approve_summaries_carry_the_timeout_sentence(repo, monkeypatch, capsys):
+    setup(repo, two_stack_profile())
+    tty(monkeypatch, False)
+    doc = json.loads(approve_cli(capsys)[1])  # no terminal: counts and lengths only, plus the sentence
+    assert doc["test_timeout"] == SENTENCE.format(n=900) and doc["test_command"]["set"] is True
+    setup(repo, profile(stacks=[{"id": "python", "root": ".", "commands": {"test": {"run": None, "why": "none", "source": "unverified"}}}]))
+    assert json.loads(approve_cli(capsys)[1])["test_timeout"] is None
+    setup(repo, two_stack_profile())
+    terminal(monkeypatch, None)
+    code, out, err = approve_cli(capsys, "--apply")
+    assert code == 0 and SENTENCE.format(n=900) in out and result(out)["test_timeout"] == SENTENCE.format(n=900)
+
+
+def test_quoting_sentence_only_for_several_stacks(repo):
+    several = "with several stacks each run is quoted into `sh -c`"
+    two = two_stack_profile()
+    one = profile(stacks=[{"id": "python", "root": ".", "commands": {"test": {"run": "echo a", "source": "S1"}}}])
+    assert several in stack.preview_text(two, stack.compose_test_command(two), None, 1, None, "po")
+    text = stack.preview_text(one, stack.compose_test_command(one), None, 1, None, "po")
+    assert several not in text and "(6 characters)" in text
+    one_nested = profile(stacks=[{"id": "python", "root": "svc", "commands": {"test": {"run": "echo a", "source": "S1"}}}])  # one stack, still quoted
+    assert several not in stack.preview_text(one_nested, stack.compose_test_command(one_nested), None, 1, None, "po")
+
+
+def test_the_role_error_is_one_text_everywhere(repo, monkeypatch, capsys):
+    text = "--by must be a role of 1 to 40 letters, digits and spaces"
+    assert stack.E_ROLE == text
+    from ado import kits
+    for args in (["stack", "approve", "--by", "a;b"], ["kits", "pin", "sf", "--by", "a;b"]):
+        with pytest.raises(SystemExit) as e:
+            main(args)
+        assert e.value.code == 2 and text in capsys.readouterr().err
+    setup(repo)
+    with pytest.raises(ValueError, match=re.escape(text)):
+        stack._prepare_approve(repo, str(repo / "ado.config.json"), "a;b", None, "dod")
+    with pytest.raises(ValueError, match=re.escape(text)):
+        kits.apply_pin(repo, {"id": "sf"}, "a;b")
+    src = "".join((ROOT / "src/ado" / f).read_text(encoding="utf-8") for f in ("kits.py", "__main__.py", "stack.py"))
+    assert src.count("1 to 40 letters, digits and spaces") == 2  # E_ROLE and the validator's own approval.by text, nowhere else

@@ -1877,7 +1877,9 @@ def test_stack_profile_draft(tmp_path, git_env, real_detect):
     p = profile()
     p["stacks"][0]["commands"]["lint"]["run"] = MARK
     f = _only(_impl(_stk(tmp_path, git_env, p), tmp_path), "stack-profile-draft")
-    assert "ado stack approve --apply" in f["fix"] and "speckit.ado.stack" in f["fix"]
+    # P2-16d: a draft exists, so the fix says to approve it (preview, then --apply in a terminal), not to draft again
+    assert "ado stack approve --apply" in f["fix"] and "ado stack approve`" in f["fix"] and "own terminal window" in f["fix"]
+    assert "draft it" not in f["fix"] and "ado stack init" not in f["fix"] and "once installed" not in f["fix"]
 
 
 def test_stack_profile_changed(tmp_path, git_env, real_detect):
@@ -1968,11 +1970,11 @@ def test_unprofiled_matches_by_root_and_id_family(tmp_path, git_env, real_detect
 
 
 def test_fix_texts_name_the_seed_verb(tmp_path, git_env, real_detect):
-    for prof, rule in ((None, "stack-profile-missing"), (profile(), "stack-profile-draft")):
-        d = tmp_path / rule
-        d.mkdir()
-        fix = _only(_impl(_stk(d, git_env, prof), d), rule)["fix"]
-        assert "ado stack init --seed <a> --seed <b>" in fix and "every detected stack" in fix and "speckit.ado.stack" in fix and "ado stack approve --apply" in fix
+    d = tmp_path / "stack-profile-missing"
+    d.mkdir()
+    fix = _only(_impl(_stk(d, git_env, None), d), "stack-profile-missing")["fix"]
+    assert "ado stack init --seed <a> --seed <b>" in fix and "every detected stack" in fix and "ado stack approve --apply" in fix
+    assert "run speckit.ado.stack" in fix and "once installed" not in fix  # P2-16d: the command ships
     d = tmp_path / "unprofiled"
     d.mkdir()
     assert "ado stack init --seed <a> --seed <b>" in _only(_impl(_stk(d, git_env, approve(profile()), files={"web/package.json": "{}\n"}), d), "stack-unprofiled")["fix"]

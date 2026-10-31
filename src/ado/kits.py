@@ -23,7 +23,8 @@ _VERSION = re.compile(r"[0-9A-Za-z.+-]{1,40}")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _BLOB = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _CHANGED = "changed"  # dir_digest_at's answer for a symlink, submodule, odd mode or odd path: never equal to a pinned digest
-FIX = "review the kit, then have a human pin it from a terminal"
+FIX = "review the kit, then have a human run `ado kits pin <id> --apply` in their own terminal window (`ado kits pin <id>` previews it)"
+SYMLINK_HINT = " (a `--dev` install links its agent copies, so it cannot be pinned: install the kit normally)"
 
 
 class KitError(Exception):
@@ -527,7 +528,6 @@ CHECKLIST = (  # fixed text, printed in the pin preview; nothing here comes from
     "Check that the licence and the way the kit works fit your project and your process.",
     "The pin records your approval, nothing more: <id>-config.yml and local config files are not vetted, and a --dev install cannot be pinned.",
 )
-_E_BY = "--by must be a role of 1 to 40 letters, digits and spaces"
 _E_LOCK = f"{LOCK_FILE} cannot be trusted (a symlink, not a regular file, or invalid); nothing was changed"
 _E_LOCK_BACK = f"{LOCK_FILE} could not be read back identical; check the file"
 _E_CHANGED = "the kit or the lockfile changed since the preview; nothing was changed"
@@ -590,7 +590,7 @@ def apply_pin(root, plan, by, expect_code=None):
     symlink, not a regular file, invalid, or changed while writing. With `expect_code` (what the human typed) the kit is read again and the
     code recomputed right before the write: a different code refuses. Written through a temp file in the same directory and `os.replace`."""
     if not (isinstance(by, str) and stack._ROLE.fullmatch(by)):
-        raise ValueError(_E_BY)
+        raise ValueError(stack.E_ROLE)
     fresh = plan_pin(root, plan["id"])
     if expect_code is not None and pin_code(fresh, by) != expect_code:
         raise ValueError(_E_SWAPPED)
