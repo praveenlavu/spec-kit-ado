@@ -45,6 +45,14 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
   over 500 characters); `--story` adds one decision line; a failed step puts earlier writes back. `stack.validate` now limits
   `approval.by` to a role (`[A-Za-z0-9 ]{1,40}`). Once a profile exists, `strict.test_command` comes only from this verb; `ado setup` never
   writes it. `stack.plan_approve`, `stack.apply_approve`, `stack.preview_text`. See `docs/stack-kits.md` "Approving a profile".
+- `ado kits verify` and `ado.kits.lock.json` digests (local, read-only): `kits.installed` (the `.registry`, confined and capped at 1 MiB;
+  a missing `enabled` counts as enabled; `ado` excluded; a bad id is `unpinned`, never skipped), `kits.dir_digest` (sha256 over sorted
+  `<git blob id>  <path>` of the files git tracks or would track under `.specify/extensions/<id>/`, minus `local-config.yml`,
+  `*-config.local.yml` and `<id>-config.yml`; CRLF and `core.autocrlf` agree with the committed value), `kits.dir_digest_at` (the same from
+  a commit; symlink or submodule gives `"changed"`), `kits.agents_sha256` (the Claude agent copies by the exact registered names),
+  `kits.read_lock` (`source` and `version` validated, else null). A symlink, control character in a path, empty kit dir or `--dev` install
+  is refused, as is a kit path with `ident`, `filter` or `working-tree-encoding` set by `.gitattributes`; disabled kits are judged like enabled ones. Exit 2 on an unpinned or changed kit. `ado kits pin` and the strict kit rules are not in this release yet. See
+  `docs/stack-kits.md` "Pinning kits".
 - Strict stack rules (`strict check`, phases `implement`, `pr`, `done`; not overridable): `stack-profile-missing`, `stack-profile-invalid`,
   `stack-profile-draft`, `stack-profile-changed`, `stack-profile-drift` (only when the approved profile composes a test command and
   `strict.test_command` differs) and `stack-unprofiled` (a high-confidence `ado stack detect` root at the head commit that no profile stack

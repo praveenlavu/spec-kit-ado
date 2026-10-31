@@ -394,13 +394,13 @@ def parse_evidence(status_cell):
     return {"red": m[1], "green": m[2]} if m and len(_TAGGED.findall(text)) == 2 else None
 
 
-def _git(repo, *args, env=None, timeout=30):
+def _git(repo, *args, env=None, timeout=30, stdin=None):
     """A finished git run (bytes), or None when git is missing, cannot start or runs past `timeout` s (30): a failure, never a pass.
     The default environment is prs.git_env's (no inherited GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE or other selector, no replace
-    refs, grafts, pager or prompt), as for every `prs` git call."""
+    refs, grafts, pager or prompt), as for every `prs` git call. `stdin` (bytes) is fed to git; default: none."""
     try:
         return subprocess.run(["git", "--no-pager", "--no-replace-objects", "-c", "core.fsmonitor=false", "-C", str(repo), *args],
-                              check=False, capture_output=True, stdin=subprocess.DEVNULL, timeout=timeout,
+                              check=False, capture_output=True, timeout=timeout, **({"input": stdin} if stdin is not None else {"stdin": subprocess.DEVNULL}),
                               env={**prs.git_env(), "GIT_OPTIONAL_LOCKS": "0"} if env is None else env)
     except (OSError, subprocess.SubprocessError):
         return None

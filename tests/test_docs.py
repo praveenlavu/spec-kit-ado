@@ -1381,3 +1381,15 @@ def test_test_run_env_allow_list_documented():
     assert "`~/.sfdx`" in conf and "`~/.config/gh`" in conf and "alternates" in conf and "persist-credentials: false" in conf
     assert "not a sandbox" in conf.lower()
     assert "`CARGO_HOME` is no longer passed" in log
+
+
+# ---- P2-8a: kit digests and `ado kits verify` ----
+def test_kits_verify_documented():
+    for doc in ("README.md", "AGENTS.md", "docs/stack-kits.md", "CHANGELOG.md"):
+        assert "ado kits verify" in _flat(doc) or "`kits verify" in _flat(doc), doc
+    kits = _flat("docs/stack-kits.md")
+    assert "## Pinning kits" in (ROOT / "docs/stack-kits.md").read_text(encoding="utf-8")
+    for phrase in ("`dir_digest`", "`agents_sha256`", "`--dev`", "**cannot be pinned**", "never a glob", "`local-config.yml`",
+                   "`*-config.local.yml`", "**disabled ones included**", "`working-tree-encoding`", "reported `stale`", "process enforcement, not a security boundary", "`ado kits pin`"):
+        assert phrase in kits, phrase
+    assert "not in this release yet" in _flat("README.md") and "not in this release yet" in _flat("CHANGELOG.md")

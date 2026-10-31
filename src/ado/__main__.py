@@ -6,7 +6,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, attachments, branch, comments, decisions, dod, done, gate, prs, push, questions, stack, strict, tasks, workitems
+from . import __version__, attachments, branch, comments, decisions, dod, done, gate, kits, prs, push, questions, stack, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid
@@ -414,6 +414,21 @@ def _config(args):
     return Config.load()
 
 
+def _kits_verify(args):
+    """`ado kits verify`: local and read-only (no token, no config). JSON; exit 2 on a kit that is unpinned or changed, or when the registry
+    or a file cannot be trusted (a fixed error text; a bad lockfile is ConfigInvalid, exit 2 here too)."""
+    try:
+        out = kits.verify(".", kits.load_lock("."))
+    except kits.KitError as e:
+        print(f"error: kits check failed: {e.reason}", file=sys.stderr)
+        return 2
+    print(json.dumps(out, indent=2))
+    if out["findings"]:
+        print(f"error: kits verify failed: {len(out['findings'])} finding(s)", file=sys.stderr)
+        return 2
+    return 0
+
+
 def _stack_show(args):
     """`ado stack show`: the config only supplies the mode and strict.test_command (none is advisory; an invalid one fails closed)."""
     try:
@@ -624,6 +639,11 @@ def main(argv=None):
     q.add_argument("pr_id", type=int)
     q.add_argument("--body-file", required=True, metavar="F")
 
+    p = sub.add_parser("kits", help="Spec Kit extensions against the lockfile ado.kits.lock.json (local, read-only)")
+    ksub = p.add_subparsers(dest="kits_command", required=True)
+    ksub.add_parser("verify", help="List the installed kits and whether each is pinned, changed or unpinned (JSON); exit 2 on any kit "
+                    "that is unpinned or changed since a human pinned it, or when the registry or a kit file cannot be trusted")
+
     p = sub.add_parser("stack", help="Which stacks the repository holds (read-only, local): `stack detect` reads the files tracked at HEAD")
     stsub = p.add_subparsers(dest="stack_command", required=True)
     q = stsub.add_parser("detect", help="Detect the stack(s) from the files committed at HEAD (never the working tree) and show why: JSON "
@@ -740,6 +760,8 @@ def main(argv=None):
             out = _add_decision(args)
         elif args.command == "decisions" and args.resolve:  # local only: no token, no request
             out = _resolve_decision(args)
+        elif args.command == "kits":  # local only: no token, no request, no config
+            return _kits_verify(args)
         elif args.command == "stack" and args.stack_command == "show":  # local only: no token, no request
             return _stack_show(args)
         elif args.command == "stack" and args.stack_command == "init":  # local write: no token, no request, no gate

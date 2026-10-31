@@ -258,6 +258,45 @@ so a new root needs two PRs: the profile first, then the code. The lockfile is r
 rules that use it come with kit pinning. A recovery for a locked target (an invalid or draft profile merged by mistake) is an admin-bypass
 merge of the fix. This is process enforcement, not a security boundary.
 
+## Pinning kits
+
+A third-party kit is code the agent runs. `ado.kits.lock.json` (repo root, committed) records which kits a human reviewed and a digest of
+each, and `ado kits verify` compares the installed kits with it. This release has the digests and the read-only check; `ado kits pin`
+(which writes the lockfile) and the strict `kit-unpinned` / `kit-changed` rules come in later tasks, so for now a lockfile is written by
+hand and no strict rule reads these digests yet.
+
+```json
+{"schema": 1, "kits": {"sf": {"version": "1.0.0", "source": "https://example.com/contoso/sf", "catalog_sha256": null,
+                              "dir_digest": "<64 hex>", "agents_sha256": "<64 hex>"}}}
+```
+
+- **`dir_digest`:** sha256 over the sorted lines `<git blob id>  <path inside the kit dir>` of the regular files git tracks or would
+  track (`git ls-files --cached --others --exclude-standard`) under `.specify/extensions/<id>/`, except `local-config.yml`,
+  `*-config.local.yml` and the kit's own `<id>-config.yml` at the top of that dir (settings you edit, not vetted). Blob ids come from
+  `git hash-object`, so the value agrees with the committed one under CRLF and `core.autocrlf`; they are SHA-1 in SHA-1 repositories.
+  Spec Kit's own `manifest_hash` covers only `extension.yml`, which is why it is not used.
+- **`agents_sha256`:** sha256 over the bytes of the Claude copies Spec Kit registered, found by the **exact** names in the `.registry`
+  entry (`registered_commands.claude`, `registered_skills`; a command `speckit.sf.specify` is the skill
+  `.claude/skills/speckit-sf-specify/SKILL.md`, else `.claude/commands/speckit.sf.specify.md`), never a glob, so `sf` and `sf-extra` do not
+  mix. Those copies are what the agent actually runs. Only the Claude layout is covered.
+- **Refused, not skipped:** an empty kit dir, a path with a control character, a kit path to which `.gitattributes` (or any attributes
+  source) gives `ident`, `filter` or `working-tree-encoding` (`git hash-object` would rewrite the file or run a filter driver, so the local
+  value could differ from the committed one; `text` and `eol` are fine; the check runs before anything is hashed), a symlink or other non-regular file, a file over 16 MiB,
+  a registry entry that is a symlink, corrupt, over 1 MiB or has a duplicate key. A kit installed with `specify extension add --dev`
+  has symlinked agent copies, so it **cannot be pinned**: reinstall without `--dev`. An `.registry` entry without `enabled` counts as
+  enabled (as upstream); an id that is not `[a-z0-9-]{1,40}` is reported as `unpinned` (`id: null`), never skipped; `ado` itself is not a
+  kit.
+- **The lockfile is read as hostile too:** at most 256 KiB, no duplicate key, schema 1, kit ids and 64-hex digests checked; `source`
+  must pass the profile's https URL rules and `version` be `[0-9A-Za-z.+-]{1,40}`, else it is read as `null`.
+
+`ado kits verify` (local, read-only, no token, no network) prints `{"kits": [{"id", "state"}], "findings": [...]}` for every kit in the registry, **disabled ones included** (`specify extension disable` only flips `enabled`; the agent copies stay on disk and invocable):
+`pinned`, `unpinned` (not in the lock), `changed` (a digest or the version differs, or a file could not be read; `reason` is one of
+`symlink`, `unreadable`, `empty`, `control-char`, `attributes`) or `stale` (locked but no longer in the registry; a pinned kit whose registry entry is removed while its files remain on disk is reported `stale`, and the strict kit rules (P2-9b) treat that as a finding). Exit 2 on any `unpinned` or `changed`
+kit, or when the registry cannot be trusted. Output carries kit ids (which match `[a-z0-9-]{1,40}`) and fixed words only, never kit text.
+`kits.dir_digest_at(repo, commit, id)` computes the same digest from the files of a commit (what CI will use; a symlink or submodule entry
+gives the value `"changed"`). This is process enforcement, not a security boundary: a digest says a kit is unchanged since someone
+looked, not that it is safe, and anyone who can edit both the kit and the lockfile can re-pin.
+
 ## Kits that do not write `tasks.md`
 
 `ado push` reads one format: the Spec Kit `tasks.md` checklist (`- [ ] T001 [P] ...`). If
