@@ -122,3 +122,10 @@ def test_history_scans_author_email_and_message(tmp_path, monkeypatch, capsys):
     assert TERM not in capsys.readouterr().out.lower()
     git(tmp_path, "commit", "-q", "--amend", "--reset-author", "-m", "mentions AcmeHealth")
     assert sc.main(["--history"]) == 1
+
+
+def test_secret_lists_equal():
+    """`ado.stack.SECRETS` is a copy of the standalone script's list (the script runs without the package): the two must not drift."""
+    from ado import stack
+
+    assert [(n, p.pattern, p.flags) for n, p in stack.SECRETS] == [(n, p.pattern, p.flags) for n, p in sc.SECRETS]

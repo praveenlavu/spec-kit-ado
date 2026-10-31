@@ -1,13 +1,17 @@
-"""Stack detection (`ado stack detect`, V3 piece 2, D§4): which stacks a repository holds, from the files tracked at a commit.
+"""Stack detection (`ado stack detect`, D§4) and profile validation (`stack.validate`, D§5), V3 piece 2.
 
 Process help, not a security boundary. Every path comes from the repository (in CI, from a PR), so it is untrusted text: it is only
 ever matched against fixed marker names and printed through `safe_path`. Stack ids, evidence and hints come from the marker table and
 fixed vocabularies, never from file contents; the few manifests that are read (from the commit's blobs, never the working tree) only
 set booleans and fixed words."""
+import datetime
 import fnmatch
 import json
 import os
 import re
+import urllib.parse
+
+from .config import _has_control
 
 MAX_CANDIDATES = 20000  # marker-named paths at depth <= 3 considered; more is refused (fail closed), never silently cut
 MAX_MANIFEST = 1 << 20  # bytes: a larger manifest is not read
@@ -228,3 +232,295 @@ def detect(repo=".", commit="HEAD"):
     highs = sum(s["confidence"] == "high" for s in stacks)
     return {"outcome": "unknown" if not highs else "detected" if highs == 1 else "multiple", "stacks": stacks,
             "domain_hints": sorted(domain), **({"note": "hints incomplete"} if incomplete[0] else {})}
+
+
+# ---- the stack profile (`ado.stack.json`, D§5): validation. The profile is attacker-controlled in CI and model-written at creation, so
+# `validate` is a trust boundary: a whitelist schema, a cap on every size and count, and FIXED error texts that name the rule and the
+# position (`stacks[2].commands.test.run`, `<key #3>` for an unknown key), never a value. Process help, not a sandbox. Commands in a profile are shell code that a human approves;
+# the validator does not make them safe.
+
+PROFILE_FILE = "ado.stack.json"
+MAX_PROFILE = 256 * 1024  # bytes
+MAX_STACKS, MAX_CONVENTIONS, MAX_DOD, MAX_SOURCES, MAX_COMMANDS, MAX_DETECTED_EVIDENCE, MAX_ERRORS = 8, 50, 30, 100, 20, 20, 100
+CAP_COMMAND, CAP_TEXT, CAP_URL, CAP_ROOT = 500, 300, 500, 200
+
+# copy of scripts/scrub_check.py SECRETS (that script runs standalone, so it is copied, not moved); tests/test_scrub_check.py pins equality
+SECRETS = [
+    ("github-token", re.compile(r"gh[pousr]_[A-Za-z0-9]{36,}")),
+    ("github-pat", re.compile(r"github_pat_[A-Za-z0-9_]{22,}")),
+    ("ado-pat", re.compile(r"\b[a-z0-9]{52}\b")),
+    ("aws-key", re.compile(r"AKIA[0-9A-Z]{16}")),
+    ("private-key", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+]
+_ID = re.compile(r"[a-z0-9-]{1,40}")
+_ROOT = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]*(/[A-Za-z0-9_][A-Za-z0-9._-]*)*")
+_SRC = re.compile(r"S[1-9][0-9]{0,3}")
+_DATE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+_URL_CHARS = re.compile(r"[\x21-\x7e]+")
+_SECRET_KEY = re.compile(r"token|key|sig|password|secret", re.I)
+_PRINTABLE = re.compile(r"[\x20-\x7e]+")  # a command is one line of printable ASCII: no look-alike letters, joiners or direction marks
+# a tripwire, not a sandbox: it catches the obvious fetch-and-run shapes (a word list, easy to get around: `| zsh`, `bash <(...)`)
+_TRIPWIRE = re.compile(r"\b(?:sudo|curl|wget|eval)\b|invoke-webrequest|\|\s*(?:sh|bash)\b|`|\$\(", re.I)
+_COMMANDS = ("test", "lint", "format_check", "build", "coverage")
+_COMMAND_LISTS = ("security", "org_only")
+_E_PARSE = "the profile is not valid JSON"
+
+
+class _DuplicateKey(ValueError):
+    pass
+
+
+def parse_json(raw, cap):
+    """The JSON value in `raw` (bytes, at most `cap` bytes, UTF-8, no duplicate object keys, no NaN/Infinity and no number that overflows
+    to infinity, such as 1e400). ValueError with a fixed text otherwise; the text never carries input."""
+    if not isinstance(raw, (bytes, bytearray)):
+        raise ValueError("the profile is not bytes")
+    if len(raw) > cap:
+        raise ValueError(f"the profile is larger than {cap} bytes")
+    try:
+        text = bytes(raw).decode("utf-8")
+    except UnicodeDecodeError:
+        raise ValueError("the profile is not valid UTF-8") from None
+
+    def pairs(items):
+        if len({k for k, _ in items}) != len(items):
+            raise _DuplicateKey()
+        return dict(items)
+
+    def constant(_):
+        raise ValueError()
+
+    def number(raw_number):
+        value = float(raw_number)
+        if value in (float("inf"), float("-inf")):
+            raise ValueError()
+        return value
+
+    try:
+        return json.loads(text, object_pairs_hook=pairs, parse_constant=constant, parse_float=number)
+    except _DuplicateKey:
+        raise ValueError("the profile has a duplicate key") from None
+    except (ValueError, RecursionError):
+        raise ValueError(_E_PARSE) from None
+
+
+def _url_error(u):
+    """A fixed rule text when `u` is not an acceptable https documentation URL, else None."""
+    if not _URL_CHARS.fullmatch(u) or "\\" in u:
+        return "must be printable ASCII without spaces or backslashes"
+    try:
+        p = urllib.parse.urlsplit(u)
+        p.port  # noqa: B018  (raises ValueError on a bad port)
+    except ValueError:
+        return "is not a valid URL"
+    if p.scheme != "https":
+        return "must use https"
+    if "@" in p.netloc:
+        return "must not contain user information"
+    if not p.hostname:
+        return "must have a host"
+    for part, need_eq in ((p.query, False), (p.fragment, True)):
+        for kv in re.split(r"[&;]", part):
+            if (not need_eq or "=" in kv) and _SECRET_KEY.search(urllib.parse.unquote(urllib.parse.unquote(kv.partition("=")[0]))):
+                return "must not carry a token, key, signature, password or secret parameter"
+    return None
+
+
+def _today():
+    return max(datetime.date.today(), datetime.datetime.now(datetime.timezone.utc).date())  # the later: no timezone makes today "future"
+
+
+def validate(data):
+    """Every D§5 rule on a parsed profile: `[{"path": str, "error": str}]`, empty when valid. The errors are fixed texts (rule + position
+    in the profile, an unknown key as `<key #n>`), never a value from the profile.
+
+    A valid profile is NOT a safe one: a command in it is shell code that a human approves by reading it, and this validator does not make
+    it safe. The checks (printable ASCII, one line, the tripwire word list) only catch accidents, look-alike text and the obvious
+    fetch-and-run lines copied from the web; they are not a sandbox."""
+    errs, total = [], [0]
+
+    def bad(path, msg):
+        total[0] += 1
+        if len(errs) < MAX_ERRORS:
+            errs.append({"path": path, "error": msg})
+
+    def j(path, key):
+        return f"{path}.{key}" if path else key
+
+    def obj(v, path, required, optional=()):
+        """`v` when it is an object whose keys are known (an unknown key is named by position), else None."""
+        if not isinstance(v, dict):
+            bad(path or "profile", "must be an object")
+            return None
+        for n, k in enumerate(v, 1):
+            if k not in required and k not in optional:
+                bad(j(path, f"<key #{n}>"), "unknown key")
+        for k in required:
+            if k not in v:
+                bad(j(path, k), "is required")
+        return v
+
+    def items(v, path, cap):
+        if not isinstance(v, list):
+            bad(path, "must be a list")
+        elif len(v) > cap:
+            bad(path, f"has more than {cap} entries")
+        else:
+            return v
+        return []
+
+    def text(v, path, cap=CAP_TEXT):
+        """True when `v` is a non-empty string within the cap, without control characters or a secret pattern."""
+        if not isinstance(v, str) or not v:
+            bad(path, "must be a non-empty string")
+        elif len(v) > cap:
+            bad(path, f"is longer than {cap} characters")
+        elif _has_control(v):
+            bad(path, "contains a control character")
+        elif any(pat.search(v) for _, pat in SECRETS):
+            bad(path, "matches a secret pattern")
+        else:
+            return True
+        return False
+
+    def date(v, path):
+        try:
+            ok = isinstance(v, str) and _DATE.fullmatch(v) and datetime.date.fromisoformat(v)
+        except ValueError:
+            ok = False
+        if not ok:
+            bad(path, "must be an ISO date (YYYY-MM-DD)")
+        elif ok > _today():
+            bad(path, "is in the future")
+
+    top = obj(data, "", ("schema", "version", "status", "stacks"), ("sources", "approval"))
+    if top is None:
+        return errs
+    if "schema" in top and (type(top["schema"]) is not int or top["schema"] != 1):  # exactly the int 1: not 1.0, not True
+        bad("schema", "must be 1")
+    v = top.get("version")
+    if "version" in top and (not isinstance(v, int) or isinstance(v, bool) or not 1 <= v <= 1_000_000):
+        bad("version", "must be a positive integer")
+    if "status" in top and top["status"] not in ("draft", "approved"):
+        bad("status", "must be draft or approved")
+
+    ids = set()  # the source ids that are defined (valid and present)
+    srcs = top.get("sources", {})
+    if not isinstance(srcs, dict):
+        bad("sources", "must be an object")
+    elif len(srcs) > MAX_SOURCES:
+        bad("sources", f"has more than {MAX_SOURCES} entries")
+    else:
+        for n, (k, s) in enumerate(srcs.items(), 1):
+            if not isinstance(k, str) or not _SRC.fullmatch(k):
+                bad(f"sources.<key #{n}>", "unknown key")  # the key is user text: named by position
+                continue
+            ids.add(k)
+            p = f"sources.{k}"
+            s = obj(s, p, ("kind", "retrieved", "evidence"), ("url", "path"))
+            if s is None:
+                continue
+            kind = s.get("kind")
+            if "kind" in s and kind not in ("official", "community", "implementation", "repo"):
+                bad(j(p, "kind"), "must be official, community, implementation or repo")
+            if "retrieved" in s:
+                date(s["retrieved"], j(p, "retrieved"))
+            if "evidence" in s:
+                text(s["evidence"], j(p, "evidence"))
+            for f, cap in (("url", CAP_URL), ("path", CAP_TEXT)):
+                if s.get(f) is not None and text(s[f], j(p, f), cap) and f == "url":
+                    e = _url_error(s[f])
+                    if e:
+                        bad(j(p, f), e)
+            if kind == "repo" and s.get("path") is None:
+                bad(j(p, "path"), "is required for a repo source")
+            if kind in ("official", "community", "implementation") and s.get("url") is None:
+                bad(j(p, "url"), "is required for this source kind")
+
+    def ref(v, path):
+        if v == "unverified":
+            return
+        if not isinstance(v, str) or not _SRC.fullmatch(v):
+            bad(path, "must be a source id (S<n>) or unverified")
+        elif v not in ids:
+            bad(path, "refers to a source that is not defined")
+
+    def command(v, path):
+        if (v := obj(v, path, ("run",), ("source", "why"))) is None:
+            return
+        run = v.get("run", "")
+        if "run" not in v:
+            pass  # reported as required
+        elif run is None:
+            if "why" not in v:
+                bad(j(path, "why"), "is required when run is null")
+        elif isinstance(run, str) and run and not _PRINTABLE.fullmatch(run):
+            bad(j(path, "run"), "must be one line of printable ASCII")
+        elif text(run, j(path, "run"), CAP_COMMAND) and _TRIPWIRE.search(run):
+            bad(j(path, "run"), "contains a refused command token")
+        if "why" in v:
+            text(v["why"], j(path, "why"))
+        if run is not None or "source" in v:
+            ref(v.get("source"), j(path, "source"))
+
+    def approval(a):
+        a = obj(a, "approval", ("by", "date", "sha256"), ("decision",))
+        if a is None:
+            return
+        for f in ("by", "decision"):
+            if f in a:
+                text(a[f], j("approval", f))
+        if "date" in a:
+            date(a["date"], "approval.date")
+        if "sha256" in a and not (isinstance(a["sha256"], str) and _SHA256.fullmatch(a["sha256"])):
+            bad("approval.sha256", "must be 64 lowercase hex digits")
+
+    seen = set()
+    for i, st in enumerate(items(top["stacks"], "stacks", MAX_STACKS) if "stacks" in top else ()):
+        p = f"stacks[{i}]"
+        if (st := obj(st, p, ("id", "root"), ("detected", "kit", "commands", "conventions", "dod"))) is None:
+            continue
+        sid = st.get("id")
+        if "id" in st and not (isinstance(sid, str) and _ID.fullmatch(sid)):
+            bad(j(p, "id"), "must be 1 to 40 characters of a-z, 0-9 and -")
+        elif sid in seen:
+            bad(j(p, "id"), "is a duplicate stack id")
+        elif "id" in st:
+            seen.add(sid)
+        root = st.get("root")
+        if "root" in st and not (isinstance(root, str) and len(root) <= CAP_ROOT and (root == "." or _ROOT.fullmatch(root))):
+            bad(j(p, "root"), 'must be "." or "/"-separated segments of letters, digits, _, . and - that start with a letter, digit or _')
+        elif isinstance(root, str) and any(pat.search(root) for _, pat in SECRETS):
+            bad(j(p, "root"), "matches a secret pattern")
+        if "kit" in st and st["kit"] is not None and not (isinstance(st["kit"], str) and _ID.fullmatch(st["kit"])):
+            bad(j(p, "kit"), "must be null or 1 to 40 characters of a-z, 0-9 and -")
+        if "detected" in st:
+            d = obj(st["detected"], j(p, "detected"), ("confidence", "evidence"))
+            if d is not None:
+                if d.get("confidence") not in ("high", "medium") and "confidence" in d:
+                    bad(j(p, "detected.confidence"), "must be high or medium")
+                for n, e in enumerate(items(d.get("evidence", []), j(p, "detected.evidence"), MAX_DETECTED_EVIDENCE)):
+                    text(e, j(p, f"detected.evidence[{n}]"))
+        if "commands" in st:
+            cmds = obj(st["commands"], j(p, "commands"), (), _COMMANDS + _COMMAND_LISTS)
+            for k in () if cmds is None else cmds:
+                c = j(p, f"commands.{k}")
+                if k in _COMMAND_LISTS:
+                    for n, v in enumerate(items(cmds[k], c, MAX_COMMANDS)):
+                        command(v, f"{c}[{n}]")
+                elif k in _COMMANDS and (cmds[k] is not None or k == "test"):
+                    command(cmds[k], c)
+        for key, field, cap in (("conventions", "rule", MAX_CONVENTIONS), ("dod", "item", MAX_DOD)):
+            for n, e in enumerate(items(st.get(key, []), j(p, key), cap)):
+                e = obj(e, f"{p}.{key}[{n}]", (field, "source"))
+                if e is not None:
+                    if field in e:
+                        text(e[field], f"{p}.{key}[{n}].{field}")
+                    if "source" in e:
+                        ref(e["source"], f"{p}.{key}[{n}].source")
+    if "approval" in top:
+        approval(top["approval"])
+    if total[0] > len(errs):
+        errs.append({"path": "profile", "error": "further errors omitted"})
+    return errs
