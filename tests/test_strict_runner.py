@@ -354,3 +354,11 @@ def test_seconds_stop_at_the_process_exit_not_the_pipe_drain(repo):
     cmd = f"{shlex.quote(sys.executable)} -c \"import subprocess; subprocess.Popen(['sleep', '2'], start_new_session=True)\""
     res = strict.run_at(str(repo), git(repo, "rev-parse", "--short", "HEAD"), cmd, 30)
     assert res["exit"] == 0 and res["seconds"] < 1.5
+
+
+def test_only_standard_lc_names_pass():
+    from ado import strict
+    env = {"LC_ALL": "C", "LC_CTYPE": "C", "LC_SFDX_AUTH_URL": "force://x", "LC_MY_DATA": "d", "LC_": "e"}
+    out = strict.scrubbed_env(env, home="/h")
+    assert out["LC_ALL"] == "C" and out["LC_CTYPE"] == "C"
+    assert not [k for k in out if k.startswith("LC_") and k not in ("LC_ALL", "LC_CTYPE")]

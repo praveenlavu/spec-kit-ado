@@ -126,6 +126,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
 
 ### Changed
 
+- Strict mode: the test run's environment passes only the 13 standard POSIX `LC_` locale variables, not every `LC_*` name (`LC_SFDX_AUTH_URL` and similar reached the command before).
 - Strict mode: `ado update <id> --state <done_state>` (or `--field System.State=<done_state>`, compared case-insensitively with the configured `done_state`) is refused (exit 2, nothing sent, pointing to `ado done <id>`), so the strict `done` check cannot be skipped by moving the story by hand. Other states and advisory mode are unchanged. The link-on-merge templates' `transition-state` / `transitionState` equal to `done_state` therefore fails under strict (a warning, the story is not closed): use `close-story: true` / `closeStory: true`, so `ado done` runs the strict check.
 - Strict mode: `ado strict verify --no-record` (the CI re-run) fails with the finding `override-in-force`, naming the override ids, while an override is in force (an `l2` or `test-command` override skips the run); `--allow-override` accepts it, and both re-run templates take an `allow-override` input (`allowOverride` on Azure Pipelines, default false) that adds the flag.
 - Strict mode: `strict check` (`pr` and `done`) reports `record-command-mismatch` when the record's `command-sha256` is not the first 12 hex of the sha256 of the test command in force (the target branch's in strict CI; an unset command with a record present is the same finding; `l2` covers it).

@@ -938,15 +938,17 @@ def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False)
 # and PUB_CACHE (older Dart kept credentials.json there) are deliberately absent. Profiles cannot add names.
 _ENV_ALLOW = ("PATH", "LANG", "TERM", "TMPDIR", "VIRTUAL_ENV", "JAVA_HOME", "GOPATH", "NODE_PATH", "GOROOT", "FLUTTER_ROOT",
               "DOTNET_ROOT", "ANDROID_HOME", "ANDROID_SDK_ROOT", "RUSTUP_HOME")
+_ENV_LC = frozenset(("LC_ADDRESS", "LC_ALL", "LC_COLLATE", "LC_CTYPE", "LC_IDENTIFICATION", "LC_MEASUREMENT", "LC_MESSAGES",
+                     "LC_MONETARY", "LC_NAME", "LC_NUMERIC", "LC_PAPER", "LC_TELEPHONE", "LC_TIME"))  # not any LC_* (LC_SFDX_AUTH_URL leaked)
 _ENV_SDK_PATHS = ("GOROOT", "FLUTTER_ROOT", "DOTNET_ROOT", "ANDROID_HOME", "ANDROID_SDK_ROOT", "RUSTUP_HOME")  # value must be an absolute path
 _ENV_DENY_NAMES = {"ADO_TOKEN", "GH_TOKEN", "GITHUB_TOKEN", "AZURE_DEVOPS_EXT_PAT", "SYSTEM_ACCESSTOKEN", "SSH_AUTH_SOCK"}
 _ENV_DENY_SUFFIX = ("_TOKEN", "_PAT", "_SECRET", "_KEY", "_PASSWORD", "_CREDENTIALS")
 
 
 def scrubbed_env(env, home="/nonexistent"):
-    """The environment a test run gets: only the allow-list (PATH, LANG, LC_*, TERM, TMPDIR and the toolchain variables
+    """The environment a test run gets: only the allow-list (PATH, LANG, the standard LC_ locale names, TERM, TMPDIR and the toolchain variables
     that are present), then a deny-list pass for secret-looking names (defence in depth). HOME is `home`, never the real one."""
-    out = {k: v for k, v in env.items() if k in _ENV_ALLOW or k.startswith("LC_")}
+    out = {k: v for k, v in env.items() if k in _ENV_ALLOW or k in _ENV_LC}
     out = {k: v for k, v in out.items() if k not in _ENV_SDK_PATHS or (os.path.isabs(v) and not _has_control(v))}
     out = {k: v for k, v in out.items() if not (k.upper() in _ENV_DENY_NAMES or k.upper().startswith("AWS_")
                                                   or k.upper().endswith(_ENV_DENY_SUFFIX))}
