@@ -67,6 +67,18 @@ answers in the story's comment thread, and a human records each verdict in their
 `ado decisions <id> --resolve` and commit and push the resolved lines to the PR branch before the merge (the PR branch must carry the `posted:` markers and the verdicts).
 In strict mode `ado done` refuses while any is open; if nothing was posted just approve. Approve it once they are all recorded; the story closes after merge.
 
+**Business rules.** With `rules.enabled` in `ado.config.json` the same steps run business rules (see
+[business rules](https://github.com/praveenlavu/spec-kit-ado/blob/main/docs/business-rules.md)): no step was added, no input and no shell line changed,
+and with `rules` absent or `enabled: false` the run is exactly what it was. The prompts do the work: `pull` pulls the Epic/Feature rules
+(`ado rules`, GET only) before specify and `ado dod` writes `Rules from:`; `plan` tags the AC rows, raises a question for a rule no AC reflects and
+records the first `ado rules <id> --confirm`; the exclusions it records after a PO answer are posted by the existing `decisions-loop`, behind
+`approve-decisions`, and validated by a human in `wait-po-validation` (`ado decisions <id> --resolve`); `pr-prepare` commits the
+`Rules_<id>.md` files with the spec and the ledger. `gate-check` runs the online `ado gate`, so `rule_drift` is judged there: a drift (or
+`rules-unreachable`, the gate's token cannot read the Epic/Feature) blocks the run in strict mode, and in advisory mode it is reported. A
+drifted, changed or unconfirmed rule is never fixed by the run: the prompt writes one `Needs human decision` line (rule ids only), the
+human re-pulls (`ado rules <id>`) and re-confirms in their own terminal, then resumes. Decisions kept on the Epic or Feature
+(`ado decisions <feature id> --post`) are posted by hand, outside the workflow.
+
 **End of the flow.** The workflow ends at the open PR; nothing in it ticks ledger section 5, so `ado done` reports the story not ready after the merge until that section is ticked. After the merge run `/speckit-ado-done <id>` (it ticks section 5 only with evidence, shows the plan, then closes the story), or tick section 5 by hand and commit it before CI `close-story` runs. In strict mode `done` additionally runs the strict `done` check. In strict mode set `close-story: true`: without it no strict `done` runs.
 
 Each `*-loop` is a preview (`ado … --plan-out`), a gate that shows that plan file, and an apply

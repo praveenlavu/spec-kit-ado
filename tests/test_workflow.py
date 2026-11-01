@@ -1,6 +1,8 @@
+import os
 import re
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -478,3 +480,45 @@ def test_stack_check_is_a_noop_in_advisory(tmp_path, monkeypatch, capsys):
 def test_workflow_docs_describe_stack_check(path):
     text = " ".join((ROOT / path).read_text(encoding="utf-8").split())
     assert "stack-check" in text and "ado stack show --check" in text and "speckit.ado.stack" in text
+
+
+# ---- piece 3 (P3-11): business rules change prompts and docs, never the workflow ----
+BASE_WORKFLOW_SHA256 = "1f32eecbd775f85542c48d0c4ccd227ce5a679f760d09659d260ea27f7d23812"  # workflow.yml at the P3-11 base, version line blanked
+
+
+def test_workflow_unchanged_by_rules():
+    import hashlib
+    raw = (ROOT / "workflows/ado-lifecycle/workflow.yml").read_bytes()
+    norm = re.sub(rb'(?m)^  version: "[^"]*"$', b'  version: "X"', raw)  # the release bump may change the version line, nothing else
+    assert hashlib.sha256(norm).hexdigest() == BASE_WORKFLOW_SHA256, "workflow.yml changed: business rules add no step, input or shell line"
+    # the step graph is the one before the rules: no step id, shell line, gate message or argument names a rule
+    steps = _steps()
+    assert len(steps) == 54
+    for s in steps:
+        assert "rule" not in str(s).lower().replace("rules/", "").replace("review_block_on", ""), s["id"]
+    assert not [s for s in steps if "ado rules" in s.get("run", "")]
+
+
+def _upstream_engine():
+    """Spec Kit's workflow engine. Missing: skip locally, but fail under CI (which installs Spec Kit), like `conftest.require_specify`."""
+    try:
+        import specify_cli.workflows.engine as engine  # noqa: PLC0415
+    except ImportError:
+        (pytest.fail if os.environ.get("CI") else pytest.skip)("Spec Kit (specify_cli.workflows.engine) is not importable")
+    return engine
+
+
+def test_workflow_passes_the_upstream_validator():
+    engine = _upstream_engine()
+    definition = engine.WorkflowDefinition.from_yaml(str(ROOT / "workflows/ado-lifecycle/workflow.yml"))
+    assert engine.validate_workflow(definition) == []
+
+
+@pytest.mark.parametrize("ci,outcome", [("true", pytest.fail.Exception), (None, pytest.skip.Exception)])
+def test_missing_upstream_engine_fails_under_ci_and_skips_locally(monkeypatch, ci, outcome):
+    monkeypatch.setitem(sys.modules, "specify_cli.workflows.engine", None)  # makes the import raise ImportError
+    monkeypatch.delenv("CI", raising=False)
+    if ci:
+        monkeypatch.setenv("CI", ci)
+    with pytest.raises(outcome):
+        _upstream_engine()
