@@ -1808,3 +1808,16 @@ def test_rules_file_doc_pins():
                  "forge a `### BR-...` heading", "are **not** scrubbed for e-mail addresses", "not a symlink and not a hard link",
                  "text edited under an unchanged heading shows as a mismatch"):
         assert word in text, word
+
+
+def test_rules_pull_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("## Pulling rules", "`ado rules <story id>`", "up to **3 links**", "`bad-parent-link`", "Every request is a GET",
+                 "All of them finish before any file is written", "never rule text or a title", "the `Last pulled` date is kept",
+                 "process enforcement, not a security boundary", "`decisions` (for an ancestor", "works whatever `rules.enabled` says", "run the command again", "`rules-problem`", "no leading zero", "`ado decisions <feature id> --post`"):
+        assert word in text, word
+    assert "which is not built yet" not in text
+    assert "| `rules <id>` |" in _flat("README.md") and "GET only" in _flat("README.md")
+    assert "`ado rules` (GET only; writes local `Rules_<id>.md` files)" in _flat("AGENTS.md")
+    assert "`ado rules` (GET only)" in _flat("rules/hitl.md") and "`dod/Rules_<id>.md` via `ado rules <id>`" in _flat("rules/hitl.md")
+    assert "`ado rules <story id>` and the hierarchy walk `rules.walk` (P3-4b)" in _flat("CHANGELOG.md")

@@ -9,7 +9,7 @@ Hard rules (summary of `rules/hitl.md`):
 
 - Never ask for, accept, echo, log or store a token. If one is pasted into chat, do not
   use it; tell the user to revoke it and run `ado setup` in their own terminal.
-- Read-only calls (`ado get`, `ado query`, `ado comments`, `ado attachments`, `ado questions`, `ado decisions`, `ado dod`, `ado gate`, `ado stack detect`, `ado stack show`, `ado kits verify`, any dry run) need no
+- Read-only calls (`ado get`, `ado query`, `ado comments`, `ado attachments`, `ado questions`, `ado decisions`, `ado dod`, `ado rules` (GET only; writes local `Rules_<id>.md` files), `ado gate`, `ado stack detect`, `ado stack show`, `ado kits verify`, any dry run) need no
   approval.
 - Any ADO mutation (`ado create`, `update`, `comment`, `link` (`--to`, `--parent`, `--url`), `attach`, and the batch
   verbs `push`, `done`, `pr create`, `questions --post`, `decisions --post`, `branch --link` with `--apply`), opening a PR, pushing a

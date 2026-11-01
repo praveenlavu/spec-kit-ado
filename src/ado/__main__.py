@@ -6,7 +6,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, attachments, branch, comments, decisions, dod, done, gate, kits, prs, push, questions, stack, strict, tasks, workitems
+from . import __version__, attachments, branch, comments, decisions, dod, done, gate, kits, prs, push, questions, rules, stack, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid
@@ -294,6 +294,11 @@ def dispatch(client, args):
         res = decisions.apply_post(client, args.id, plan, path) if args.apply else {}
         return {"id": args.id, "applied": args.apply, "action": plan["action"], "lines": plan["lines"],
                 "comment_id": res.get("comment_id"), **({"note": "no decisions file; nothing to post"} if path is None else {})}
+    if args.command == "rules":
+        try:
+            return rules.pull(client, args.id)  # GETs only; local files; ids, counts and keys out
+        except AuthError as e:
+            raise AdoError(str(e))
     if args.command == "gate":
         path = dod.dod_file(client.config.dod_path, args.id)
         if not path.exists():
@@ -613,6 +618,9 @@ def main(argv=None):
     p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
     p.add_argument("--expect-plan", metavar="PATH",
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+    p = sub.add_parser("rules", help="Pull the business rules of the story's Epic/Feature ancestors into <dod_path>/Rules_<id>.md "
+                       "(reads ADO with GET only)")
+    p.add_argument("id", type=int)
     p = sub.add_parser("decisions", help="List the open, validated and rejected D<n> lines of Decisions_<id>.md; --add "
                        "records one; --post sends the unposted open ones as one new comment (dry run unless --apply)")
     p.add_argument("id", type=int)
@@ -796,6 +804,8 @@ def main(argv=None):
             parser.error(stack.E_ROLE)
         if getattr(args, "story", None) is not None and not stack.valid_story(args.story):
             parser.error("--story must be a work item id (digits only, no leading zero)")
+    if args.command == "rules" and not 1 <= args.id <= 999999999:
+        parser.error("the story id must be between 1 and 999999999")
     if args.command == "branch":
         if (args.id is None) == (args.id_from is None):
             parser.error("give a story id or --id-from NAME (not both)")

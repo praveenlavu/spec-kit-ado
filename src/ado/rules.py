@@ -5,11 +5,14 @@ never rule text. Every pass is linear: input is capped, scans use str.find, and 
 `dod._text` regexes only ever see input shaped so they cannot backtrack badly (see `normalise`)."""
 import os
 import re
+import stat
 import unicodedata
 import urllib.parse
+from datetime import date
 from pathlib import Path
 
-from . import comments, decisions, dod
+from . import __version__, comments, decisions, dod, workitems
+from .client import AdoError
 
 BULLETS = "•·▪◦○●■□►▸➢➤✓✔§-*–—"  # fixed set; `o` only when alone, list numbers `1.`/`1)`; nothing else is stripped (`€5 off` stays)
 MAX_RAW = 1 << 20  # ADO's Description limit; a bigger input is refused, not truncated
@@ -484,3 +487,121 @@ def parse_file(md, wid):
         sec = "\n".join(v["lines"]).rstrip()
         out["rules"][k] = {"status": v["status"], "hash": v["hash"], "section": sec, "body_hash": _body_hash(k, v["status"], sec.split("\n")[1:])}
     return out
+
+
+# ---- the hierarchy walk and `ado rules <id>` (P3-4b): GETs only; every GET finishes before any file is written ----
+
+WALK_ISSUES = {"bad-parent-link": "a work item's parent link does not end in a work item id, or there is more than one"}
+HIERARCHY_UP = "System.LinkTypes.Hierarchy-Reverse"
+MAX_LINKS = 3
+
+
+def _parent(wi):
+    """The parent id of a fetched work item: None (no parent), an int, or False (a link that cannot be trusted: more than one parent, or
+    a URL whose last segment is not a work item id). The id is the only thing taken from the URL."""
+    ups = [r for r in (wi.get("relations") or []) if isinstance(r, dict) and r.get("rel") == HIERARCHY_UP]
+    if not ups:
+        return None
+    url = ups[0].get("url")
+    seg = url.rsplit("/", 1)[-1] if isinstance(url, str) else ""
+    return int(seg) if len(ups) == 1 and _WID.fullmatch(seg) else False
+
+
+def walk(client, story_id, types, problems=None):
+    """GET the story, then follow `Hierarchy-Reverse` at most 3 links up (a visited set stops a cycle). Returns, nearest first,
+    `{"id", "type", "work_item", "parsed"}` for each ancestor whose type (case-folded) is in `types` and that holds a Business rules
+    section or a problem in it (an unclosed comment hides the section, which must not pass as "no section"). A bad parent link stops
+    the walk and appends `bad-parent-link` to `problems` (as `{"id": the work item whose link was bad, ...}`). Any ADO error propagates: nothing is partial."""
+    want = {str(t).casefold() for t in types}
+    out, seen, wi = [], {story_id}, workitems.get(client, story_id)
+    if wi.get("id") != story_id:  # ADO answered with another work item than the one asked for
+        raise AdoError("ADO returned a different work item than the one requested")
+    for _ in range(MAX_LINKS):
+        child, pid = wi.get("id"), _parent(wi)
+        if pid is None or pid in seen:
+            break
+        wi = workitems.get(client, pid) if pid else None
+        if not pid or wi.get("id") != pid:  # the link was bad, or ADO answered with another work item
+            if problems is not None:
+                problems.append({"id": child, "rule": None, "level": "error", "issue": "bad-parent-link"})
+            break
+        seen.add(pid)
+        f = wi.get("fields") or {}
+        kind = f.get("System.WorkItemType")
+        if isinstance(kind, str) and kind.casefold() in want:
+            html = f.get("System.Description")
+            lines, probs = normalise(html if isinstance(html, str) else "")
+            parsed = parse(lines, pid, probs)
+            if parsed["found"] or parsed["problems"]:
+                out.append({"id": pid, "type": kind, "work_item": wi, "parsed": parsed})
+    return out
+
+
+def _today():
+    return date.today().isoformat()
+
+
+def _current(path, wid):
+    """The text of the file about to be replaced, None when absent. A symlink, a non-regular file or an unreadable one is refused (a fixed
+    text), so nothing is ever written through or over it."""
+    if not os.path.lexists(path):
+        return None
+    try:
+        st = os.lstat(path)
+        if not stat.S_ISREG(st.st_mode) or st.st_size > MAX_RAW:
+            raise OSError
+        with open(path, encoding="utf-8", newline="") as f:
+            return f.read()
+    except (OSError, UnicodeDecodeError):
+        raise ValueError(f"the rules file of work item {wid} exists but is not a readable regular file; move it away and pull again")
+
+
+def _render(item, org, project, pulled, current):
+    """The new text of one file. `pulled` is kept from `current` when that gives identical bytes, so a re-pull with nothing new in ADO
+    is no change (the date alone never makes a diff); the file's CRLF terminator is kept."""
+    kept = re.search(r"^- \*\*Last pulled:\*\* (\S+) \u00b7", (current or "").split("\n## Rules\n", 1)[0], re.M)
+    crlf = bool(current) and current.splitlines(keepends=True)[0].endswith("\r\n")
+    for stamp in ((kept.group(1),) if kept and _PULLED.fullmatch(kept.group(1)) else ()) + (pulled,):
+        text = render_file(item["work_item"], item["parsed"], org, project, stamp, __version__)
+        text = text.replace("\n", "\r\n") if crlf else text
+        if text == current:
+            return text, False
+    return text, True
+
+
+def pull(client, story_id):
+    """`ado rules <id>`: walk, then (all GETs done) write `<dod_path>/Rules_<ancestor id>.md` for each kept ancestor whose bytes change.
+    Returns ids, counts, keys and paths only, never rule text or a title; every problem carries the id of the work item it belongs to. Works whatever `rules.enabled` says (only prompts, the gate and strict read it). ValueError (exit 2): a file that cannot be replaced,
+    an unreadable decisions file, a failed write; nothing is written before every check has passed."""
+    cfg = client.config
+    problems = []
+    found = walk(client, story_id, cfg.rules["types"], problems)
+    from . import gate  # lazy: gate will import this module
+    plan, decs, counts = [], [], {"approved": 0, "draft": 0, "retired": 0}
+    for it in found:
+        path = rules_file(cfg.dod_path, it["id"])
+        cur = _current(path, it["id"])
+        text, changed = _render(it, cfg.organization, cfg.project, _today(), cur)
+        plan.append((it["id"], path, text, changed))
+        problems += [{"id": it["id"], "rule": p["rule"], "level": p["level"], "issue": p["issue"]} for p in it["parsed"]["problems"]]
+        for r in it["parsed"]["rules"]:
+            counts[r["status"]] += 1
+        dpath = decisions.decisions_file(cfg.dod_path, it["id"])
+        if os.path.lexists(dpath):
+            md = gate._read(dpath, ".", set())  # confined like the gate's reads
+            if md is None:
+                raise ValueError(f"the decisions file of work item {it['id']} exists but is not a readable regular file")
+            d = decisions.parse_decisions(md)
+            decs.append({"id": it["id"], "open": len(d["open"]), "rejected": len(d["rejected"])})
+    for wid, path, text, changed in plan:
+        if changed:
+            try:
+                decisions._atomic_write(path, text)
+                with open(path, encoding="utf-8", newline="") as f:
+                    ok = f.read() == text
+            except OSError:
+                ok = False
+            if not ok:
+                raise ValueError(f"could not write the rules file of work item {wid}")
+    return {"from": [p[0] for p in plan], "files": [str(p[1]) for p in plan], "rules": counts, "problems": problems,
+            "changed": [p[0] for p in plan if p[3]], "decisions": decs}

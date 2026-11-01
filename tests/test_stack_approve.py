@@ -24,6 +24,7 @@ from tests.test_stack_show import MARKER, put
 
 ROOT = Path(__file__).resolve().parent.parent
 TODAY = datetime.date(2026, 10, 31)
+REAL_TODAY = stack._today  # a real child process uses the real clock: a test that reads its result back must not pin the date
 CONFIG = {"organization": "contoso", "project": "Fabrikam", "mode": "strict", "strict": {"test_timeout": 900}}
 
 
@@ -645,8 +646,9 @@ def test_apply_requires_the_typed_code(repo, monkeypatch, capsys):
         assert code == 2 and err.endswith("error: not confirmed: nothing was approved\n") and snapshot(repo) == before, err
 
 
-def test_a_code_typed_before_the_prompt_is_discarded(repo):
+def test_a_code_typed_before_the_prompt_is_discarded(repo, monkeypatch):
     """The code is computable beforehand (anyone can run the same hash); what is typed into the terminal before the prompt is flushed."""
+    monkeypatch.setattr(stack, "_today", REAL_TODAY)  # the child approves with the real date; the pinned 2026-10-31 would call it "in the future" after UTC midnight
     setup(repo)
     before = snapshot(repo)
     early = stack.prepare_approve(repo, str(repo / "ado.config.json"))["code"]

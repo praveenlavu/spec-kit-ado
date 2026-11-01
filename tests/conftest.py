@@ -28,7 +28,10 @@ class FakeClient:
         self.calls.append(
             {"method": method, "path": path, "body": body, "content_type": content_type}
         )
-        return self._responses.pop(0) if self._responses else {}
+        out = self._responses.pop(0) if self._responses else {}
+        if isinstance(out, BaseException):  # a queued error is raised, as `get_bytes` does
+            raise out
+        return out
 
     def get(self, path):
         return self.request("GET", path)
