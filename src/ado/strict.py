@@ -1098,33 +1098,88 @@ _TARGET_LEDGER_LABEL = "the story ledger at the target branch"
 _DOD_PATH = re.compile(r"[\w. /-]+")  # plain names only: no pathspec magic (`:(glob)`), glob characters or control characters
 
 
+def _ledger_rel(dod_path, story_id):
+    """The repo-relative path of the story's ledger, or None when `dod_path` could name anything but a plain path inside the repository."""
+    rel = posixpath.normpath(dod.dod_file(dod_path, story_id).as_posix())
+    return rel if _DOD_PATH.fullmatch(rel) and not rel.startswith(("/", "../")) else None
+
+
+def _reviewed_at(repo, commit, rel):
+    """`(ledger exists, {rule id: hash8})` of the story ledger `rel` at the resolved `commit` (`_blob_at`: 1 MiB, regular file; hashes `{}` for no line
+    or an untrusted header). ConfigInvalid / UnicodeDecodeError when it cannot be read."""
+    raw = _blob_at(repo, commit, rel, gate.MAX_READ, _TARGET_LEDGER_LABEL)
+    return (False, {}) if raw is None else (True, dod.ledger_rules_reviewed(raw.decode("utf-8"))["hashes"])
+
+
 def target_reviewed(dod_path, repo, base, story_id):
     """`{rule id: hash8}` of the `Rules reviewed:` line in the story's ledger on the PR's target `base` (resolved as `_resolve_base` does: a
     branch or a full commit id, never a tag), read through `_blob_at` (1 MiB, regular file). `{}` when the target has no ledger, no such line
     or a header that cannot be trusted (nothing recorded, never a record). None when it cannot be read (git failing, a symlink, oversize,
     not UTF-8, a `dod_path` outside the repository, a base that is no commit here): the caller reports that, it is never a pass."""
-    commit = _resolve_base(repo, base)
-    rel = posixpath.normpath(dod.dod_file(dod_path, story_id).as_posix())
-    if not (commit and _DOD_PATH.fullmatch(rel) and not rel.startswith(("/", "../"))):
+    commit, rel = _resolve_base(repo, base), _ledger_rel(dod_path, story_id)
+    if not (commit and rel):
         return None
     try:
-        raw = _blob_at(repo, commit, rel, gate.MAX_READ, _TARGET_LEDGER_LABEL)
-        return {} if raw is None else dod.ledger_rules_reviewed(raw.decode("utf-8"))["hashes"]
+        return _reviewed_at(repo, commit, rel)[1]
     except (ConfigInvalid, UnicodeDecodeError):
         return None
 
 
+MAX_HISTORY = 200  # ledger versions of `base..head` that are compared; more is the fixed RECONFIRM_TOO_LONG note, never a partial answer
+
+
+def reconfirmed_vs_base(dod_path, repo, base, story_id, new_hashes, head="HEAD"):
+    """What `rules.reconfirmed` is for the PR range `base..head`: the list `rules.reconfirmed(old, new_hashes)`, or a FIXED note text (str) when
+    that cannot be answered. `old` is, per rule id, the first record that differs from the head's across the target branch's ledger and every version of the ledger that
+    a commit of `git log --full-history base..head -- <ledger>` made (a first PR has no ledger on the target: the branch's own history is the
+    only record, so a commit that deleted the confirmed line and a later free `--confirm` shows). Merge commits are ignored (CI judges the PR's merge
+    checkout). Notes: `RECONFIRM_UNREADABLE` (the target ledger: git failing, a symlink, over 1 MiB, not UTF-8, a bad `dod_path`, a base or head that
+    is no commit), `RECONFIRM_BRANCH_UNREADABLE` (the log, or a version in the range), `RECONFIRM_TOO_LONG` (more than MAX_HISTORY commits touch
+    the ledger) and `RECONFIRM_FIRST_PR` (no ledger on the target, no earlier record in the range, and the head records a rule)."""
+    commit, tip, rel = _resolve_base(repo, base), _rev(repo, head), _ledger_rel(dod_path, story_id)
+    if not (commit and tip and rel):
+        return rules.RECONFIRM_UNREADABLE
+    # --no-merges: a merge commit (CI checks out the PR's synthetic merge) repeats the head's record and is nobody's earlier record; the walk still
+    # goes through merges, so a record on a merged-in side branch is found
+    listed = _out(repo, "log", "--full-history", "--no-merges", "--topo-order", "--reverse", "--format=%H", f"--max-count={MAX_HISTORY + 1}", "--end-of-options",
+                  f"{commit}..{tip}", "--", rel)
+    shas = listed.decode("ascii", "replace").split() if listed is not None else None
+    if shas is None or any(not re.fullmatch(r"[0-9a-f]{40}", x) for x in shas):
+        return rules.RECONFIRM_BRANCH_UNREADABLE
+    if len(shas) > MAX_HISTORY:
+        return rules.RECONFIRM_TOO_LONG
+    try:
+        target_has_ledger, recorded = _reviewed_at(repo, commit, rel)
+    except (ConfigInvalid, UnicodeDecodeError):
+        return rules.RECONFIRM_UNREADABLE
+    try:
+        versions = [recorded] + [_reviewed_at(repo, sha, rel)[1] for sha in shas]  # oldest first: the first record of an id is the baseline
+    except (ConfigInvalid, UnicodeDecodeError):
+        return rules.RECONFIRM_BRANCH_UNREADABLE
+    # An id is listed when ANY earlier version records it with another hash than the head (the target's value first, then the oldest): the order of
+    # sibling branches in the log is not a history, so the first value is never trusted to be "the" earlier one.
+    old = {}
+    for v in versions:
+        for rid, h in v.items():
+            if h != new_hashes.get(rid):
+                old.setdefault(rid, h)
+    if not target_has_ledger:  # the head's own commit is no earlier record of it: with no other recorded version there is nothing to compare
+        own = 1 if new_hashes and any(v == new_hashes for v in versions[1:]) else 0
+        if sum(1 for v in versions if v) - own <= 0:
+            return rules.RECONFIRM_FIRST_PR if new_hashes else []  # worth a note only when the head records a rule
+    return rules.reconfirmed(old, new_hashes)
+
+
 def _reconfirmed_warnings(c, target):
-    """For `strict check --phase pr|done --base REF` with rules enabled: one warning naming each rule id the target branch's ledger records that
-    this ledger lacks or records with another hash (re-confirmed without the target branch's recorded hash; check the PR diff), or the fixed unreadable text. A note, never a
-    finding. [] otherwise (rules off, no `--base`, no ledger, nothing reconfirmed): the output is the baseline."""
+    """For `strict check --phase pr|done --base REF` with rules enabled: one warning naming each rule id the target branch's ledger or an earlier
+    ledger version of the PR records that this ledger lacks or records with another hash (check the PR diff), or the fixed note text. A note,
+    never a finding. [] otherwise (rules off, no `--base`, no ledger, nothing reconfirmed): the output is the baseline."""
     if target is None or not c.cfg.rules["enabled"] or c.ledger is None or c.phase not in ("pr", "done"):
         return []
-    old = target_reviewed(c.cfg.dod_path, c.repo, target, c.id)
-    if old is None:
-        return [rules.RECONFIRM_UNREADABLE]
-    items = rules.reconfirmed(old, dod.ledger_rules_reviewed(c.ledger)["hashes"])
-    return [f"rules reconfirmed: {rules.reconfirmed_text(items)}; {rules.RECONFIRM_NOTE}"] if items else []
+    res = reconfirmed_vs_base(c.cfg.dod_path, c.repo, target, c.id, dod.ledger_rules_reviewed(c.ledger)["hashes"], c.rev)
+    if isinstance(res, str):
+        return [res]
+    return [f"rules reconfirmed: {rules.reconfirmed_text(res)}; {rules.RECONFIRM_NOTE}"] if res else []
 
 
 _REVIEW_FIX = "run speckit.ado.review, fix what it blocks on, commit the ledger"

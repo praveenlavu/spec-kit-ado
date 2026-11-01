@@ -816,7 +816,11 @@ DRIFT_OFFLINE = {"evaluated": False, "drift": [], "unreachable": False, "note": 
 
 
 RECONFIRM_UNREADABLE = "rules reconfirmed: target ledger unreadable"  # the target branch's ledger could not be read: `reconfirmed` is omitted, never []
-RECONFIRM_NOTE = "re-confirmed without the target branch's recorded hash: check the PR diff"  # a note until piece 4's approver-comment path can clear it (then a block)
+RECONFIRM_TOO_LONG = "rules reconfirmed: history too long to compare"  # more ledger versions in base..head than strict.MAX_HISTORY
+RECONFIRM_FIRST_PR = ("rules reconfirmed: target branch has no ledger for this story; first PR: reconfirmation cannot be compared")  # [] would look like a pass
+RECONFIRM_BRANCH_UNREADABLE = "rules reconfirmed: a ledger version in the branch history is unreadable"
+RECONFIRM_NOTES = (RECONFIRM_UNREADABLE, RECONFIRM_BRANCH_UNREADABLE, RECONFIRM_TOO_LONG, RECONFIRM_FIRST_PR)
+RECONFIRM_NOTE = "differs from the earlier recorded hash: check the ledger history"  # a note until piece 4's approver-comment path can clear it (then a block)
 
 
 def reconfirmed(old, new):

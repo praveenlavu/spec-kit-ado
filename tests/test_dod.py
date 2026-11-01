@@ -724,6 +724,66 @@ def test_refresh_refuses_an_invalid_rules_reviewed_line(tmp_path, bad):
     assert p.read_bytes().decode("utf-8") == md
 
 
+REVIEWED_LINES = [f"- **Rules reviewed:** {REVIEWED}", "- **Rules reviewed:** none", "- **Rules reviewed:** BR-1201-1", "- **Rules reviewed:** ",
+                  "- **Rules reviewed:** BR-1201-1@3f2a9c1b\n- **Rules reviewed:** BR-1200-1@0c77e2d4"]  # valid, none, malformed, empty, repeated
+
+
+@pytest.mark.parametrize("line", REVIEWED_LINES)
+def test_force_refuses_with_reviewed_line_and_leaves_ledger_untouched(tmp_path, monkeypatch, capsys, line):
+    m, _ = env(tmp_path, monkeypatch, [STORY], {"enabled": False})
+    (tmp_path / "dod").mkdir()
+    old = render_dod(STORY, "contoso", "Fabrikam", "old").replace("\n\n## 1. ", f"\n{line}\n\n## 1. ", 1)
+    p = tmp_path / "dod" / "DoD_1001.md"
+    p.write_bytes(old.encode("utf-8"))
+    code, err = _run_dod(m, capsys, "--force")
+    assert code == 2 and "refusing to --force" in err and "ado rules <id> --confirm" in err and "Rules reviewed" in err
+    assert _ledger(tmp_path) == old and list((tmp_path / "dod").iterdir()) == [p]  # untouched, no temp file left
+    assert "The branch history belongs to the PR author: a squash or rebase before pushing erases this trace." in err
+    with pytest.raises(DodExists, match="refusing to --force"):
+        write_dod(STORY, tmp_path / "dod", "contoso", "Fabrikam", force=True)
+    assert _run_dod(m, capsys, "--refresh")[0] in (0, 2)  # --refresh is the way that keeps the line (a malformed one is refused, as before)
+
+
+def test_force_refuses_a_reviewed_line_in_an_untrusted_header_and_hostile_bytes(tmp_path):
+    p = tmp_path / "DoD_1001.md"
+    for old in (b"# t <!--\n- **Rules reviewed:** BR-1201-1@3f2a9c1b\n\n## 1. x\n", b"# t \xff\xfe\n\n- **Rules reviewed:** BR-1201-1@3f2a9c1b\n\n## 1. x\n"):
+        p.write_bytes(old)
+        with pytest.raises(DodExists, match="refusing to --force"):
+            write_dod(_wi(), tmp_path, "o", "p", force=True)
+        assert p.read_bytes() == old
+
+
+def test_advice_never_says_use_force_without_the_reviewed_line_caveat(tmp_path):
+    """Every message that points to --force says it refuses while a `Rules reviewed:` line exists."""
+    p = tmp_path / "DoD_1001.md"
+    base = render_dod(_wi(), "o", "p")
+    p.write_bytes(base.encode("utf-8"))
+    with pytest.raises(DodExists) as e:
+        write_dod(_wi(), tmp_path, "o", "p")
+    texts = [str(e.value)]
+    p.write_bytes(base.replace("## 2. Brainstorm", "<!-- ## 2. Brainstorm", 1).encode("utf-8"))  # unclosed comment outside section 1
+    with pytest.raises(DodExists) as e:
+        write_dod(_wi(), tmp_path, "o", "p", refresh=True)
+    texts.append(str(e.value))
+    p.write_bytes(base.replace("## 2. Brainstorm & plan", "## 2. other", 1).encode("utf-8"))  # no section 2 marker
+    with pytest.raises(DodExists) as e:
+        write_dod(_wi(), tmp_path, "o", "p", refresh=True)
+    texts.append(str(e.value))
+    for t in texts:
+        assert "--force" in t and "Rules reviewed" in t and "removal is traced" in t, t
+    readme = " ".join(open("README.md", encoding="utf-8").read().split())
+    assert "use `--force` to start over (`--force` refuses while the ledger has a `Rules reviewed:` line" in readme
+
+
+def test_force_without_reviewed_line_unchanged(tmp_path):
+    p = tmp_path / "DoD_1001.md"
+    for old in (render_dod(_wi(), "o", "p", "old"), render_dod(_wi(), "o", "p", "old", rules_from=[7]),  # no line; only Rules from
+                render_dod(_wi(**{"System.Title": "Rules reviewed: x - **Rules reviewed:** y"}), "o", "p", "old")):  # the title mentions it
+        p.write_bytes(old.encode("utf-8"))
+        write_dod(_wi(), tmp_path, "o", "p", synced="2026-07-14", force=True)
+        assert p.read_text(encoding="utf-8") == render_dod(_wi(), "o", "p", "2026-07-14")
+
+
 def test_ancestor_get_failure_exit_1_ledger_untouched(tmp_path, monkeypatch, capsys):
     for refresh in (False, True):
         root = tmp_path / str(refresh)

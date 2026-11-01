@@ -346,7 +346,7 @@ def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, 
     `{"files": {work item id: rules.parse_file result}, "drift": rules.drift(...) result}` for the files `Rules from:` names that could be read
     (the GETs of the drift check are made by the caller; a context without `drift` counts as not checked), and the result gains
     `rules` = `rules.coverage(...)` at phase `pr` plus `drift`, `unreachable` and, when the live rules were not read, `drift_note`; with `reconfirmed` in
-    the context (`--base`: a list from `rules.reconfirmed`, None when the target ledger was unreadable) also `reconfirmed` or `reconfirmed_note`."""
+    the context (`--base`: a list from `rules.reconfirmed`, or a fixed note text from `rules.RECONFIRM_NOTES` when it cannot be compared) also `reconfirmed` or `reconfirmed_note`."""
     rows = parse_section3(ledger_md)
     trace = check_traceability(rows, sources, len(ac_lines(ledger_md)))
     gaps = scan_assertions(changed, DEFAULT_TESTS if tests is None else tests)
@@ -379,8 +379,8 @@ def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, 
             cov["drift_note"] = rules.DRIFT_UNREACHABLE if cov["unreachable"] else rules.DRIFT_OFFLINE_NOTE
         found["rule_drift"] = drift_findings(cov)
         if "reconfirmed" in rules_ctx:  # CI (`--base`): the target branch's `Rules reviewed:` against this one; a note, never in `found` (nothing blocks on it)
-            if rules_ctx["reconfirmed"] is None:  # the target ledger could not be read: no list (not [], that would read as a pass), a fixed text
-                cov["reconfirmed_note"] = rules.RECONFIRM_UNREADABLE
+            if not isinstance(rules_ctx["reconfirmed"], list):  # not comparable: no list (not [], that would read as a pass), one of the fixed texts
+                cov["reconfirmed_note"] = rules_ctx["reconfirmed"] if rules_ctx["reconfirmed"] in rules.RECONFIRM_NOTES else rules.RECONFIRM_UNREADABLE
             else:
                 cov["reconfirmed"] = list(rules_ctx["reconfirmed"])
     blocked_by = [k for k in found if k in block and found[k]]
@@ -473,7 +473,8 @@ def render_summary(result):
         found["rule_drift"] = _drift_line(result["rules"])
     if isinstance(result.get("rules"), dict) and (result["rules"].get("reconfirmed") or "reconfirmed_note" in result["rules"]):
         from . import rules  # lazy: rules imports this module
-        found["rules_reconfirmed"] = ("- " + rules.RECONFIRM_UNREADABLE if "reconfirmed_note" in result["rules"] else
+        note = result["rules"].get("reconfirmed_note")
+        found["rules_reconfirmed"] = ("- " + (note if note in rules.RECONFIRM_NOTES else rules.RECONFIRM_UNREADABLE) if "reconfirmed_note" in result["rules"] else
                                       f"- rules reconfirmed: {rules.reconfirmed_text(result['rules']['reconfirmed'])}; {rules.RECONFIRM_NOTE}")
     if note := result.get("ledger_unclosed"):  # stands in for the open-questions line when that list is empty
         found["open_questions" if "open_questions" not in found else "ledger_unclosed"] = f"- {_code(note)}"

@@ -1856,7 +1856,7 @@ def test_confirming_rules_doc_pins():
                  "never rule text", "`not confirmed: nothing was approved`", "Input typed before the prompt is discarded", "read again and the code recomputed",
                  "the file's own line terminator (LF or CRLF, taken from its first line) is kept", "atomic rename", "a symlinked or hard-linked ledger", "`written: false`",
                  "Process enforcement, not a security boundary", "can read the code and type it", "can edit or delete the `Rules reviewed:` line by hand",
-                 "the ledger diff in the pull request is the only visible trace", "`rule_coverage` check compares the recorded hashes with the files"):
+                 "so it also covers a story's first PR, where the ledger is a new file in the diff", "`rule_coverage` check compares the recorded hashes with the files"):
         assert word in text, word
     hitl = _flat("rules/hitl.md")
     for word in ("`ado rules <id> --confirm`", "Re-confirming is human only", "unless stdin and stdout are both terminals", "never the rule text",
@@ -2088,13 +2088,22 @@ def test_hitl_agents_readme_changelog_describe_the_prompt_wiring():
 def test_rules_reconfirmed_doc_pins():
     text = _flat("docs/business-rules.md")
     for word in ("**Reconfirmed (CI only, a note).**", "`rules.reconfirmed` is the list of", "an id that is new here is not listed", "`rules reconfirmed: BR-1201-1 (3f2a9c1b -> none)`",
-                 "re-confirmed without the target branch's recorded hash: check the PR diff", "never a finding: no exit code changes, nothing blocks", "until piece 4's approver-comment path can clear it; then it becomes a block",
-                 "counts as nothing recorded (`[]`), never as a pass", "`rules reconfirmed: target ledger unreadable`", "`rules.reconfirmed_note`", "the CI job needs `fetch-depth: 0`",
-                 "Without `--base`, or with rules off, there is no key and no line", "see `rules.reconfirmed` in \"The gate check\"", "`rules.reconfirmed` compares the ledger with the target branch's copy"):
+                 "differs from the earlier recorded hash: check the ledger history", "never a finding: no exit code changes, nothing blocks", "until piece 4's approver-comment path can clear it; then it becomes a block",
+                 "counts as nothing recorded (`[]` when nothing differs)", "`rules reconfirmed: target ledger unreadable`", "`rules.reconfirmed_note`", "the CI job needs `fetch-depth: 0`",
+                 "Without `--base`, or with rules off, there is no key and no line", "see `rules.reconfirmed` in \"The gate check\"", "`rules.reconfirmed` compares the ledger with the target branch's copy and the branch history",
+                 "first PR: reconfirmation cannot be compared", "`rules reconfirmed: history too long to compare`", "at most 200 commits", "`ado dod <id> --force` refuses too (exit 2, the ledger untouched)",
+                 "the diff shows no deletion"):
         assert word in text, word
     assert "later work" not in text.split("The terminal check stops an agent")[1].split("## The gate check")[0]
     assert "`fetch-depth: 0`" in _flat("docs/ci-github.md").split("`rules.reconfirmed`")[1] and "`fetchDepth: 0`" in _flat("docs/ci-azure-pipelines.md").split("`rules.reconfirmed`")[1]
     assert "`reconfirmed`" in _flat("README.md") and "`rules.reconfirmed`" in _flat("AGENTS.md") and "`rules.reconfirmed` (P3-10b)" in _flat("CHANGELOG.md")
+    limit = "The branch history belongs to the PR author: a squash or rebase before pushing erases this trace."
+    assert _flat("docs/business-rules.md").count(limit) == 2 and "the branch history belongs to the PR author, a squash or rebase before pushing erases this trace" in _flat("CHANGELOG.md")
+    assert _flat("docs/business-rules.md").split("**`Rules reviewed:`**")[1].split("- **Read only from the header block.**")[0].count(limit) == 1
+    assert "`git log --full-history --no-merges <base>..HEAD -- <ledger>`" in _flat("docs/business-rules.md") and "a merge commit is nobody's earlier record" in _flat("docs/business-rules.md")
+    assert "`rules reconfirmed: a ledger version in the branch history is unreadable`" in _flat("docs/business-rules.md") and "when the head records no id" in _flat("docs/business-rules.md")
+    assert "(P3-13a)" in _flat("CHANGELOG.md") and "`--force` refuses" in _flat("README.md") and "`ado dod <id> --force` refuses" in _flat("rules/hitl.md")
+    assert "the diff shows it)" not in _flat("rules/hitl.md") and "only visible trace" not in text
 
 
 def test_p3_12b_live_findings_pins():
@@ -2107,11 +2116,11 @@ def test_p3_12b_live_findings_pins():
         assert f"`{key}`" in (warns if key in rules._WARNINGS else errors), key
     assert "does **not** raise the \"rule not in this story's acceptance criteria\" question" in pull and "`speckit.ado.plan` step 3a's, one `Q<n>` per rule" in pull
     assert "one `Q<n>` per in-scope rule, raised here and only here, whatever other `Q<n>` already touch the same rule's wording or status" in _block("commands/plan.md", "### 3a. Business rules")
-    new = "re-confirmed without the target branch's recorded hash: check the PR diff"
+    new = "differs from the earlier recorded hash: check the ledger history"
     assert rules.RECONFIRM_NOTE == new
     for f in ("docs/business-rules.md", "README.md"):
         assert new in _flat(f), f
-    assert "re-confirmed without the target branch's recorded hash" in _flat("CHANGELOG.md")
+    assert "differs from the earlier recorded hash" in _flat("CHANGELOG.md")
     for f in ("docs/business-rules.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md", "commands/gate.md", "CHANGELOG.md"):
         assert "`chain`" in _flat(f), f
     br = _flat("docs/business-rules.md")

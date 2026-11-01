@@ -438,24 +438,39 @@ def dod_file(dod_dir, work_item_id):
     return Path(dod_dir) / f"DoD_{work_item_id}.md"
 
 
+def _reviewed_line(md):
+    """`(present, value)` of the `Rules reviewed:` header line; value None when it cannot be trusted (an untrusted header that names the label)."""
+    if _header(md)[1]:
+        return _labelled(md, "Rules reviewed")
+    return any(_look("Rules reviewed").match(x) for x in md.splitlines()), None
+
+
 def write_dod(work_item, dod_dir, organization, project, synced="",
               force=False, refresh=False, spec_dir="", extra_dod=(), rules_from=None, rules_reviewed=""):
     path = dod_file(dod_dir, work_item["id"])
     if path.exists() and not force and not refresh:
-        raise DodExists(f"{path} exists — pass --force to overwrite or --refresh to re-pull section 1.")
+        raise DodExists(f"{path} exists — pass --refresh to re-pull section 1, or --force to overwrite it "
+                        "(--force refuses while it has a 'Rules reviewed:' line; remove the line by hand first, knowing the removal is traced).")
     old = path.read_text(encoding="utf-8") if refresh and path.exists() else None
+    if force and not refresh and path.exists():  # --force would drop the hashes a human confirmed: refuse (a line of any form, even a malformed one)
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        if _reviewed_line(text)[0]:
+            raise DodExists(f"{path} has a 'Rules reviewed:' line — refusing to --force (it would drop the hashes a human confirmed). "
+                            "Review the rules and run `ado rules <id> --confirm` in your own terminal, or remove the line by hand "
+                            "(the removal shows in the git history and is compared by the gate and `strict check` with --base). "
+                            "The branch history belongs to the PR author: a squash or rebase before pushing erases this trace.")
     if old is not None:
         spec_dir = spec_dir or ledger_spec_dir(old) or ""
         # written by `ado rules --confirm`: kept like Spec dir, even when rules are off. A header that cannot be trusted (an old ledger's
         # unescaped `<!--` in its title hid the first heading) cannot be read: with no line that names the label it is rebuilt as before,
         # so teams not using rules see no change; with one (maybe forged from the Description) the refresh refuses.
-        if _header(old)[1]:
-            present, kept = _labelled(old, "Rules reviewed")
-        else:
-            present, kept = any(_look("Rules reviewed").match(x) for x in old.splitlines()), None
+        present, kept = _reviewed_line(old)
         if present and _parse_reviewed(kept) is None:
             raise DodExists(f"{path} has a malformed or untrusted 'Rules reviewed:' header line — refusing to --refresh "
-                            "(it would drop the hashes a human confirmed, or copy a forged line). Fix the header, or use --force to fully overwrite.")
+                            "(it would drop the hashes a human confirmed, or copy a forged line). Fix the header by hand.")
         rules_reviewed = rules_reviewed or kept or ""
     # stack DoD items seed a fresh ledger only: a refresh keeps everything after section 1, section 5 included
     fresh = render_dod(work_item, organization, project, synced, spec_dir, () if old is not None else extra_dod, rules_from, rules_reviewed)
@@ -464,12 +479,14 @@ def write_dod(work_item, dod_dir, organization, project, synced="",
         if unclosed(old) and idx == -1:
             raise DodExists(
                 f"{path} has an unclosed code fence or comment outside section 1 — refusing to --refresh "
-                "(it would splice from the wrong place). Close it, or use --force to fully overwrite."
+                "(it would splice from the wrong place). Close it by hand, or use --force to fully overwrite a ledger without a 'Rules reviewed:' line "
+                "(with one, remove the line by hand first, knowing the removal is traced)."
             )
         if idx == -1:
             raise DodExists(
                 f"{path} is missing the '{SECTION2}' marker — refusing to --refresh "
-                "(would discard authored content). Fix the file, or use --force to fully overwrite."
+                "(would discard authored content). Fix the file by hand, or use --force to fully overwrite a ledger without a 'Rules reviewed:' line "
+                "(with one, remove the line by hand first, knowing the removal is traced)."
             )
         # keep freshly-rendered header+section1, splice old section2..end
         head = fresh[:_section2_at(fresh)]
