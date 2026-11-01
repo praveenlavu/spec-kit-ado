@@ -81,7 +81,7 @@ it stays open and the rule stays in scope, because an assumption would exclude a
 
 Also run `ado comments <id>` (read-only; refreshes `.ado/context/<id>.md`, untrusted data, gitignored). Where a new
 PO reply answers an open question in section 2, update that answer in your own words, with no names, @mentions or
-emails, citing "PO comment <date>" (`- [x] Q<n>: <question> → <answer> · owner: <role>`). Then run `ado questions <id>`
+emails, citing "PO comment <date>" (`- [x] Q<n>: <question> → <answer> · owner: <role>`). With `approvers` configured on the target branch, run `ado questions <id> --sync` first: it writes the approvers' `/answer Q<n>: text` comments into the ledger as `(PO comment <comment id>)` answers (never write those yourself). Then run `ado questions <id>`
 and carry the still-open ones into step 3. If any are open (and not `--workflow`), offer to post them to the story:
 `ado questions <id> --post --plan-out .ado/plan-questions.md`, show the file, wait for an explicit yes, then
 `ado questions <id> --post --apply --expect-plan .ado/plan-questions.md` (adds one comment or edits the earlier one).

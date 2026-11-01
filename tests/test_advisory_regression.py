@@ -145,9 +145,17 @@ def compare(tmp_path):
                           "[--resolve D<n>] [--force] [--validated | --rejected]\n                     [--by BY] [--note NOTE]")
                 .replace("  --sync              record the approvers' `/approve D<n>` and `/reject D<n>`\n                      comments of the story as verdicts in the decisions file\n"
                          "                      (a local write, no ADO write; needs approvers on the\n                      target branch; with them, --resolve is refused)\n", ""))
+    def questions_help(t):
+        """P4-10 adds `--sync` to `questions`. Remove exactly what it adds: its usage token (argparse puts it at the end of the second usage line) and its five help lines.
+        Everything else is still compared byte for byte."""
+        return (t.replace("[--expect-plan PATH] [--sync]\n", "[--expect-plan PATH]\n")
+                .replace("  --sync              record the approvers' `/answer Q<n>: text` comments of\n                      the story as the PO's answers in the ledger and list the\n"
+                         "                      questions due under unattended.assume_after_hours (a\n                      local write, no ADO write; needs approvers on the target\n"
+                         "                      branch)\n", ""))
     new = [(a, rc, usage(o), usage(e)) for a, rc, o, e in new]
     new = [(a, rc, comments_help(o), e) if a == ["comments", "--help"] else (a, rc, o, e) for a, rc, o, e in new]
     new = [(a, rc, decisions_help(o), e) if a == ["decisions", "--help"] else (a, rc, o, e) for a, rc, o, e in new]
+    new = [(a, rc, questions_help(o), e) if a == ["questions", "--help"] else (a, rc, o, e) for a, rc, o, e in new]
     diffs = [f"{a[0]}: rc {a[1]}->{b[1]}, stdout same {a[2] == b[2]}, stderr same {a[3] == b[3]}" for a, b in zip(old, new) if a != b]
     return len(argvs), diffs, old
 

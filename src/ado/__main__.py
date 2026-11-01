@@ -272,6 +272,8 @@ def dispatch(client, args):
         )
         action = "refreshed" if (args.refresh and existed) else ("overwritten" if existed else "created")
         return {"path": str(path), "action": action, **dod.ac_stats(wi)}
+    if args.command == "questions" and getattr(args, "sync", False):  # reads ADO (GET only), writes only the local ledger
+        return _sync_questions(client, args)
     if args.command == "questions":
         path = dod.dod_file(client.config.dod_path, args.id)
         try:
@@ -398,6 +400,47 @@ def _sync_decisions(client, args):
     report = decisions.apply_sync(path, found, approvers, excluded, client, args.id)
     notice = [f"{i}: {n} later malformed command line(s) by an approver: check the thread" for i, n in report["bad_newer"].items() if n]
     notice += [f"{i} is superseded by {m}: this verdict is masked while {m} stands (a rejected {m} would bring it back)" for i, m in report["masked"].items()]
+    return {"id": args.id, **report, **({"notice": notice} if notice else {})}
+
+
+def _sync_questions(client, args):
+    """`questions --sync`: approvers' `/answer Q<n>: text` comments become the PO's answers in the local ledger (no ADO write, no gate: `rules/hitl.md`, local
+    write) and the questions that have waited `unattended.assume_after_hours` (by SERVER time) are listed as due; nothing is closed here. Every refusal (exit 2,
+    fixed text, nothing written) comes before anything is changed: no approvers on the target branch, an unreadable or malformed ledger, a token that can bypass
+    rules (or whose permission cannot be read), comments that were cut off or cannot be trusted, no way to tell how long a question has been asked, no server time."""
+    trust = trusted(".")
+    approvers = trust.approvers
+    if not approvers:
+        raise ValueError("--sync needs approvers on the target branch (`approvers` in ado.config.json there, see docs/configuration.md); none are configured")
+    path = dod.dod_file(client.config.dod_path, args.id)
+    md = gate._read(path, ".", set()) if os.path.lexists(path) else None
+    if md is None:
+        raise ValueError("cannot read the ledger (missing, a symlink, outside the working tree, over 1 MiB or not UTF-8); nothing written")
+    parsed = questions.check_ledger(md)
+    approvals.comment_mode_allowed(client)
+    try:
+        found, truncated = comments.fetch(client, args.id, with_meta=True)
+    except comments.CommentsUnreadable:
+        raise ValueError("the story's comments cannot be read reliably (an unexpected answer from ADO); nothing written") from None
+    if truncated:
+        raise ValueError("not every comment of the story was read (page limit or repeated page token), so a newer answer could be missing; nothing written")
+    try:
+        excluded = approvals.excluded(client, found)
+    except ValueError:  # `questions._me` puts the client's error text into its message
+        raise ValueError("cannot tell which ADO identity this token is, so the comments cannot be attributed; nothing written") from None
+    hours = trust.unattended.get("assume_after_hours")
+    ages = questions.ages(client, args.id, parsed["open"], found)
+    now = None
+    if hours is not None:
+        try:
+            now = client.server_now()
+        except AdoError:
+            now = None
+        if now is None:
+            raise ValueError(questions.E_TIME)
+    report = questions.apply_sync(path, md, found, approvers, excluded, client, args.id, now, hours, ages)
+    notice = [f"{i}: {n} later malformed command line(s) by an approver: check the thread" for i, n in report["bad_newer"].items() if n]
+    notice += [f"{i}: answered already: a later /answer was not applied; correct the ledger by hand" for i in report["ignored"]]
     return {"id": args.id, **report, **({"notice": notice} if notice else {})}
 
 
@@ -727,6 +770,8 @@ def main(argv=None):
     p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here (implies --post)")
     p.add_argument("--expect-plan", metavar="PATH",
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+    p.add_argument("--sync", action="store_true", help="record the approvers' `/answer Q<n>: text` comments of the story as the PO's answers in the "
+                   "ledger and list the questions due under unattended.assume_after_hours (a local write, no ADO write; needs approvers on the target branch)")
     p = sub.add_parser("rules", help="Pull the business rules of the story's Epic/Feature ancestors into <dod_path>/Rules_<id>.md "
                        "(reads ADO with GET only)")
     p.add_argument("id", type=int)
@@ -889,6 +934,8 @@ def main(argv=None):
         parser.error("--expect-plan needs --apply")
     if args.command in ("questions", "decisions") and args.apply and not args.post:
         parser.error("--apply needs --post")
+    if args.command == "questions" and args.sync and (args.post or args.apply or args.plan_out or args.expect_plan):
+        parser.error("--sync cannot be combined with --post, --apply, --plan-out or --expect-plan")
     if args.command == "decisions":
         if args.add is not None and (args.post or args.apply or args.plan_out or args.expect_plan or args.resolve
                                      or args.verdict or args.by is not None or args.note is not None or args.force):

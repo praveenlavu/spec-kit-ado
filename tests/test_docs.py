@@ -2507,3 +2507,24 @@ def test_decisions_sync_is_documented():
     assert "Refused (exit 2) when `approvers` are configured on the target branch" in readme and "(P4-9)" in log
     assert "| **Sync** |" in _flat("docs/glossary.md")
     assert "come later" not in agents.split("`ado decisions <id> --sync` acts on it")[0][-200:]
+
+
+def test_questions_sync_is_documented():
+    """P4-10: `ado questions <id> --sync`, the question age and the due list are named where the approvers and the answers are."""
+    from ado import questions
+    cfg, readme, agents, hitl, log = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "CHANGELOG.md"))
+    for doc in (cfg, readme, agents, hitl, log):
+        assert "`ado questions <id> --sync`" in doc or "`questions <id> --sync`" in doc
+    for rule in questions.SYNC_RULES:
+        assert f"`{rule}`" in cfg and f"`{rule}`" in readme and f"`{rule}`" in log, rule
+    for needle in ("local write only", "no preview and no gate", "the local clock (`time.time`, `datetime.now`) is never read", "versions endpoint", "7.1-preview.1",
+                   "unbroken run of versions", "there is no `asked:` fallback", "client.server_now()", "The sync never closes a due question", "a timeout never validates anything",
+                   "is never replaced", "bad_newer", "(PO comment <comment id>) · owner: PO", "`versions-unavailable`", "`no-comment`", "`edited-by-other`", "Residuals",
+                   "no usable server time", "stricter reading", "`ignored`", "answered already: a later /answer was not applied; correct the ledger by hand",
+                   "accepted residual"):
+        assert needle in cfg, needle
+    assert "`ignored`" in readme and "`ignored`" in log
+    assert "local write" in hitl and "Free" in hitl and "never closes one" in hitl and "`bad_newer`" in hitl
+    assert "never closes one" in agents and "`bad_newer`" in agents and "assumed" in agents
+    assert "Combines with no other `questions` option" in readme and "(P4-10)" in log and "server_now()" in log
+    assert "`ado questions <id> --sync`" in _flat("docs/glossary.md") and "`ado questions <id> --sync`" in _flat("commands/plan.md")
