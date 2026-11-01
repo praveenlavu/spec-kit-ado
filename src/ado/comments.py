@@ -13,6 +13,46 @@ VERSIONS_API = "7.1-preview.1"  # the versions endpoint exists only in this prev
 MAX_PAGES = 50
 # `data-vss-mention` in any attribute position; the lazy body stops at the first </a> (mentions hold no nested anchors)
 _MENTION = re.compile(r"<a\b[^>]*\bdata-vss-mention\b[^>]*>.*?</a>", re.I | re.S)
+_A_CLOSE = re.compile(r"</a>", re.I)
+
+
+def scrub_mentions(s):
+    """Every `<a ... data-vss-mention ...>...</a>` becomes `@user`: the same matches as `_MENTION`, found in ONE linear pass (the regex's
+    `[^>]*` and lazy body rescanned to the end for every unclosed opening: 20 s at 20,000). The next `>` and the next `</a>` are cached
+    while they lie ahead, and openings that share a `>` are decided once: the first one holds the keyword or none of them does."""
+    low = s.lower()
+    if "data-vss-mention" not in low:
+        return s
+    out, i, gt, close, n = [], 0, -1, -1, len(s)
+    while True:
+        j = low.find("<a", i)
+        if j < 0 or j + 2 > n:
+            break
+        if j + 2 < n and (low[j + 2].isalnum() or low[j + 2] == "_"):  # `<a\b`: `<abbr` is not an anchor
+            out.append(s[i:j + 2])
+            i = j + 2
+            continue
+        if gt < j:
+            gt = low.find(">", j)
+            if gt < 0:
+                break
+        k = low.find("data-vss-mention", j, gt)
+        while k >= 0 and ((k > 0 and (low[k - 1].isalnum() or low[k - 1] == "_")) or (low[k + 16:k + 17].isalnum() or low[k + 16:k + 17] == "_")):
+            k = low.find("data-vss-mention", k + 1, gt)  # `\b` on both sides of the keyword
+        if k < 0:  # none of the openings that share this `>` can match
+            out.append(s[i:gt + 1])
+            i = gt + 1
+            continue
+        if close < gt + 1:
+            close = low.find("</a>", gt + 1)
+            if close < 0:
+                break
+        out.append(s[i:j])
+        out.append("@user")
+        i = close + 4
+    out.append(s[i:])
+    return "".join(out)
+
 # plain-text addresses typed into a comment; shortcut: ASCII local part/host only, widen if IDN addresses matter
 _EMAIL = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 _LOCAL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._%+'-")  # the local-part class of _EMAIL
@@ -125,7 +165,7 @@ def fetch(client, work_item_id, with_id=False, with_meta=False):
                       "on_behalf": "createdOnBehalfOf" in c, "html": c["text"]}
     out = [{**(meta(c) if with_meta else {"id": c.get("id"), "author": _ident(c, "createdBy")} if with_id else {}),
             "date": c.get("createdDate", ""),
-            "text": scrub_emails(dod._text(_MENTION.sub("@user", c.get("text") or "")))} for c in raw]
+            "text": scrub_emails(dod._text(scrub_mentions(c.get("text") or "")))} for c in raw]
     return (out, truncated) if with_meta else out
 
 

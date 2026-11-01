@@ -410,3 +410,25 @@ def test_author_ids_on_a_malformed_page_is_a_fixed_error_exit_1_no_traceback(tmp
     _cli(monkeypatch, tmp_path, [None])
     assert main(["comments", "2", "--author-ids"]) == 1
     assert capsys.readouterr().err == "error: comments unreadable (page-shape)\n"
+
+
+def test_scrub_mentions_matches_the_regex_on_random_html():
+    """The linear scanner replaced `_MENTION.sub`: same result on 6000 random tag soups (found while reviewing P4-7b: the regex took 20 s at 20,000 openings)."""
+    import random
+    from ado import comments
+    rnd = random.Random(7)
+    parts = ["<a ", "<a>", "<abbr ", "data-vss-mention", "data-vss-mentions", " data-vss-mention=", '"x"', ">", "</a>", "</A>", " ", "x", "<A ", "<a\n",
+             "_data-vss-mention", "hello ", "@Jane", "<b>"]
+    for _ in range(6000):
+        s = "".join(rnd.choice(parts) for _ in range(rnd.randint(0, 14)))
+        assert comments.scrub_mentions(s) == comments._MENTION.sub("@user", s), s
+
+
+def test_scrub_mentions_is_linear_on_adversarial_input():
+    import time
+    from ado import comments
+    for s in ('<a data-vss-mention="x" ' * 20000 + "</a>", '<a data-vss-mention="x">' * 20000, "<a x" * 100000 + ">" + "</a>",
+              "<a " + " " * 200000 + "data-vss-mention</a>", '<a data-vss-mention="1">y</a>' * 30000):
+        t = time.monotonic()
+        comments.scrub_mentions(s)
+        assert time.monotonic() - t < 1.0

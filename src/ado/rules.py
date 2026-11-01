@@ -63,7 +63,6 @@ def _problem(rule, issue, after=None):
 _ELEMENTS = {n: re.compile(r"</" + n + r"(?![A-Za-z0-9:_-])", re.I) for n in ("style", "script", "xml")}
 _ELEMENT_OPEN = re.compile(r"<(style|script|xml)(?![A-Za-z0-9:_-])", re.I)
 _STRAY_LT = re.compile(r"<(?![A-Za-z/!?][^<>]*>)")  # a `<` that opens no complete tag is text (browsers agree); ADO escapes real ones
-_A_CLOSE = re.compile(r"</a>", re.I)
 # numeric/named entities that unescape to a space or tab: made non-breaking so `_text`'s `[ \t]+\n` cannot go quadratic on a run of them
 _SPACE_ENTITY = re.compile(r"&#0*(?:32|9)(?![0-9]);?|&#[xX]0*(?:20|9)(?![0-9A-Fa-f]);?|&Tab;")
 _ZS = re.compile("[   -   　]")
@@ -106,16 +105,7 @@ def _drop_elements(s):
         i = end + 1
 
 
-def _mentions(s):
-    """`comments._MENTION` only over text that ends in `</a>` and holds only complete tags, so its lazy body always finds its end."""
-    if "data-vss-mention" not in s.lower():
-        return s
-    last = None
-    for last in _A_CLOSE.finditer(s):
-        pass
-    if last is None:
-        return s
-    return comments._MENTION.sub("@user", s[:last.end()]) + s[last.end():]
+_mentions = comments.scrub_mentions  # linear; lives in comments (every comment reader needs it)
 
 
 _emails = comments.scrub_emails  # linear, one match per `@`; lives in comments (`ado comments --author-ids` needs it too)

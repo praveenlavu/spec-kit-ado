@@ -204,7 +204,7 @@ def _scrub(text):
     """Same replacements as `ado comments`: mention anchors and typed `@name` -> `@user`, addresses -> `[email]`.
     An address or @mention typed in a decision is replaced, never refused. Free-text names cannot be detected:
     the preview shows the exact comment before anything is posted."""
-    return _AT.sub("@user", comments.scrub_emails(comments._MENTION.sub("@user", text)))
+    return _AT.sub("@user", comments.scrub_emails(comments.scrub_mentions(text)))
 
 
 def _comment_line(d):
