@@ -329,6 +329,9 @@ def dispatch(client, args):
         if rules_ctx is not None:  # the live check: GETs only, from the story id given here (never an id read from the ledger or a file)
             rules_ctx["drift"] = rules.DRIFT_OFFLINE if getattr(args, "offline", False) else rules.drift(
                 client, args.id, client.config, ledger_md, rules_ctx["files"], decisions.parse_decisions(decisions_md or ""))
+        if rules_ctx is not None and getattr(args, "base", None) is not None:  # CI: the target branch's own ledger (hardened git read), judged from the story id given here
+            old = strict.target_reviewed(client.config.dod_path, args.src, args.base, args.id)
+            rules_ctx["reconfirmed"] = None if old is None else rules.reconfirmed(old, dod.ledger_rules_reviewed(ledger_md)["hashes"])
         skipped = set()
         sources = gate.discover_tests(args.src, tests, skipped)
         changed = {f: t for f in (args.changed or []) if (t := gate._read(f, args.src, skipped)) is not None}

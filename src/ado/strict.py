@@ -1094,6 +1094,39 @@ def _rules(c):
     return out
 
 
+_TARGET_LEDGER_LABEL = "the story ledger at the target branch"
+_DOD_PATH = re.compile(r"[\w. /-]+")  # plain names only: no pathspec magic (`:(glob)`), glob characters or control characters
+
+
+def target_reviewed(dod_path, repo, base, story_id):
+    """`{rule id: hash8}` of the `Rules reviewed:` line in the story's ledger on the PR's target `base` (resolved as `_resolve_base` does: a
+    branch or a full commit id, never a tag), read through `_blob_at` (1 MiB, regular file). `{}` when the target has no ledger, no such line
+    or a header that cannot be trusted (nothing recorded, never a record). None when it cannot be read (git failing, a symlink, oversize,
+    not UTF-8, a `dod_path` outside the repository, a base that is no commit here): the caller reports that, it is never a pass."""
+    commit = _resolve_base(repo, base)
+    rel = posixpath.normpath(dod.dod_file(dod_path, story_id).as_posix())
+    if not (commit and _DOD_PATH.fullmatch(rel) and not rel.startswith(("/", "../"))):
+        return None
+    try:
+        raw = _blob_at(repo, commit, rel, gate.MAX_READ, _TARGET_LEDGER_LABEL)
+        return {} if raw is None else dod.ledger_rules_reviewed(raw.decode("utf-8"))["hashes"]
+    except (ConfigInvalid, UnicodeDecodeError):
+        return None
+
+
+def _reconfirmed_warnings(c, target):
+    """For `strict check --phase pr|done --base REF` with rules enabled: one warning naming each rule id the target branch's ledger records that
+    this ledger lacks or records with another hash (a human re-confirmed it; check the PR diff), or the fixed unreadable text. A note, never a
+    finding. [] otherwise (rules off, no `--base`, no ledger, nothing reconfirmed): the output is the baseline."""
+    if target is None or not c.cfg.rules["enabled"] or c.ledger is None or c.phase not in ("pr", "done"):
+        return []
+    old = target_reviewed(c.cfg.dod_path, c.repo, target, c.id)
+    if old is None:
+        return [rules.RECONFIRM_UNREADABLE]
+    items = rules.reconfirmed(old, dod.ledger_rules_reviewed(c.ledger)["hashes"])
+    return [f"rules reconfirmed: {rules.reconfirmed_text(items)}; {rules.RECONFIRM_NOTE}"] if items else []
+
+
 _REVIEW_FIX = "run speckit.ado.review, fix what it blocks on, commit the ledger"
 
 
@@ -1253,6 +1286,7 @@ def check(client, story_id, phase, repo=".", head="HEAD", base=None, push=False,
     out = {"phase": phase, "mode": mode, "ok": not findings, "findings": findings,
            "overrides_used": sorted(used, key=lambda i: int(i[1:]))}
     warnings = _fidelity_warnings(ctx) if phase in ("pr", "done") else []
+    warnings += _reconfirmed_warnings(ctx, target)
     head = _stack_state(ctx)["head"]
     adopts, adopts_kits = adoption_notes(ctx.cfg, repo, target, ctx.rev)  # the target is not strict: this PR turns strict mode on
     if adopts or (head and _stack_note(ctx.cfg, head)):  # the PR edits the profile, the lockfile or strict.test_command: review it as code

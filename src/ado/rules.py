@@ -813,6 +813,23 @@ def coverage(ledger_md, sources, files, rules_from, reviewed, decisions_parsed, 
 DRIFT_UNREACHABLE = "ADO could not be read, or the gate's token cannot read the Epic/Feature — rule drift not checked"
 DRIFT_OFFLINE_NOTE = "rule drift not checked (offline, or the live check was not run)"
 DRIFT_OFFLINE = {"evaluated": False, "drift": [], "unreachable": False, "note": DRIFT_OFFLINE_NOTE}  # what `--offline` passes on; never mutated
+
+
+RECONFIRM_UNREADABLE = "rules reconfirmed: target ledger unreadable"  # the target branch's ledger could not be read: `reconfirmed` is omitted, never []
+RECONFIRM_NOTE = "a human re-confirmed this rule; check the PR diff"  # a note until piece 4's approver-comment path can clear it (then a block)
+
+
+def reconfirmed(old, new):
+    """`[{"id", "old", "new"}]` for every id of `old` (`{id: hash8}`, the target branch's `Rules reviewed:`) that `new` (the head's) does not record
+    (`new` None) or records with another hash, sorted by (work item, number). Ids new at the head are not listed. Ids and 8-hex hashes only."""
+    return [{"id": r, "old": h, "new": new.get(r)}
+            for r, h in sorted(old.items(), key=lambda kv: tuple(int(x) for x in kv[0][3:].split("-"))) if new.get(r) != h]
+
+
+def reconfirmed_text(items, cap=20):
+    """`BR-1201-1 (3f2a9c1b -> none), ...` for `reconfirmed` items, at most `cap` of them then `and N more`."""
+    shown = ", ".join(f"{i['id']} ({i['old']} -> {i['new'] or 'none'})" for i in items[:cap])
+    return shown + (f" and {len(items) - cap} more" if len(items) > cap else "")
 _STRUCTURE = (AdoError, AuthError, AttributeError, TypeError, KeyError, ValueError)  # ADO unreachable, or an answer that is not a work item
 
 

@@ -1874,7 +1874,7 @@ def test_gate_rule_coverage_doc_pins():
                  "A row with an absent test never covers, even when another row is mapped", "every one of its rows has a found test", "an extra row (`AC-99`, `AC-0`)",
                  "one `?` for every malformed `BR-` token", "only the count is shown", "not confirmed yet", "an excluded rule included", "the level comes from the fixed key",
                  "`header`: `rules-from`", "`ado dod <story id> --refresh`", "`missing`: a work item id on `Rules from:`", "`format`: a work item id whose file has another `rules-format`",
-                 "never rule text, never the text of a tag or a problem line", "its own line (not the AC drift line)", "`rule_drift`", "later tasks",
+                 "never rule text, never the text of a tag or a problem line", "its own line (not the AC drift line)", "`rule_drift`", "`rules.reconfirmed` (below)",
                  "a local `ado gate` reads your working tree (uncommitted edits included), and the CI gate reads what its checkout holds",
                  "(offline limits)", "edits a rule's text in its file, the heading hash and the recorded `Rules reviewed:` hash together passes this check",
                  "trimming `Rules from:` and dropping the tags passes too (also `rule_drift`)", "recorded ids whose work item has left `Rules from:` are not judged"):
@@ -2083,3 +2083,15 @@ def test_hitl_agents_readme_changelog_describe_the_prompt_wiring():
     for word in ("Business rules", "`rules.enabled`", "no step was added", "`Needs human decision`", "`rule_drift`", "`gate-check`", "`decisions-loop`",
                  "`pr-prepare`", "Rules_<id>.md"):
         assert word in wf, word
+
+
+def test_rules_reconfirmed_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("**Reconfirmed (CI only, a note).**", "`rules.reconfirmed` is the list of", "an id that is new here is not listed", "`rules reconfirmed: BR-1201-1 (3f2a9c1b -> none)`",
+                 "a human re-confirmed this rule; check the PR diff", "never a finding: no exit code changes, nothing blocks", "until piece 4's approver-comment path can clear it; then it becomes a block",
+                 "counts as nothing recorded (`[]`), never as a pass", "`rules reconfirmed: target ledger unreadable`", "`rules.reconfirmed_note`", "the CI job needs `fetch-depth: 0`",
+                 "Without `--base`, or with rules off, there is no key and no line", "see `rules.reconfirmed` in \"The gate check\"", "`rules.reconfirmed` compares the ledger with the target branch's copy"):
+        assert word in text, word
+    assert "later work" not in text.split("The terminal check stops an agent")[1].split("## The gate check")[0]
+    assert "`fetch-depth: 0`" in _flat("docs/ci-github.md").split("`rules.reconfirmed`")[1] and "`fetchDepth: 0`" in _flat("docs/ci-azure-pipelines.md").split("`rules.reconfirmed`")[1]
+    assert "`reconfirmed`" in _flat("README.md") and "`rules.reconfirmed`" in _flat("AGENTS.md") and "`rules.reconfirmed` (P3-10b)" in _flat("CHANGELOG.md")
