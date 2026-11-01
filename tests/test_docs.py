@@ -2291,3 +2291,18 @@ def test_unconfirmed_split_doc_pins():
         t = _flat(f)
         assert "`rule-changed`: the rule is unconfirmed" not in t and "a rule is unconfirmed, differs" not in t and "rule is unconfirmed or changed" not in t, f
     assert "`rule-unconfirmed`, `rule-changed`" in _flat("docs/configuration.md")
+
+
+def test_doctor_doc_pins():
+    from ado import doctor
+    rows = ("git", "specify", "shallow", "config", "config-target", "token", "identity", "extension", "workflow", "approvers", "stack", "kits")
+    assert doctor.ROW_IDS == rows
+    cfg, readme, agents = _flat("docs/configuration.md"), _flat("README.md"), _flat("AGENTS.md")
+    assert "## Checking your setup" in (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
+    log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert log.index("## 0.3.0 \u2014 unreleased") < log.index("`ado doctor [--json] [--probe-item ID]` (P4-2)") < log.index("## 0.2")
+    for r in rows:
+        assert f"`{r}`" in cfg and f"`{r}`" in readme
+    assert "never shown as `ok`" in cfg and "`unknown` means" in readme and "anonymous `connectionData`" in readme
+    assert "`ado doctor --json`" in cfg and "exits `0` when no row fails" in cfg and "accepted and ignored" in cfg
+    assert "ado doctor [--json] [--probe-item ID]" in agents and "never prints a token, name or email" in agents

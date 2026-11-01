@@ -115,9 +115,10 @@ def _read_capped(resp, max_bytes):
 
 
 class AdoClient:
-    def __init__(self, config, sleep=time.sleep):
+    def __init__(self, config, sleep=time.sleep, attempts=None, timeout=None):
         self.config = config
         self._sleep = sleep
+        self._attempts, self._timeout = attempts, timeout  # None: MAX_ATTEMPTS / TIMEOUT (doctor asks for one attempt and a short timeout)
         self._auth = None  # looked up on the first request, then reused
         self.last_date = None  # raw Date header of the newest response (success or HTTP error), None if it had none
         self._date_mono = None  # time.monotonic() when last_date was captured
@@ -155,11 +156,12 @@ class AdoClient:
         if self._auth is None:
             self._auth = auth_header(self.config.organization)
         headers.update(self._auth)
-        for attempt in range(MAX_ATTEMPTS):
-            again = retryable and attempt < MAX_ATTEMPTS - 1
+        attempts = self._attempts or MAX_ATTEMPTS
+        for attempt in range(attempts):
+            again = retryable and attempt < attempts - 1
             req = urllib.request.Request(url, data=data, method=method, headers=headers)
             try:
-                with _OPENER.open(req, timeout=TIMEOUT) as resp:
+                with _OPENER.open(req, timeout=self._timeout or TIMEOUT) as resp:
                     raw_body = resp.read() if max_bytes is None else _read_capped(resp, max_bytes)
                     status = getattr(resp, "status", 200)
                     ctype = (getattr(resp, "headers", None) or {}).get("Content-Type", "") or ""
@@ -167,7 +169,7 @@ class AdoClient:
             except urllib.error.HTTPError as e:
                 self._note_date(e.headers)
                 # A 429 means ADO did not apply the request, so even a write is safe to retry.
-                if e.code in RETRY_STATUSES and (again or (e.code == 429 and attempt < MAX_ATTEMPTS - 1)):
+                if e.code in RETRY_STATUSES and (again or (e.code == 429 and attempt < attempts - 1)):
                     self._sleep(_retry_delay(e, attempt))
                     continue
                 raise _mapped(e) from None

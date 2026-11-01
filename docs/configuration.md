@@ -139,6 +139,30 @@ In strict mode both are read from the **target branch** in CI, like the config (
 fails closed. Advisory mode only reports. Read the details in [stack-kits.md](stack-kits.md); the boundaries (what this does not do,
 including "not a sandbox") are in the README section "What this does and does not do". This is process enforcement, not a security boundary.
 
+## Checking your setup
+
+`ado doctor` prints one row per check, each `ok`, `warn`, `fail` or `unknown` with a fix; `ado doctor --json` prints
+`{"rows": [{"id", "status", "fix"}], "scopes": {}}` (the row ids are stable). It exits `0` when no row fails and `1` otherwise. It writes nothing,
+and its only network call is one GET of `connectionData` through the normal client, with a single attempt (no retry) and a 10 second timeout. `unknown` means a check could not tell (for example
+no network or no `origin/HEAD`); it is never shown as `ok`. Row texts are fixed: ids, counts and version numbers only, never a token, a name,
+an email or a config value (a config error names the key by position).
+
+| Row | `ok` when | Otherwise |
+|---|---|---|
+| `git` | git 2.24 or newer | `fail` if older or missing |
+| `specify` | `specify --version` is at least `>=0.9.0` and at least `requires.speckit_version` of the installed `.specify/extensions/ado/extension.yml` (a checkout can raise the floor, never lower it) | `warn` if not installed, `fail` if older |
+| `shallow` | the clone is complete | `fail`: run `git fetch --unshallow` |
+| `config` | `ado.config.json` validates | `fail`, naming the key |
+| `config-target` | the target branch's (`origin/HEAD`) `ado.config.json` validates | `fail` if unreadable or invalid, `warn` if absent, `unknown` without `origin/HEAD` |
+| `token`, `identity` | a token is found and ADO accepts it as a real user | `fail` with no token, a rejected token, an anonymous `connectionData`, or a 404 (check `organization`); `unknown` when ADO cannot be reached or does not say who you are. `connectionData` is organization-level and does not check the project: a wrong project still shows `ok` here, and only the scope probes (a later task) will catch it |
+| `extension`, `workflow` | the installed version (`.specify/extensions/ado/extension.yml`, `.specify/workflows/ado-lifecycle/workflow.yml`) equals the CLI's | `fail` on a mismatch, `warn` if not installed |
+| `approvers` | no approver is the token's identity | `fail` if one is. The `approvers` key is read only from the target branch and does not exist yet, so for now this row is `ok` (none) unless the target branch could not be read, and `unknown` ("does not check them yet") if the target branch sets the key |
+| `stack`, `kits` | `ado stack show` says approved with no note; `ado kits verify` has no finding | `warn` in advisory mode, `fail` in strict (no profile at all reads "no stack profile yet (optional): run `ado stack detect`" in advisory mode) |
+
+`git` and `specify` run with a scrubbed environment (no token), a timeout and no input; only a version number is kept from their output.
+`--probe-item ID` is accepted and ignored for now: it belongs to the scope probes, which are not part of this build. Doctor is a help, not a
+security boundary: a hostile checkout shapes the local rows it can read.
+
 ## Credentials
 
 The token is not part of this file. The CLI looks for it in this order:

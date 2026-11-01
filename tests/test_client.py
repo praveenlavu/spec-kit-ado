@@ -74,6 +74,25 @@ def test_503_retries_then_server_error(monkeypatch):
     assert slept == [1, 2]
 
 
+def test_attempts_and_timeout_options_for_doctor(monkeypatch):
+    monkeypatch.setenv("ADO_TOKEN", "t")
+    seen = []
+
+    def failing(req, timeout=None):
+        seen.append(timeout)
+        raise _http_error(503)
+
+    monkeypatch.setattr("ado.client._OPENER.open", failing)
+    slept = []
+    with pytest.raises(AdoError, match="503"):
+        AdoClient(CFG, sleep=slept.append, attempts=1, timeout=10).get("/p")
+    assert seen == [10] and slept == []  # one attempt, the short timeout
+    seen.clear()
+    with pytest.raises(AdoError):
+        AdoClient(CFG, sleep=slept.append).get("/p")
+    assert len(seen) == 3 and set(seen) == {30}  # the default is unchanged for every other verb
+
+
 def test_urlerror_retries_then_server_error(monkeypatch):
     monkeypatch.setenv("ADO_TOKEN", "t")
     calls = {"n": 0}

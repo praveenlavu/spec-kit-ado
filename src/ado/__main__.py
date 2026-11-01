@@ -6,7 +6,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, attachments, branch, comments, decisions, dod, done, gate, kits, prs, push, questions, rules, stack, strict, tasks, workitems
+from . import __version__, attachments, branch, comments, decisions, dod, done, doctor, gate, kits, prs, push, questions, rules, stack, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid
@@ -481,6 +481,14 @@ def _kits_pin(args):
     return 0
 
 
+def _doctor(args):
+    """`ado doctor [--json] [--probe-item ID]`: rows of what is wrong with this setup (read-only; the one network call is a GET of connectionData).
+    Exit 0 when no row fails, else 1. A token, name or email never appears."""
+    result = doctor.run(".", probe_item=args.probe_item)
+    print(json.dumps(result, indent=2) if args.json else doctor.render(result))
+    return 1 if doctor.failed(result) else 0
+
+
 def _rules_confirm(args):
     """`ado rules <id> --confirm`: records in the ledger header the rule hashes a human reviewed (local only: no token, no request). New ids
     are added by anyone, also when another id changed or was dropped (written first, in one atomic write, then exit 2 naming the two lists). An
@@ -601,6 +609,10 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("setup", help="Configure this repo/team and verify access (read-only)")
+    p = sub.add_parser("doctor", help="What is wrong with this setup: git, Spec Kit, config, token, identity, extension, workflow, approvers, "
+                       "stack and kits, as ok/warn/fail/unknown rows with a fix (read-only; exit 1 when a row fails)")
+    p.add_argument("--json", action="store_true", help='print {"rows": [{"id", "status", "fix"}], "scopes": {}} instead of text')
+    p.add_argument("--probe-item", type=int, metavar="ID", help="a work item to probe write access against; accepted now, used by the scope probes (not in this build)")
     p = sub.add_parser("get", help="Get a work item (with relations)")
     p.add_argument("id", type=int)
     p = sub.add_parser("query", help="Run a WIQL query")
@@ -849,6 +861,8 @@ def main(argv=None):
             parser.error(stack.E_ROLE)
         if getattr(args, "story", None) is not None and not stack.valid_story(args.story):
             parser.error("--story must be a work item id (digits only, no leading zero)")
+    if args.command == "doctor" and args.probe_item is not None and not 1 <= args.probe_item <= prs.MAX_ID:
+        parser.error(f"--probe-item must be a work item id between 1 and {prs.MAX_ID}")
     if args.command == "rules" and not 1 <= args.id <= 999999999:
         parser.error("the story id must be between 1 and 999999999")
     if args.command == "branch":
@@ -866,6 +880,8 @@ def main(argv=None):
     try:
         if args.command == "setup":
             return run_setup()
+        if args.command == "doctor":  # rows, not an exception: every failure is a row
+            return _doctor(args)
         if args.command == "decisions" and args.add is not None:  # local only: no token, no request
             out = _add_decision(args)
         elif args.command == "decisions" and args.resolve:  # local only: no token, no request
