@@ -1904,3 +1904,21 @@ def test_gate_rule_drift_doc_pins():
     assert "**View work items in this node**" in az and "Keep **Limit job authorization scope to current project** on" in az and "an error (often 404)" in az
     assert 'PAT scope "Work Items: Read"' in az and "turn the setting off" not in az and "answer 404" not in az
     assert "online `rule_drift` check" in _flat("AGENTS.md") and "Gate check `rule_drift` and `rules-unreachable` (P3-9)" in _flat("CHANGELOG.md")
+
+
+def test_strict_rules_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("## Strict mode", "`rule-uncovered`", "`rule-unknown`", "`rule-changed`", "`rules-problem`", "`rules-missing`", "`rules-format`", "`rules-header`",
+                 "It is offline: no request, no token", "byte-identical to before", "Ids and counts only", "**Not overridable.**", "a hand-written `skip rule-uncovered` decision covers nothing",
+                 "**The rejected-exclusion exemption.**", "Every other rejected decision still blocks", "posted:` marker to match its current text", "or run `ado strict verify` again after a re-pull",
+                 "Process enforcement, not a security boundary", "named by its `D<n>` id only", "Re-pulling a rules file after `ado strict verify` makes the verification record stale"):
+        assert word in text, word
+    readme = _flat("README.md")
+    assert "| `rule-uncovered`, `rule-unknown`, `rule-changed`, `rules-problem`, `rules-missing`, `rules-format`, `rules-header` | `pr`, `done`, only with `rules.enabled` |" in readme
+    assert "**Never overridable**" in readme and "a rejected `out of scope: BR-…` line" in readme and "`rule-uncovered` until an AC row cites the rule" in readme
+    assert "the business-rules ids (`rule-uncovered`" in readme
+    agents = _flat("AGENTS.md")
+    assert "a rejected well-formed `out of scope: BR-…` line is left out" in agents and "`rules-header` (`ado dod <id> --refresh`)" in agents and "never do it yourself" in agents
+    conf = _flat("docs/configuration.md")
+    assert "`rules-header`, which no override can waive" in conf and "never a business-rules finding" in conf
+    assert "Strict wiring of the business rules and the rejected-exclusion exemption (P3-10)" in _flat("CHANGELOG.md")

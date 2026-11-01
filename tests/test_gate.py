@@ -1256,3 +1256,28 @@ def test_gate_cli_ids_in_the_ledger_never_build_a_path(tmp_path, monkeypatch):
     c = _cli(tmp_path, ledger=led)
     out = dispatch(FakeClient(c), _args(src=str(tmp_path), offline=True))
     assert out["rules"]["header"] == ["rules-from"] and out["rules"]["missing"] == []
+
+
+# ---- P3-10: a rejected exclusion is not an open decision when rules are enabled (the coverage check carries out the PO's answer) ----
+def test_rejected_exclusion_exempt_in_strict_and_gate_but_rule_uncovered():
+    led = _gl(ROWS[0], ROWS[2], reviewed=f"BR-1201-1@{H['BR-1201-1']}, BR-1201-2@{H['BR-1201-2']}")
+    dec = _dfile(_excl("BR-1201-2", status="rejected"))
+    on = _rg(led, decisions_md=dec, block=["open_decisions", "rule_coverage"])
+    assert on["open_decisions"] == [] and on["rules"]["uncovered"] == ["BR-1201-2"]  # exempt from open_decisions, enforced by coverage
+    assert on["blocked_by"] == ["rule_coverage"] and "D3" not in render_summary(on)
+    off = run_gate(led, SOURCES, {}, None, block=["open_decisions"], decisions_md=dec)
+    assert off["open_decisions"] == ["D3"] and off["blocked_by"] == ["open_decisions"]  # rules off: the baseline
+    only = _rg(_gl(*ROWS, reviewed=ALL.replace(f", BR-1200-1@{H['BR-1200-1']}", "").replace(f"BR-1200-1@{H['BR-1200-1']}, ", "")),
+               decisions_md=dec, block=["open_decisions", "rule_coverage"])
+    assert only["blocking"] is False and only["open_decisions"] == []  # the rule is tagged: the rejected line alone blocks nothing
+
+
+def test_other_rejected_decision_still_blocks_the_gate():
+    led = _clean()
+    bad = [_excl("BR-1201-2", status="rejected", n=1), _excl("BR-1201-2", status="rejected", n=6, posted=False), _D_REJ, "- [x] D4: Out of scope: BR-1201-2 → rejected · by: PO · note: no",
+           decisions.render_line({"id": "D5", "kind": "override", "text": "out of scope: BR-1201-2", "why": "x", "status": "rejected", "by": "PO",
+                                  "note": "", "posted": None, "used": ""})]
+    on = _rg(led, decisions_md=_dfile(*bad))
+    assert on["open_decisions"] == ["D3", "D4", "D5", "D6"]  # D1, the posted well-formed rejected exclusion, is the only exempt line (D6 was never posted)
+    sup = _rg(led, decisions_md=_dfile(_excl("BR-1201-2", status="rejected", n=1), _D_OPEN10))
+    assert sup["open_decisions"] == ["D10"]  # an open decision is still open

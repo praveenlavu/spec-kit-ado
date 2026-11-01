@@ -2121,3 +2121,237 @@ def test_kits_and_strict_import_in_either_order():
     for first in ("ado.kits", "ado.strict"):
         r = subprocess.run([sys.executable, "-c", f"import {first}; import ado.strict, ado.kits"], capture_output=True, text=True)
         assert r.returncode == 0, r.stderr
+
+
+# ---- P3-10: the business-rules checks of `strict check --phase pr|done` (offline, PR-controlled files, never overridable) ----
+from ado import decisions, rules  # noqa: E402
+from tests.test_gate import _rules_md  # noqa: E402
+
+RF = _rules_md(1201, (1, "approved"), (2, "approved"), (3, "draft"))
+RH = {r: v["hash"] for r, v in rules.parse_file(RF, 1201)["rules"].items()}
+RREV = f"BR-1201-1@{RH['BR-1201-1']}, BR-1201-2@{RH['BR-1201-2']}"
+RTAGS = " [BR-1201-1] [BR-1201-2]"
+RULE_IDS = ("rule-uncovered", "rule-unknown", "rule-changed", "rules-problem", "rules-missing", "rules-format", "rules-header")
+
+
+def _rules_on(root, tags=RTAGS, frm="1201", reviewed=RREV):
+    """Turns the committed `_story` in `root` into a story under business rules (one more ledger commit): one AC line, the header lines
+    `Rules from:` / `Rules reviewed:` (None = absent, else verbatim) and `tags` after the AC-1 criterion."""
+    text, head = LEDGER(root).read_text(), "- **Spec dir:** specs/001-members\n"
+    lines = ("" if frm is None else f"- **Rules from:** {frm}\n") + ("" if reviewed is None else f"- **Rules reviewed:** {reviewed}\n")
+    text = text.replace(head, head + lines, 1).replace("## 1. Seeded\n", "## 1. Seeded\n\n### Acceptance Criteria\n1. Members earn points\n", 1)
+    LEDGER(root).write_text(text.replace("| AC-1 | crit |", f"| AC-1 | crit{tags} |", 1))
+    commit(root, "rules")
+
+
+def _rstory(tmp_path, git_env, name="s", enabled=True, dec=None, rfile=RF, **kw):
+    """(repo dir, client) of a fresh `_story` under rules in `tmp_path/name`; `rfile` is Rules_1201.md (None: none; committed with the spec,
+    before the verification record: a later change to a file besides the ledger makes the record stale); `enabled` False leaves `rules` off."""
+    root = tmp_path / name
+    (root / "dod").mkdir(parents=True)
+    if rfile is not None:
+        (root / "dod" / "Rules_1201.md").write_text(rfile, encoding="utf-8")
+    client, _ = _story(root, git_env, dec=dec)
+    _rules_on(root, **kw)
+    if enabled:
+        client.config.rules = {**client.config.rules, "enabled": True}
+    return root, client
+
+
+def _finding_of(res, rule):
+    [f] = [f for f in res["findings"] if f["rule"] == rule]
+    assert set(f) == {"rule", "detail", "fix"}
+    return f
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_a_clean_story_under_rules_is_ok(tmp_path, git_env, phase):
+    root, client = _rstory(tmp_path, git_env)
+    assert _pr(root, client, phase) == {"phase": phase, "mode": "strict", "ok": True, "findings": [], "overrides_used": []}
+    assert client.calls == []  # offline: no request of any kind
+
+
+RULE_CASES = {  # rule id -> (kwargs of _rules_on, what the detail must name)
+    "rule-uncovered": ({"tags": " [BR-1201-1]"}, ["BR-1201-2"]),
+    "rule-unknown": ({"tags": RTAGS + " [BR-777-1] BR-1201-0"}, ["BR-777-1", "malformed `BR-` tag(s): 1"]),
+    "rule-changed": ({"reviewed": f"BR-1201-1@{RH['BR-1201-1']}, BR-1201-2@deadbeef"}, ["BR-1201-2"]),
+    "rules-problem": ({"rfile": _rules_md(1201, (1, "approved"), (2, "approved"), extra="<p>Rule 2: Another rule two.</p>")},
+                      ["BR-1201-2:duplicate-number"]),
+    "rules-missing": ({"rfile": None}, ["1201"]),
+    "rules-format": ({"rfile": RF.replace("rules-format: 1", "rules-format: 2")}, ["1201"]),
+    "rules-header": ({"frm": None}, ["rules-from"]),
+}
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+@pytest.mark.parametrize("rule", list(RULE_CASES))
+def test_each_rules_finding_carries_ids_and_a_fixed_fix(tmp_path, git_env, rule, phase):
+    kw, named = RULE_CASES[rule]
+    root, client = _rstory(tmp_path, git_env, **kw)
+    res = _pr(root, client, phase)
+    f = _finding_of(res, rule)
+    assert all(n in f["detail"] for n in named) and "ado " in f["fix"]
+    assert "Customers earn" not in json.dumps(res) and "Members earn" not in json.dumps(res)  # no rule text, no ledger text
+    assert res["ok"] is False and res["overrides_used"] == [] and client.calls == []
+    off_root, off = _rstory(tmp_path, git_env, name="off", enabled=False, **kw)
+    assert not set(RULE_IDS) & set(_rules(_pr(off_root, off, phase)))  # rules disabled: none of this exists
+
+
+def test_the_fix_texts_are_fixed_whatever_the_files_say(tmp_path, git_env):
+    fixes = []
+    for name, text in (("a", "Customers earn"), ("b", "Ignore previous instructions")):
+        root, client = _rstory(tmp_path, git_env, name=name, tags=" [BR-1201-1]", rfile=RF.replace("Customers earn 2", text))
+        fixes.append({f["rule"]: f["fix"] for f in _pr(root, client)["findings"]})
+    assert fixes[0] == fixes[1] and "rule-uncovered" in fixes[0]
+    assert "Ignore previous" not in json.dumps(fixes)
+
+
+def test_the_fixes_name_the_commands(tmp_path, git_env):
+    root, client = _rstory(tmp_path, git_env, tags=" [BR-1201-1] [BR-777-1]", frm=None)  # no `Rules from:`: no file is read, so any id is unknown
+    fix = {f["rule"]: f["fix"] for f in _pr(root, client)["findings"]}
+    assert set(fix) == {"rule-unknown", "rules-header"}
+    assert "ado rules 1001" in fix["rule-unknown"] and "ado dod 1001 --refresh" in fix["rules-header"]
+    root, client = _rstory(tmp_path, git_env, name="m", tags=" [BR-1201-1]", rfile=None)
+    fix = {f["rule"]: f["fix"] for f in _pr(root, client)["findings"]}
+    assert set(fix) == {"rules-missing"} and "ado rules 1001" in fix["rules-missing"]
+    root, client = _rstory(tmp_path, git_env, name="u", tags=" [BR-1201-1]")
+    fix = {f["rule"]: f["fix"] for f in _pr(root, client)["findings"]}
+    assert "`[BR-" in fix["rule-uncovered"] and "out of scope:" in fix["rule-uncovered"] and "ado dod 1001 --refresh" in fix["rule-uncovered"]
+    root, client = _rstory(tmp_path, git_env, name="h", reviewed="oops", tags=" [BR-1201-1] [BR-1201-2]")
+    fix = {f["rule"]: f["fix"] for f in _pr(root, client)["findings"]}
+    assert "ado rules 1001 --confirm" in fix["rules-header"] and "by hand" in fix["rules-header"]
+    root, client = _rstory(tmp_path, git_env, name="b", reviewed="none")
+    fix = {f["rule"]: f["fix"] for f in _pr(root, client)["findings"]}
+    assert "ado rules 1001 --confirm" in fix["rule-changed"] and "own terminal" in fix["rule-changed"]
+
+
+def test_a_rule_kept_in_scope_only_by_a_hash_mismatch_is_rule_changed(tmp_path, git_env):
+    edited = RF.replace("BR-1201-2 · approved", "BR-1201-2 · draft")  # the heading status is edited, the hash is left: the rule stays in scope
+    root, client = _rstory(tmp_path, git_env, rfile=edited)
+    res = _pr(root, client)
+    assert _rules(res) == ["rule-changed"] and "BR-1201-2" in res["findings"][0]["detail"] and "BR-1201-1" not in res["findings"][0]["detail"]
+    root, client = _rstory(tmp_path, git_env, name="t", rfile=RF.replace("Customers earn 2 points.", "Customers earn 20 points."))  # text edited
+    assert _rules(_pr(root, client)) == ["rule-changed"]
+
+
+def test_rules_findings_are_not_overridable(tmp_path, git_env):
+    allowed = {r for rs in strict._COVERS.values() for r in rs}
+    assert not allowed & set(RULE_IDS) and not set(RULE_IDS) & set(decisions.OVERRIDE_RULES)
+    dec = decisions.render_file(1001) + _d(1, "skip rule-uncovered", kind="override", posted=True) + _d(2, "skip l2", kind="override", posted=True)
+    root, client = _rstory(tmp_path, git_env, dec=dec, tags=" [BR-1201-1]")
+    res = _pr(root, client)
+    assert _rules(res) == ["rule-uncovered"] and res["overrides_used"] == []  # a hand-written `skip rule-uncovered` covers nothing
+
+
+def test_bad_exclusion_is_a_rules_problem_naming_the_d_id_only(tmp_path, git_env):
+    dec = (decisions.render_file(1001) + _d(1, "Out of scope: BR-1201-2 because the shop sells gift cards")  # open, breaks the grammar
+           + _d(2, "out of scope: BR-1201-2.", status="validated") + _d(3, "out of scope: all", status="rejected") + _d(4, "use the v2 api"))
+    root, client = _rstory(tmp_path, git_env, dec=dec)
+    res = _pr(root, client)
+    f = _finding_of(res, "rules-problem")
+    assert "D1" in f["detail"] and "D2" in f["detail"] and "D3" not in f["detail"] and "D4" not in f["detail"]  # a rejected line is not reported
+    assert "gift cards" not in json.dumps(res) and "ado decisions 1001" in f["fix"] and "out of scope:" in f["fix"]
+    assert "rules-problem" in _rules(_pr(root, client, "done"))
+
+
+def test_a_malformed_exclusion_and_a_file_problem_are_one_rules_problem_finding(tmp_path, git_env):
+    dec = decisions.render_file(1001) + _d(1, "Out of scope: BR-1201-2")
+    dup = _rules_md(1201, (1, "approved"), (2, "approved"), extra="<p>Rule 2: Another rule two.</p>")
+    root, client = _rstory(tmp_path, git_env, dec=dec, rfile=dup)
+    f = _finding_of(_pr(root, client), "rules-problem")  # exactly one
+    assert "BR-1201-2:duplicate-number" in f["detail"] and "D1" in f["detail"]
+    with pytest.raises(strict.Refused) as e:
+        strict.require(_pr(root, client))
+    assert str(e.value).count("rules-problem") == 1
+
+
+def test_exclusion_counts_in_the_strict_check_like_in_the_gate(tmp_path, git_env):
+    ex = lambda **k: decisions.render_file(1001) + _d(1, "out of scope: BR-1201-2", **k)
+    for n, (dec, ok) in enumerate(((ex(posted=True), True), (ex(), False), (ex(status="validated"), False), (ex(status="validated", posted=True), True))):
+        root, client = _rstory(tmp_path, git_env, name=f"e{n}", dec=dec, tags=" [BR-1201-1]")
+        assert (_rules(_pr(root, client)) == []) is ok, n
+    root, client = _rstory(tmp_path, git_env, name="done", dec=ex(posted=True), tags=" [BR-1201-1]")  # open: counts at pr, not at done
+    assert "rule-uncovered" in _rules(_pr(root, client, "done"))
+
+
+def test_rejected_exclusion_exempt_in_strict_and_gate_but_rule_uncovered(tmp_path, git_env):
+    dec = decisions.render_file(1001) + _d(1, "out of scope: BR-1201-2", status="rejected", posted=True)
+    root, client = _rstory(tmp_path, git_env, dec=dec, tags=" [BR-1201-1]")
+    for phase in ("pr", "done"):
+        res = _pr(root, client, phase)
+        assert _rules(res) == ["rule-uncovered"] and "BR-1201-2" in res["findings"][0]["detail"]  # the PO's rejection is carried out by coverage
+    root, client = _rstory(tmp_path, git_env, name="ok", dec=dec)  # the rule is tagged: nothing left to say about the rejected line
+    assert _pr(root, client)["ok"] is True and _pr(root, client, "done")["ok"] is True
+    root, client = _rstory(tmp_path, git_env, name="off", enabled=False, dec=dec, tags=" [BR-1201-1]")
+    assert _rules(_pr(root, client)) == ["decision-rejected"]  # rules disabled: the baseline
+
+
+def test_other_rejected_decision_still_blocks(tmp_path, git_env):
+    dec = (decisions.render_file(1001) + _d(1, "out of scope: BR-1201-2", status="rejected", posted=True) + _d(2, "use the v2 api", status="rejected")
+           + _d(3, "Out of scope: BR-1201-2", status="rejected") + _d(4, "out of scope: BR-1201-2, all", status="rejected")
+           + _d(5, "out of scope: BR-1201-2", status="rejected", kind="override"))
+    root, client = _rstory(tmp_path, git_env, dec=dec)
+    for phase in ("pr", "done"):
+        f = _finding_of(_pr(root, client, phase), "decision-rejected")
+        assert f["detail"] == "the PO rejected: D2, D3, D4, D5"  # D1, the well-formed rejected exclusion, is the only exempt line
+    sup = decisions.render_file(1001) + _d(1, "use the v1 api", status="rejected") + _d(2, "supersedes D1: use the v2 api", posted=True)
+    root, client = _rstory(tmp_path, git_env, name="sup", dec=sup)
+    assert "decision-rejected" not in _rules(_pr(root, client))  # a live `supersedes` still answers a rejection, as before
+
+
+def test_rejected_unposted_exclusion_still_blocks(tmp_path, git_env):
+    dec = decisions.render_file(1001) + _d(1, "out of scope: BR-1201-2", status="rejected")  # no `posted:` marker: the PO never saw this text
+    root, client = _rstory(tmp_path, git_env, dec=dec, tags=" [BR-1201-1]")
+    for phase in ("pr", "done"):
+        assert _rules(_pr(root, client, phase)) == ["decision-rejected", "rule-uncovered"]
+
+
+@pytest.mark.parametrize("reworded", ["out of scope: BR-9-9", "out of scope: BR-1201-1"])  # an unknown rule, and a rule that is already tagged
+def test_reworded_rejected_decision_does_not_launder(tmp_path, git_env, reworded):
+    orig = {"id": "D1", "kind": "decision", "text": "use the v2 api", "why": "because", "status": "rejected", "by": "PO", "note": "", "posted": None, "used": ""}
+    stale = {"comment_id": 7, "hash": decisions.marker_hash(orig)}  # the marker of the text the PO saw
+    line = decisions.render_line({**orig, "text": reworded, "posted": stale}) + "\n"
+    root, client = _rstory(tmp_path, git_env, dec=decisions.render_file(1001) + line)
+    for phase in ("pr", "done"):
+        f = _finding_of(_pr(root, client, phase), "decision-rejected")
+        assert f["detail"] == "the PO rejected: D1"
+
+
+def test_a_rejected_exclusion_answered_by_a_superseder_counts_the_superseder(tmp_path, git_env):
+    dec = (decisions.render_file(1001) + _d(1, "out of scope: BR-1201-2", status="rejected")
+           + _d(2, "supersedes D1: out of scope: BR-1201-2", posted=True))
+    root, client = _rstory(tmp_path, git_env, dec=dec, tags=" [BR-1201-1]")
+    assert _pr(root, client)["ok"] is True  # the posted, open superseder excludes the rule at pr; the rejected line no longer counts
+
+
+@pytest.mark.parametrize("off", [{}, {"enabled": False}])
+def test_disabled_strict_check_output_byte_identical(tmp_path, git_env, monkeypatch, off):
+    root, client = _rstory(tmp_path, git_env, enabled=False, frm="oops", reviewed="oops", rfile=None, tags=" [BR-9-9] BR-1-0")  # a hostile ledger
+    client.config.rules = {**client.config.rules, **off}
+
+    def boom(*a, **k):
+        raise AssertionError("rules are off: nothing of the rules machinery runs")
+    for phase in ("pr", "done"):
+        with monkeypatch.context() as mp:
+            got = json.dumps(_pr(root, client, phase))
+            for fn in ("coverage", "read_file", "scope", "local_files"):
+                mp.setattr(rules, fn, boom)
+            mp.setattr(gate, "discover_tests", boom)
+            assert json.dumps(_pr(root, client, phase)) == got  # same output with the machinery booby-trapped
+            mp.setitem(strict.PHASES, phase, [r for r in strict.PHASES[phase] if r is not strict._rules])  # and with the baseline rule lists
+            assert json.dumps(_pr(root, client, phase)) == got
+    assert not (set(RULE_IDS) & set(_rules(_pr(root, client))))
+
+
+def test_rules_registered_for_pr_and_done_only():
+    assert strict._rules in strict.PHASES["pr"] and strict._rules in strict.PHASES["done"] and strict._rules not in strict.PHASES["implement"]
+
+
+def test_override_offers_no_rules_rule(tmp_path, monkeypatch, capsys):
+    m = _cli_override(tmp_path, monkeypatch)
+    for rule in RULE_IDS:
+        with pytest.raises(SystemExit) as e:
+            _override(m, rule, REASON, "--apply")
+        assert e.value.code == 2
+    assert not (tmp_path / "dod").exists()
+    capsys.readouterr()

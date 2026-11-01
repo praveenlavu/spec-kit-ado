@@ -668,6 +668,29 @@ def exclusion_ids(d):
     return list(dict.fromkeys(parts))
 
 
+def rejected_exclusion(d):
+    """True for a parsed decision line that is a well-formed exclusion (`exclusion_ids` is not None) of kind decision or assumption (the kinds
+    `scope` reads) whose `posted:` marker matches its CURRENT text (the PO saw exactly this exclusion). With rules enabled the PO's rejection of
+    such a line is carried out by the coverage check (the rule is back in scope), so `decision-rejected` and the gate's `open_decisions` leave it
+    out; any other rejected line (a malformed exclusion, an override, an unposted line, a line re-worded after it was posted) still blocks."""
+    return (d["kind"] != "override" and exclusion_ids(d) is not None and bool(d["posted"])
+            and d["posted"]["hash"] == decisions.marker_hash(d))
+
+
+def local_files(cfg, ledger_md, root, base=None):
+    """`{work item id: parse_file result}` for the rules files that the ledger's `Rules from:` names and that can be read: only digits-only ids of a
+    well-formed header line ever build a path, each file is read as confined as the ledger (`read_file`: no symlink, no hard link, a regular file of
+    at most 1 MiB, UTF-8, under `dod_path` and `root`); an unreadable one is simply absent (the coverage check reports it as missing). `base`: the
+    directory `cfg.dod_path` is relative to (None: the working directory)."""
+    frm, files = dod.ledger_rules_from(ledger_md), {}
+    dod_path = cfg.dod_path if base is None else Path(base) / cfg.dod_path
+    for wid in frm["ids"] if frm["valid"] else []:
+        text = read_file(rules_file(dod_path, wid), root, dod_path)
+        if text is not None:
+            files[wid] = parse_file(text, wid)
+    return files
+
+
 def _key(rid):
     m = TAG_RE.fullmatch(rid)
     return int(m.group(1)), int(m.group(2))

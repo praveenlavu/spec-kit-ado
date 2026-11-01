@@ -340,17 +340,9 @@ def dispatch(client, args):
 
 
 def _gate_rules_ctx(cfg, ledger_md, src):
-    """None when rules are off (nothing is read: the v0.2 gate exactly). Else the parsed rules files that the ledger's `Rules from:` names (only
-    digits-only ids from a well-formed header line ever build a path), each read as confined as the ledger (`rules.read_file`: no symlink, no hard
-    link, a regular file of at most 1 MiB under `dod_path` and `--src`); an unreadable one is simply absent, and the gate reports it as missing."""
-    if not cfg.rules["enabled"]:
-        return None
-    frm, files = dod.ledger_rules_from(ledger_md), {}
-    for wid in frm["ids"] if frm["valid"] else []:
-        text = rules.read_file(rules.rules_file(cfg.dod_path, wid), src, cfg.dod_path)
-        if text is not None:
-            files[wid] = rules.parse_file(text, wid)
-    return {"files": files}
+    """None when rules are off (nothing is read: the v0.2 gate exactly). Else the parsed rules files that the ledger's `Rules from:` names
+    (`rules.local_files`: confined reads, digits-only ids; an unreadable one is simply absent, and the gate reports it as missing)."""
+    return {"files": rules.local_files(cfg, ledger_md, src)} if cfg.rules["enabled"] else None
 
 
 def _gate_base(cfg, args):

@@ -357,7 +357,11 @@ def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, 
     open_q = [q["id"] for q in qs["open"]]
     ds = parse_decisions(decisions_md or "")  # open and rejected are both unresolved (a decision a live `supersedes` answers is not); reported only when the file has D lines
     eff = effective(ds)
-    open_d = [d["id"] for d in sorted(eff["open"] + eff["rejected"], key=lambda d: int(d["id"][1:]))]
+    rejected = eff["rejected"]
+    if rules_ctx is not None:  # business rules on: a rejected `out of scope:` line is carried out by rule_coverage (the rule is back in scope), not an open decision
+        from . import rules  # lazy: rules imports this module
+        rejected = [d for d in rejected if not rules.rejected_exclusion(d)]
+    open_d = [d["id"] for d in sorted(eff["open"] + rejected, key=lambda d: int(d["id"][1:]))]
     open_d += ["?"] * (ds["unparsed"] or decisions_unreadable or supersede_problem(ds))  # fail closed: a malformed D line, an unclosed fence or comment, an unreadable file, a bad supersedes
     no_story, commits_note = commits or ([], None)
     open_ledger = unclosed(ledger_md)  # fail closed: counts as an open-questions finding, so `gate.block` can stop on it

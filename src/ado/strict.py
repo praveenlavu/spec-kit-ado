@@ -19,7 +19,7 @@ import unicodedata
 from datetime import date
 from pathlib import Path
 
-from . import decisions, dod, gate, kits, prs, push, questions, stack, tasks
+from . import decisions, dod, gate, kits, prs, push, questions, rules, stack, tasks
 from .auth import AuthError
 from .client import AdoError
 from .config import Config, ConfigInvalid, _has_control
@@ -999,6 +999,8 @@ def _decisions_pr(c):
     still matches its text: the PO must have seen it). Ids only, never decision text."""
     out = _decisions_ok(c)
     rejected = decisions.effective(c.decisions)["rejected"]  # a rejected line a live `supersedes` answers no longer blocks
+    if c.cfg.rules["enabled"]:  # a rejected `out of scope:` line is carried out by `_rules` (the rule is back in scope), not a finding of its own
+        rejected = [d for d in rejected if not rules.rejected_exclusion(d)]
     if rejected:
         out.append(_finding("decision-rejected", f"the PO rejected: {_ids_detail(rejected)}",
                             "change the work to match the PO's answer, or record a new decision; never re-word or delete a rejected line"))
@@ -1022,6 +1024,74 @@ def _decisions_done(c):
     return [_finding("decision-open", f"decision(s) the PO has not validated or rejected yet: {_ids_detail(still)}",
                      "wait for the PO's reply (`ado comments`); a human records it with `ado decisions "
                      f"{c.id} --resolve D<n> --validated|--rejected`")]
+
+
+# ---- business rules (R§7, P3-10): `rules.coverage` over the PR's own files, offline; none of these can be overridden (not in _COVERS) ----
+_SAFE = re.compile(r"[A-Za-z0-9:?-]{1,60}")  # rule ids, work item ids and problem keys only; anything else is shown as `?`
+_MAX_IDS = 20
+
+
+def _ids(items):
+    shown = [str(i) if _SAFE.fullmatch(str(i)) else "?" for i in items[:_MAX_IDS]]
+    return ", ".join(shown) + (f" and {len(items) - _MAX_IDS} more" if len(items) > _MAX_IDS else "")
+
+
+def _rules_fixes(sid):
+    """The fixed fix text of each rules finding: the commands to run, never any text from a file."""
+    return {
+        "rule-uncovered": (f"tag the AC row that implements the rule (`[BR-<id>-<n>]` at the end of its criterion cell, with a test that exists); if no AC "
+                           f"reflects it the story's AC are extended in ADO, then `ado dod {sid} --refresh`; or the PO validates a posted "
+                           f"`out of scope: BR-<id>-<n>` decision (`ado decisions {sid} --add`, then `--post`); never overridable"),
+        "rule-unknown": (f"correct or remove the tag in the AC row; if the rule exists in ADO, pull it with `ado rules {sid}` and commit the file; "
+                         "a tag is exactly `BR-<work item id>-<number>`"),
+        "rule-changed": (f"read the rule in its rules file (re-pull with `ado rules {sid}` if the file was edited by hand), then a human confirms it "
+                         f"with `ado rules {sid} --confirm` (the first confirm of a new rule is free; re-confirming a changed or dropped hash is a human's, in their own terminal)"),
+        "rules-problem": f"fix the Business rules section of the Epic/Feature in ADO, then `ado rules {sid}` and commit the file",
+        "rules-bad-exclusion": (f"add a correct line, exactly `out of scope: BR-<id>-<n>[, BR-<id>-<n>]`, with `ado decisions {sid} --add` and post it with "
+                                f"`--post` (`ado decisions {sid}` shows the lines; never edit a line the PO answered); a malformed line excludes nothing"),
+        "rules-missing": f"pull the rules with `ado rules {sid}` and commit the file(s)",
+        "rules-format": f"re-pull the file with `ado rules {sid}` (it is in another rules format) and commit it",
+        "rules-from": f"`ado dod {sid} --refresh` writes the missing or malformed `Rules from:` line",
+        "rules-reviewed": f"repair the malformed `Rules reviewed:` line by hand, then a human runs `ado rules {sid} --confirm` in their own terminal",
+    }
+
+
+def _rules(c):
+    """The offline business-rules findings of `rules.coverage` (R§7), only with `rules.enabled` (the target branch's config in CI, like every
+    strict rule): `rule-uncovered`, `rule-unknown`, `rule-changed` (also a rule kept in scope only by a hash mismatch), `rules-problem` (an error
+    problem of a file, or a malformed `out of scope:` line named by its D id), `rules-missing`, `rules-format`, `rules-header`. Inputs are the
+    ones `ado gate` uses (the ledger, the rules files `Rules from:` names, the decisions file, the test files by the gate's globs). The live
+    drift check is the gate's: this one makes no request. A detail carries ids, work item ids and counts only, never rule or ledger text."""
+    if not c.cfg.rules["enabled"] or c.ledger is None:  # a missing ledger is reported by _ledger
+        return []
+    files = rules.local_files(c.cfg, c.ledger, c.repo, c.repo)
+    sources = gate.discover_tests(c.repo, {**gate.DEFAULT_TESTS, **c.cfg.gate["tests"]}, set())
+    cov = rules.coverage(c.ledger, sources, files, dod.ledger_rules_from(c.ledger), dod.ledger_rules_reviewed(c.ledger), c.decisions, c.phase)
+    fix, out = _rules_fixes(c.id), []
+    if cov["uncovered"]:
+        out.append(_finding("rule-uncovered", "rule(s) that bind the story are cited by no AC row with a test that exists, and no counted exclusion "
+                            f"lifts them: {_ids(cov['uncovered'])}", fix["rule-uncovered"]))
+    named = [r for r in cov["unknown"] if r != "?"]
+    if cov["unknown"]:
+        out.append(_finding("rule-unknown", "cited rule id(s) found in no rules file: " + (_ids(named) or "none") +
+                            f"; malformed `BR-` tag(s): {len(cov['unknown']) - len(named)}", fix["rule-unknown"]))
+    if cov["changed"]:
+        out.append(_finding("rule-changed", "rule(s) not confirmed, changed since confirmed, or whose text no longer matches the hash in their "
+                            f"heading: {_ids(cov['changed'])}", fix["rule-changed"]))
+    bad = rules.scope({}, [], c.decisions, c.phase)["bad_exclusions"]
+    if cov["problems"] or bad:  # one finding, so the id shows once in the refusal text
+        out.append(_finding("rules-problem", "; ".join(
+            ([f"error problem(s) in a rules file (<id>:<key>): {_ids(cov['problems'])}"] if cov["problems"] else []) +
+            ([f"malformed `out of scope:` decision line(s), which exclude nothing: {_ids(bad)}"] if bad else [])),
+            " / ".join(([fix["rules-problem"]] if cov["problems"] else []) + ([fix["rules-bad-exclusion"]] if bad else []))))
+    if cov["missing"]:
+        out.append(_finding("rules-missing", f"no usable rules file for work item(s): {_ids(cov['missing'])}", fix["rules-missing"]))
+    if cov["format"]:
+        out.append(_finding("rules-format", f"rules file(s) in another rules-format for work item(s): {_ids(cov['format'])}", fix["rules-format"]))
+    if cov["header"]:
+        out.append(_finding("rules-header", "malformed or missing ledger header line(s): " + _ids(cov["header"]),
+                            "; ".join(fix[h] for h in cov["header"] if h in fix)))
+    return out
 
 
 _REVIEW_FIX = "run speckit.ado.review, fix what it blocks on, commit the ledger"
@@ -1135,8 +1205,8 @@ def _fidelity_warnings(c):
 
 PHASES = {
     "implement": [_ledger, _spec_files, _placeholders, _open_questions, _board, _test_command, _stack_profile, _stack_unprofiled, _kits],
-    "pr": [_ledger, _base, _l1, _record, _decisions_pr, _review, _fidelity_pr, _stack_profile, _stack_unprofiled, _kits],
-    "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _review, _fidelity_done, _stack_profile, _stack_unprofiled, _kits],
+    "pr": [_ledger, _base, _l1, _record, _decisions_pr, _rules, _review, _fidelity_pr, _stack_profile, _stack_unprofiled, _kits],
+    "done": [_ledger, _evidence, _record_done, _decisions_pr, _decisions_done, _rules, _review, _fidelity_done, _stack_profile, _stack_unprofiled, _kits],
 }
 
 # ---- override (D§7): `skip <rule>` lines of kind override; only these findings, never L1 or a missing spec/plan/tasks ----

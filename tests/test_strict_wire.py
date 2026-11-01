@@ -10,17 +10,19 @@ from ado import __main__ as m
 from ado import decisions, strict
 from tests.conftest import FakeClient, commit, git
 from tests.test_cli import _gate_repo
-from tests.test_strict import CMD, DEC, LEDGER, _d, _pr, _rules, _squash, _story
+from tests.test_strict import CMD, DEC, LEDGER, RF, RTAGS, _d, _pr, _rules, _rules_on, _squash, _story
 
 PR_ARGS = ["pr", "create", "1001", "--title", "T", "--body-file", "body.md", "--base", "trunk", "--head", "main", "--allow-incomplete"]
 TODAY = date.today().isoformat()
 
 
-def _wire(tmp_path, monkeypatch, git_env, mode="strict", responses=(), committed=False, **kw):
+def _wire(tmp_path, monkeypatch, git_env, mode="strict", responses=(), committed=False, hook=None, **kw):
     """The `_story` repo (branch main; `trunk` = the commit before the red commit) with a config, the CLI patched to a FakeClient
     and `gh` recorded: returns (main module, holder of the FakeClient, list of gh calls, story)."""
     cfg = {"organization": "contoso", "project": "Fabrikam", "strict": {"test_command": CMD}, **({"mode": mode} if mode else {})}
     client, s = _story(tmp_path, git_env, **kw, **({"config": cfg} if committed else {}))  # committed: the head holds its own config (CI runs read it)
+    if hook:
+        hook(tmp_path)  # a further commit on the story, before the untracked config and body.md exist
     git(tmp_path, "branch", "trunk", s.base)
     (tmp_path / "ado.config.json").write_text(json.dumps(cfg))
     (tmp_path / "body.md").write_text("Body\n")
@@ -484,3 +486,66 @@ def test_pr_create_and_done_strict_refuse_a_missing_or_draft_stack_profile(tmp_p
         assert rule in [f["rule"] for f in json.loads(cap.out)["findings"]] and rule in cap.err
         assert "Run tests with" not in cap.out + cap.err and stack.PROFILE_FILE in cap.out
     assert sent == [] and fake["c"].calls == []
+
+
+# ---- P3-10: business rules at `pr create`, `done` and `strict check` ----
+def _rwire(tmp_path, monkeypatch, git_env, tags=RTAGS, enabled=True, **kw):
+    """`_wire` for a story under business rules: Rules_1201.md is committed with the spec, the ledger gains the header lines and the tags,
+    and `rules.enabled` goes into ado.config.json (the CLI's config) when `enabled`."""
+    (tmp_path / "dod").mkdir()
+    (tmp_path / "dod" / "Rules_1201.md").write_text(RF, encoding="utf-8")
+    out = _wire(tmp_path, monkeypatch, git_env, hook=lambda root: _rules_on(root, tags=tags), **kw)
+    cfg = json.loads((tmp_path / "ado.config.json").read_text())
+    (tmp_path / "ado.config.json").write_text(json.dumps({**cfg, **({"rules": {"enabled": True}} if enabled else {})}))
+    return out
+
+
+@pytest.mark.parametrize("apply", [False, True])
+def test_pr_create_and_done_refuse_nothing_sent(tmp_path, monkeypatch, capsys, git_env, apply):
+    mod, fake, sent, s = _rwire(tmp_path, monkeypatch, git_env, tags=" [BR-1201-1]")
+    before = (LEDGER(tmp_path).read_bytes(), (tmp_path / "dod" / "Rules_1201.md").read_bytes())
+    _tick(tmp_path)  # done needs section 5; pr create does not mind
+    for argv in (PR_ARGS + ["--plan-out", "out/plan-pr.md"], ["done", "1001", "--plan-out", "out/plan.md"]):
+        assert mod.main(argv + (["--apply"] if apply else [])) == 2
+        cap = capsys.readouterr()
+        out = json.loads(cap.out)
+        f = next(f for f in out["findings"] if f["rule"] == "rule-uncovered")
+        assert out["ok"] is False and "BR-1201-2" in f["detail"]
+        assert cap.err.startswith("error: strict check failed: ") and "rule-uncovered" in cap.err and f["fix"] in cap.err
+        assert "Customers earn" not in cap.err + cap.out and "Members earn" not in cap.err + cap.out
+        assert not (tmp_path / "out").exists() and sent == [] and fake["c"].calls == []  # no plan file, no request of any kind
+    assert LEDGER(tmp_path).read_bytes() != before[0] and (tmp_path / "dod" / "Rules_1201.md").read_bytes() == before[1]  # nothing written (only _tick)
+
+
+def test_pr_create_passes_a_covered_story_under_rules_and_disabled_rules_change_nothing(tmp_path, monkeypatch, capsys, git_env):
+    mod, fake, sent, s = _rwire(tmp_path, monkeypatch, git_env)
+    assert mod.main(PR_ARGS + ["--plan-out", "out/plan-pr.md"]) == 0 and mod.main(PR_ARGS + ["--apply"]) == 0 and len(sent) == 1
+    capsys.readouterr()
+
+
+def test_strict_check_cli_reports_rules_findings_and_is_silent_with_rules_off(tmp_path, monkeypatch, capsys, git_env):
+    mod, fake, sent, s = _rwire(tmp_path, monkeypatch, git_env, tags=" [BR-1201-1]")
+    assert mod.main(["strict", "check", "1001", "--phase", "done"]) == 2  # done has no base ref to resolve
+    out = json.loads(capsys.readouterr().out)
+    assert [f["rule"] for f in out["findings"]] == ["rule-uncovered"] and fake["c"].calls == []
+    (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam", "mode": "strict", "strict": {"test_command": CMD}}))
+    assert mod.main(["strict", "check", "1001", "--phase", "done"]) == 0  # the same repo with rules absent: nothing
+    assert json.loads(capsys.readouterr().out)["findings"] == []
+
+
+def test_strict_check_in_ci_judges_rules_from_the_target_branch_config(tmp_path, monkeypatch, capsys, git_env):
+    """A PR that switches rules off in its own ado.config.json (or drops the key) is still judged with them on: the target says so."""
+    mod, fake, sent, s = _rwire(tmp_path, monkeypatch, git_env, tags=" [BR-1201-1]", enabled=False)
+    head = git(tmp_path, "rev-parse", "HEAD")
+    target = {"organization": "contoso", "project": "Fabrikam", "mode": "strict", "strict": {"test_command": CMD}, "rules": {"enabled": True}}
+    git(tmp_path, "checkout", "-q", "-b", "target2", f"{s.red}~1")
+    (tmp_path / "ado.config.json").write_text(json.dumps(target))
+    git(tmp_path, "add", "ado.config.json")
+    git(tmp_path, "commit", "-q", "-m", "target config")
+    git(tmp_path, "checkout", "-q", "--detach", head)
+    for own in ({"rules": {"enabled": False}}, {}):  # the PR's own config: rules off, or no key
+        (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam", "mode": "strict",
+                                                              "strict": {"test_command": CMD}, **own}))
+        assert mod.main(["strict", "check", "1001", "--phase", "pr", "--head", head, "--base", "target2"]) == 2, own
+        out = json.loads(capsys.readouterr().out)
+        assert "rule-uncovered" in [f["rule"] for f in out["findings"]], own
