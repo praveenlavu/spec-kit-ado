@@ -178,6 +178,7 @@ def ac_lines(ledger_md):
     """The AC lines of section 1's `### Acceptance Criteria` block; AC-n is the n-th.
     Blank lines, blockquote lines (the thin-AC banner) and the `_(none ...)_` placeholder are
     skipped; leading list markers are stripped. Read only before SECTION2, like `section`."""
+    ledger_md = ledger_md.replace("\r\n", "\n").replace("\r", "\n")  # a CRLF checkout (autocrlf) must read the same: `$` stops at `\n`, not `\r`
     vis, i = _mask(ledger_md), _section2_at(ledger_md)
     m = re.search(r"^### Acceptance Criteria[ \t]*$", vis[:i] if i != -1 else vis, re.M)
     if not m:

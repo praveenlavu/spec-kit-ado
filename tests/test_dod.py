@@ -300,6 +300,15 @@ def test_ac_lines_rule():
     assert ac_lines("no ledger") == []
 
 
+def test_ac_lines_read_the_same_from_a_crlf_ledger():
+    """A Windows checkout (autocrlf) turns every `\\n` into `\\r\\n`; `$` in the heading pattern stopped at `\\n`, so AC-n vanished and the
+    rules gate saw 0 criteria (found while reviewing P3-8)."""
+    md = render_dod(_wi(**{"Microsoft.VSTS.Common.AcceptanceCriteria": "<ul><li>Given a</li><li>Then b</li></ul>"}), "o", "p")
+    assert ac_lines(md) == ["Given a", "Then b"]
+    assert ac_lines(md.replace("\n", "\r\n")) == ["Given a", "Then b"]
+    assert ac_lines(md.replace("\n", "\r")) == ["Given a", "Then b"]
+
+
 def test_ac_lines_nested_block_html_has_no_bare_marker_lines():
     def ac(raw):
         return ac_lines(render_dod(_wi(**{"Microsoft.VSTS.Common.AcceptanceCriteria": raw}), "o", "p"))
