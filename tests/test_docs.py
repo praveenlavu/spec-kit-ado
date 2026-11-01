@@ -2306,3 +2306,22 @@ def test_doctor_doc_pins():
     assert "never shown as `ok`" in cfg and "`unknown` means" in readme and "anonymous `connectionData`" in readme
     assert "`ado doctor --json`" in cfg and "exits `0` when no row fails" in cfg and "accepted and ignored" in cfg
     assert "ado doctor [--json] [--probe-item ID]" in agents and "never prints a token, name or email" in agents
+
+
+def test_status_doc_pins():
+    from ado import status
+    ids = [s[0] for s in status.STAGES]
+    cfg, readme, agents, hitl = _flat("docs/configuration.md"), _flat("README.md"), _flat("AGENTS.md"), _flat("rules/hitl.md")
+    assert "## Where a story is" in (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
+    log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`ado status ID [--json] [--offline] [--catch-up]` (P4-4)") < log.index("## 0.2")
+    for i in ids:
+        assert f"`{i}`" in cfg and f"`{i}`" in readme, i
+    assert "Story 1001: <stage>. Next: <command>" in readme and "`board not checked`" in cfg and "never `done`" in cfg
+    assert "never reported as met when ADO could not be read" in readme and "`--catch-up` is accepted and ignored" in cfg
+    assert "ado status <id> [--json] [--offline] [--catch-up]" in agents and "never ADO text" in agents and "`ado status`" in hitl
+    assert "ado status <id>" in _flat("commands/status.md")
+    for t in (readme, cfg):
+        assert "vstfs:///GitHub/PullRequest/<repo guid>%2f<number>" in t and "Azure Boards GitHub app is authorised" in t and "not confirmed" not in t.split("pr-link")[1][:900]
+    assert "`### Review`" in readme and "a commit that merely names the story does not count" in readme
+    assert "not an authorship check" in cfg and "the live `rule_drift` check is in `ado gate`" in cfg and "git remote set-head origin --auto" in cfg

@@ -6,7 +6,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, attachments, branch, comments, decisions, dod, done, doctor, gate, kits, prs, push, questions, rules, stack, strict, tasks, workitems
+from . import __version__, attachments, branch, comments, decisions, dod, done, doctor, gate, kits, prs, push, questions, rules, stack, status, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid
@@ -489,6 +489,19 @@ def _doctor(args):
     return 1 if doctor.failed(result) else 0
 
 
+def _status(args):
+    """`ado status ID [--json] [--offline] [--catch-up]`: the first unmet stage of the story and its one next command (read-only; the board stages
+    need the network and are 'not checked' offline or when ADO cannot be read). Exit 0: it reports, it does not judge. No ADO text is printed."""
+    try:
+        cfg = Config.load()
+    except ConfigError:
+        cfg = None  # the `config` stage says so
+    client = None if args.offline or cfg is None else AdoClient(cfg)
+    result = status.evaluate(client, args.id, ".", offline=args.offline)
+    print(json.dumps(result, indent=2) if args.json else status.render(result, args.id))
+    return 0
+
+
 def _rules_confirm(args):
     """`ado rules <id> --confirm`: records in the ledger header the rule hashes a human reviewed (local only: no token, no request). New ids
     are added by anyone, also when another id changed or was dropped (written first, in one atomic write, then exit 2 naming the two lists). An
@@ -613,6 +626,11 @@ def main(argv=None):
                        "stack and kits, as ok/warn/fail/unknown rows with a fix (read-only; exit 1 when a row fails)")
     p.add_argument("--json", action="store_true", help='print {"rows": [{"id", "status", "fix"}], "scopes": {}} instead of text')
     p.add_argument("--probe-item", type=int, metavar="ID", help="a work item to probe write access against; accepted now, used by the scope probes (not in this build)")
+    p = sub.add_parser("status", help="Which stage a story is at and the one command that moves it on (read-only; board stages need the network)")
+    p.add_argument("id", type=int)
+    p.add_argument("--json", action="store_true", help="print the result as JSON")
+    p.add_argument("--offline", action="store_true", help="do not read ADO: the board stages are 'not checked', never met")
+    p.add_argument("--catch-up", action="store_true", help="accepted and ignored for now (run awareness arrives in a later task)")
     p = sub.add_parser("get", help="Get a work item (with relations)")
     p.add_argument("id", type=int)
     p = sub.add_parser("query", help="Run a WIQL query")
@@ -863,6 +881,8 @@ def main(argv=None):
             parser.error("--story must be a work item id (digits only, no leading zero)")
     if args.command == "doctor" and args.probe_item is not None and not 1 <= args.probe_item <= prs.MAX_ID:
         parser.error(f"--probe-item must be a work item id between 1 and {prs.MAX_ID}")
+    if args.command == "status" and not 1 <= args.id <= prs.MAX_ID:
+        parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
     if args.command == "rules" and not 1 <= args.id <= 999999999:
         parser.error("the story id must be between 1 and 999999999")
     if args.command == "branch":
@@ -882,6 +902,8 @@ def main(argv=None):
             return run_setup()
         if args.command == "doctor":  # rows, not an exception: every failure is a row
             return _doctor(args)
+        if args.command == "status":  # a report: every failure is a stage, not an exception
+            return _status(args)
         if args.command == "decisions" and args.add is not None:  # local only: no token, no request
             out = _add_decision(args)
         elif args.command == "decisions" and args.resolve:  # local only: no token, no request

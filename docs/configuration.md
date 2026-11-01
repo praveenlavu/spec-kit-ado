@@ -185,3 +185,36 @@ through `gh`, so no Code scope is needed.
 checklist that is not ready (`ado branch --id-from` also exits 1 when the branch names no story); `2` a config, credential or
 argument problem, or a plan that changed since approval (`--expect-plan`); `3` only for `ado gate`,
 `ado branch --id-from` and `ado strict mode`: `ado.config.json` is present but invalid (CI fails on it). The `ado stack` and `ado kits` verbs use only `0` (success, or a preview) and `2` (a refusal, an invalid profile or lockfile, a missing terminal for `--apply`, a usage error); `ado stack show --check` and `ado kits verify` also exit `2` on a finding (in advisory mode `--check` always exits `0`).
+
+## Where a story is
+
+`ado status <id>` answers "what do I do next?" with the first stage a story has not met and one command: `Story 1001: tasks-ticked. Next: speckit.ado.implement 1001`
+(`Why:` adds a fixed sentence; `--json` prints `{stage, next, why, board_checked, run, not_checked, board}`). It writes nothing and prints stage ids, counts and the
+story id only: never ledger, spec, decision, comment or ADO text. It exits `0` whatever the stage and `2` for a usage error.
+
+| Stage | Met when | Needs ADO |
+|---|---|---|
+| `config` | `ado.config.json` is valid | no |
+| `ledger` | `<dod_path>/DoD_<id>.md` is a readable regular file inside the working tree with no unclosed fence or comment | no |
+| `stack-profile` (strict) | `ado stack show --check` would exit 0 | no |
+| `rules` (`rules.enabled`) | the rules files named by `Rules from:` are present and every in-scope rule is confirmed in `Rules reviewed:`. Local only: the live `rule_drift` check is in `ado gate`. An unconfirmed rule is free (the next command is yours to run); a changed one needs a human's own terminal, and the `why` says which | no |
+| `questions-posted` | the open questions are posted as the one questions comment (or there is nothing to post) | comments |
+| `questions-answered` | no open question is left in ledger section 2 | no |
+| `plan`, `tasks` | `plan.md` exists, `tasks.md` lists tasks (in the ledger's spec dir) | no |
+| `board-tasks` | every task of `tasks.md` has a Task under the story | child Tasks |
+| `tasks-ticked` | every task of `tasks.md` is ticked | no |
+| `board-sync` | no Task differs from `tasks.md` (what `ado push` would update) | child Tasks |
+| `decisions-posted` | no decision line is unposted, and every `posted:` marker names a decisions comment that is on the story (a `posted:` marker is not an authorship check: it does not show who wrote the comment) | comments |
+| `verified` (strict) | a current verification record | no |
+| `gate`, `review` | a current gate result that is not blocking, and a current review that does not block (a blocker blocks even when `review_block_on` is empty). Once the work has landed on the default branch (see `merged`) they are not judged stale | no |
+| `pr-link` | the story has an `ArtifactLink` relation to a pull request: Azure Repos `vstfs:///Git/PullRequestId/<project guid>%2f<repo guid>%2f<number>` or GitHub `vstfs:///GitHub/PullRequest/<repo guid>%2f<number>` (a GitHub commit or branch link is not a PR). GitHub PR links appear only when the Azure Boards GitHub app is authorised in the project | story |
+| `merged` | the ledger as committed on the branch `origin/HEAD` points at holds this ledger's latest `### Review` (else `### Gate`) heading: the work has landed, however it was merged. Fetch first; a commit that only names the story does not count. Without `origin/HEAD` the next command is `git remote set-head origin --auto` | no |
+| `done-state` | the story is in `done_state`; whether the ledger is attached is not judged (`ado done` attaches it, even to a story closed by hand) (in strict mode with a decision still open its next command is `ado decisions <id>`, because `ado done` refuses) | story |
+| `decisions-closed` (strict) | no decision is open or rejected | no |
+
+A board stage is never reported as met when ADO could not be read. With `--offline`, with no token, or after one failed request, the remaining board
+stages are not tried: they are listed as `Board not checked` and skipped, so the answer is the first unmet stage that could be read. If everything
+that could be read is met, the stage is `board not checked` and the next command is `ado status <id>` (offline) or `ado doctor` (an error); it is never
+`done`. `board_checked` is false whenever the board was not read, even if the answer is a local stage. An unclosed code fence or comment in the ledger gets `ado dod <id> --refresh` only when it is in section 1 (a refresh splices from section 2); elsewhere the fix is by hand. A file that cannot be read (a symlink, outside the working tree, over 1 MiB, not UTF-8) leaves its stage unmet. `--catch-up` is accepted and ignored
+for now; reading the newest `ado-lifecycle` run is a later task. This is process help, not a security boundary: the ledger, the spec dir and the decisions
+file come from the branch and can be edited.

@@ -130,9 +130,9 @@ def compare(tmp_path):
     old = _run_all(base / "src", proj, home, argvs)
     new = _run_all(ROOT / "src", proj, home, argvs)
     # The listed additions: argparse's top-level usage line names the new verbs.
-    # (and the verb `doctor`, next to `setup`); any later verb belongs here too, so the usage line cannot diverge silently
+    # (and the verbs `doctor` and `status`, next to `setup`); any later verb belongs here too, so the usage line cannot diverge silently
     def usage(t):
-        return t.replace("pr,kits,stack,strict", "pr,strict").replace("setup,doctor,get", "setup,get")
+        return t.replace("pr,kits,stack,strict", "pr,strict").replace("setup,doctor,status,get", "setup,get")
     new = [(a, rc, usage(o), usage(e)) for a, rc, o, e in new]
     diffs = [f"{a[0]}: rc {a[1]}->{b[1]}, stdout same {a[2] == b[2]}, stderr same {a[3] == b[3]}" for a, b in zip(old, new) if a != b]
     return len(argvs), diffs, old
