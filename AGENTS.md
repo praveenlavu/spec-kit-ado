@@ -43,7 +43,9 @@ Check the extension is installed: `specify extension list` should show `ado`. If
 Look for `ado.config.json` in the project root (or the file `$ADO_CONFIG` points to). If
 it has `organization` and `project`, go to step 3. Otherwise run `speckit.ado.setup`,
 which asks the user to run `ado setup`. The file holds names only, no secrets, and is
-safe to commit. Keys: [docs/configuration.md](docs/configuration.md).
+safe to commit. Keys: [docs/configuration.md](docs/configuration.md). A new user starts with
+`ado setup --profile starter` ([docs/quickstart.md](docs/quickstart.md), words in [docs/glossary.md](docs/glossary.md)); `--profile team`
+and `--profile strict` add the gate and review lists, or strict mode. Never run `ado setup` for the user: it reads the PAT.
 
 ## 3. Credential gate — stop and ask the user
 

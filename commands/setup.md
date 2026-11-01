@@ -41,6 +41,8 @@ Run each and report a short table (tool, found version, required/optional):
   Claude Code: `! ado setup`). It prompts for organization and project, and reads the
   PAT through a hidden prompt into the OS keychain or a 0600 file. The PAT must never
   pass through this chat.
+- For a first-time user suggest `ado setup --profile starter` (`team` and `strict` add the gate lists or strict mode; see
+  `docs/quickstart.md`); on an existing config it shows `key: old -> new` and writes only after a `y` the user types.
 - `ado setup` updates only `organization` and `project`; every other key in an existing
   `ado.config.json` is preserved. If the file exists but is not a valid JSON object,
   `ado setup` refuses to touch it and exits 2.
@@ -79,7 +81,7 @@ Wait for the human to confirm or edit the map. Do not write a guessed map. Then 
 remaining optional keys from the template with their defaults (`active_state`,
 `done_state`, `task_type`, `repo_host`, `repository`, `dod_path`, `gate`,
 `attachments_allow`, `review_block_on`). Show the final file content (it contains no
-secrets). Never write `strict.test_command` here: once a project has a stack profile it
+secrets). Never write `strict.test_command` here (the user's `ado setup --profile strict` asks for one only while no stack profile is approved): once a project has a stack profile it
 comes only from `ado stack approve --apply`, which the human runs in their own terminal
 (a hand edit would differ from the approved command, which strict mode reports).
 

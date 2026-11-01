@@ -351,7 +351,7 @@ _WHY = {
     "stack-profile": "the stack profile is not approved, drifts from strict.test_command, or leaves a detected root uncovered",
     "rules": "the business rules are not pulled, or not confirmed in the ledger",
     "questions-posted": "the open questions are not (or no longer) posted to the story",
-    "questions-answered": "questions wait for an answer", "plan": "no plan.md in the spec dir", "tasks": "no tasks.md with tasks in the spec dir",
+    "questions-answered": "questions wait for an answer: the product owner replies on the story and the next command reads it in, or close them by hand as assumed (docs/quickstart.md)", "plan": "no plan.md in the spec dir", "tasks": "no tasks.md with tasks in the spec dir",
     "board-tasks": "tasks are missing on the board", "tasks-ticked": "tasks are unticked", "board-sync": "board states differ from tasks.md",
     "decisions-posted": "decisions are not posted to the story", "verified": "no current verification record",
     "gate": "no current, non-blocking gate result in the ledger", "review": "no current, non-blocking review in the ledger",

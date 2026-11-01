@@ -41,7 +41,7 @@ def test_run_setup_aborts_on_empty_pat(monkeypatch, tmp_path):
     assert not (tmp_path / ".azdo" / "contoso.token").exists()
 
 
-def _setup(monkeypatch, tmp_path, out, answers=("contoso", "Fabrikam")):
+def _setup(monkeypatch, tmp_path, out, answers=("contoso", "Fabrikam"), **kw):
     from ado import setup_cmd, secretstore
     from tests.conftest import FakeClient
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
@@ -50,7 +50,7 @@ def _setup(monkeypatch, tmp_path, out, answers=("contoso", "Fabrikam")):
                         lambda cfg: FakeClient(cfg, responses=[{"name": "Fabrikam"}]))
     it = iter(answers)
     return setup_cmd.run_setup(input_fn=lambda _p: next(it),
-                               getpass_fn=lambda _p: "supersecretPAT", out_path=out)
+                               getpass_fn=lambda _p: "supersecretPAT", out_path=out, **kw)
 
 
 def test_setup_preserves_other_keys(monkeypatch, tmp_path):
@@ -303,3 +303,171 @@ def test_setup_refuses_a_value_load_would_reject_and_stores_nothing(monkeypatch,
     assert "\x1b" not in str(e.value)
     assert not out.exists()  # nothing written
     assert not (tmp_path / ".azdo").exists()  # token not stored
+
+
+# ---- `ado setup --profile` (P4-6) ----
+import json as _json
+import pytest
+
+_PROFILE_KEYS = {
+    "starter": {"mode": "advisory"},
+    "team": {"mode": "advisory", "gate": {"block": ["ac_traceability", "open_questions"]}, "review_block_on": ["blocker"]},
+    "strict": {"mode": "strict", "strict": {"test_command": "python3 -m pytest -q"}},
+}
+
+
+@pytest.mark.parametrize("name", ["starter", "team", "strict"])
+def test_profile_writes_exact_keys(monkeypatch, tmp_path, name):
+    out = tmp_path / "ado.config.json"
+    answers = ("contoso", "Fabrikam") + (("python3 -m pytest -q",) if name == "strict" else ())
+    assert _setup(monkeypatch, tmp_path, out, answers, profile=name) == 0
+    assert _json.loads(out.read_text()) == {"organization": "contoso", "project": "Fabrikam", **_PROFILE_KEYS[name]}
+    from ado import setup_cmd
+    assert set(setup_cmd.PROFILES) == {"starter", "team", "strict"}
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_strict_profile_leaves_test_command_when_profile_approved(monkeypatch, tmp_path):
+    from ado import stack
+    monkeypatch.setattr(stack, "read_profile", lambda root=".", blob=None: {"status": "approved", "profile": {}, "errors": []})
+    out = tmp_path / "ado.config.json"
+    assert _setup(monkeypatch, tmp_path, out, profile="strict") == 0  # a third answer would raise StopIteration
+    assert _json.loads(out.read_text()) == {"organization": "contoso", "project": "Fabrikam", "mode": "strict"}
+
+
+def test_strict_profile_keeps_a_test_command_already_set(monkeypatch, tmp_path):
+    out = tmp_path / "ado.config.json"
+    out.write_text(_json.dumps({"organization": "contoso", "project": "Fabrikam", "strict": {"test_command": "make test"}}))
+    assert _setup(monkeypatch, tmp_path, out, ("", "", "y"), profile="strict", interactive=True) == 0  # no test-command question
+    assert _json.loads(out.read_text())["strict"] == {"test_command": "make test"}
+
+
+def _existing(tmp_path, **extra):
+    out = tmp_path / "ado.config.json"
+    out.write_bytes(_json.dumps({"organization": "contoso", "project": "Fabrikam", **extra}, indent=2).encode() + b"\n")
+    return out
+
+
+def test_existing_config_diff_and_no_write_on_n(monkeypatch, tmp_path, capsys):
+    out = _existing(tmp_path, mode="strict", gate={"block": ["assertion"]})
+    before = out.read_bytes()
+    assert _setup(monkeypatch, tmp_path, out, ("", "", "n"), profile="team", interactive=True) == 2
+    shown = capsys.readouterr().out
+    assert 'mode: "strict" -> "advisory"' in shown
+    assert 'gate.block: ["assertion"] -> ["assertion", "ac_traceability", "open_questions"]' in shown
+    assert 'review_block_on: (not set) -> ["blocker"]' in shown
+    assert out.read_bytes() == before
+    assert not (tmp_path / ".azdo" / "contoso.token").exists()  # nothing at all was written
+
+
+def test_existing_config_written_only_on_y(monkeypatch, tmp_path):
+    out = _existing(tmp_path)
+    assert _setup(monkeypatch, tmp_path, out, ("", "", "Y"), profile="starter", interactive=True) == 0
+    assert _json.loads(out.read_text()) == {"organization": "contoso", "project": "Fabrikam", "mode": "advisory"}
+    assert out.read_bytes().endswith(b"\n") and b'\n  "mode"' in out.read_bytes()  # indent kept
+
+
+def test_existing_config_without_a_terminal_prints_the_diff_and_exits_2(monkeypatch, tmp_path, capsys):
+    out = _existing(tmp_path)
+    before = out.read_bytes()
+    assert _setup(monkeypatch, tmp_path, out, profile="starter", interactive=False) == 2  # a prompt would raise StopIteration
+    assert 'mode: (not set) -> "advisory"' in capsys.readouterr().out
+    assert out.read_bytes() == before
+
+
+def test_existing_config_anything_but_y_writes_nothing(monkeypatch, tmp_path):
+    for ans in ("", "yes", "no", "n"):
+        out = _existing(tmp_path)
+        before = out.read_bytes()
+        assert _setup(monkeypatch, tmp_path, out, ("", "", ans), profile="starter", interactive=True) == 2
+        assert out.read_bytes() == before
+
+
+def test_profile_never_removes_keys_and_keeps_crlf(monkeypatch, tmp_path):
+    extra = {"gate": {"tests": {"*.py": "assert"}, "block": ["assertion"]}, "stack": {"kit": "k"}, "review_block_on": ["major"],
+             "strict": {"test_timeout": 600}, "done_state": "Closed", "dod_path": "docs/dod"}
+    out = tmp_path / "ado.config.json"
+    out.write_bytes(_json.dumps({"organization": "contoso", "project": "Fabrikam", **extra}, indent=2).replace("\n", "\r\n").encode() + b"\r\n")
+    for name, ans in (("team", ()), ("strict", ("python3 -m pytest -q",))):
+        assert _setup(monkeypatch, tmp_path, out, ("", "", *ans, "y"), profile=name, interactive=True) == 0
+        after = _json.loads(out.read_text())
+        assert all(k in after for k in extra) and after["gate"]["tests"] == {"*.py": "assert"} and after["strict"]["test_timeout"] == 600
+        assert after["gate"]["block"][0] == "assertion" and "major" in after["review_block_on"]
+        raw = out.read_bytes()
+        assert b"\r\n" in raw and raw.replace(b"\r\n", b"").count(b"\n") == 0
+
+
+def test_diff_hides_long_and_secret_looking_values(monkeypatch, tmp_path, capsys):
+    secret = "a" * 52  # ado-pat shape, a valid organization name
+    out = _existing(tmp_path)
+    out.write_bytes(out.read_bytes().replace(b"contoso", secret.encode()))
+    assert _setup(monkeypatch, tmp_path, out, ("contoso", "", "n"), profile="starter", interactive=True) == 2
+    shown = capsys.readouterr().out
+    assert secret not in shown and "organization: changed" in shown and 'mode: (not set) -> "advisory"' in shown
+
+
+def test_profile_refuses_a_symlinked_config_and_an_invalid_result(monkeypatch, tmp_path):
+    from ado.config import ConfigError
+    real = _existing(tmp_path)
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+    with pytest.raises(ConfigError):
+        _setup(monkeypatch, tmp_path, link, profile="starter", interactive=True)
+    bad = _existing(tmp_path, gate={"block": ["nope"]})
+    before = bad.read_bytes()
+    with pytest.raises(ConfigError):
+        _setup(monkeypatch, tmp_path, bad, ("", "", "y"), profile="team", interactive=True)
+    assert bad.read_bytes() == before
+
+
+def test_setup_profile_flag_is_wired_and_validated():
+    from ado.__main__ import main
+    with pytest.raises(SystemExit) as e:
+        main(["setup", "--profile", "bogus"])
+    assert e.value.code == 2
+
+
+def test_prompts_show_existing_org_and_project_escaped(monkeypatch, tmp_path, capsys):
+    from ado import setup_cmd, secretstore
+    from tests.conftest import FakeClient
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr(secretstore, "resolve_store", lambda: secretstore.FileStore())
+    monkeypatch.setattr(setup_cmd, "AdoClient", lambda cfg: FakeClient(cfg, responses=[{"name": "Fabrikam"}]))
+    evil = "\x1b]0;pwned\x07\x1b[31mred\nline2"
+    out = tmp_path / "ado.config.json"
+    out.write_text(_json.dumps({"organization": "contoso", "project": evil}))
+    prompts, answers = [], iter(["", ""])
+    with pytest.raises(Exception):  # the kept project holds a control character: refused at the end, after the prompts
+        setup_cmd.run_setup(input_fn=lambda p: prompts.append(p) or next(answers), getpass_fn=lambda _p: "pat", out_path=out)
+    assert prompts and all(c == "\n" or c.isprintable() for p in prompts for c in p)  # nothing but plain text
+    assert "\x1b" not in "".join(prompts) and "\\u001b" in prompts[1]
+    out.write_text(_json.dumps({"organization": "\x1b[2Jcontoso", "project": "Fabrikam"}))
+    prompts.clear()
+    with pytest.raises(Exception):  # the org is invalid: refused before any request, but the prompt was escaped
+        setup_cmd.run_setup(input_fn=lambda p: prompts.append(p) or next(iter([""])), getpass_fn=lambda _p: "pat", out_path=out)
+    assert "\x1b" not in prompts[0] and "\\u001b" in prompts[0]
+    long = "p" * 500
+    out.write_text(_json.dumps({"organization": "contoso", "project": long}))
+    prompts.clear()
+    answers = iter(["", ""])
+    setup_cmd.run_setup(input_fn=lambda p: prompts.append(p) or next(answers), getpass_fn=lambda _p: "pat", out_path=out)
+    assert long not in prompts[1] and len(prompts[1]) < 150
+
+
+def test_diff_says_an_object_was_replaced_and_warns_when_strict_goes_off(monkeypatch, tmp_path, capsys):
+    out = _existing(tmp_path, mode={"x": 1})
+    assert _setup(monkeypatch, tmp_path, out, ("", "", "n"), profile="starter", interactive=True) == 2
+    shown = capsys.readouterr().out
+    assert 'mode: (an object, replaced) -> "advisory"' in shown and "(not set)" not in shown.split("mode:")[1].split("\n")[0]
+    out = _existing(tmp_path, mode="strict")
+    assert _setup(monkeypatch, tmp_path, out, ("", "", "n"), profile="starter", interactive=True) == 2
+    shown = capsys.readouterr().out
+    assert shown.index("Warning: this turns strict mode off") < shown.index("Nothing written") and 'mode: "strict" -> "advisory"' in shown
+
+
+def test_nothing_to_change_does_not_say_wrote(monkeypatch, tmp_path, capsys):
+    out = _existing(tmp_path, mode="advisory")
+    before = out.read_bytes()
+    assert _setup(monkeypatch, tmp_path, out, profile="starter", interactive=True) == 0  # no y asked: nothing to confirm
+    shown = capsys.readouterr().out
+    assert "nothing to change in" in shown and "wrote" not in shown and out.read_bytes() == before

@@ -563,7 +563,9 @@ def test_validate_restricts_approval_by_to_the_role_grammar():
 
 
 def test_setup_never_writes_the_test_command():
-    assert "test_command" not in (ROOT / "src/ado/setup_cmd.py").read_text(encoding="utf-8")
+    src = (ROOT / "src/ado/setup_cmd.py").read_text(encoding="utf-8")  # P4-6: only `setup --profile strict` asks, and never with an approved profile
+    assert 'read_profile(str(path.resolve().parent))["status"] == "approved"' in src  # behaviour: tests/test_setup.py
+    assert "_strict_test_command(profile," in src and "profile != \"strict\"" in src
     text = " ".join((ROOT / "commands/setup.md").read_text(encoding="utf-8").split())
     assert "Never write `strict.test_command` here" in text and "only from `ado stack approve --apply`" in text
 

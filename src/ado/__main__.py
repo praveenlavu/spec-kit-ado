@@ -621,7 +621,9 @@ def main(argv=None):
     parser.add_argument("--version", action="version", version=__version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("setup", help="Configure this repo/team and verify access (read-only)")
+    p = sub.add_parser("setup", help="Configure this repo/team and verify access (read-only)")
+    p.add_argument("--profile", choices=("starter", "team", "strict"), default=None,
+                   help="also write that profile's config keys (an existing config shows `key: old -> new` and asks y/N)")
     p = sub.add_parser("doctor", help="What is wrong with this setup: git, Spec Kit, config, token, identity, extension, workflow, approvers, "
                        "stack and kits, as ok/warn/fail/unknown rows with a fix (read-only; exit 1 when a row fails)")
     p.add_argument("--json", action="store_true", help='print {"rows": [{"id", "status", "fix"}], "scopes": {}} instead of text')
@@ -899,7 +901,7 @@ def main(argv=None):
     err = None
     try:
         if args.command == "setup":
-            return run_setup()
+            return run_setup(profile=args.profile)
         if args.command == "doctor":  # rows, not an exception: every failure is a row
             return _doctor(args)
         if args.command == "status":  # a report: every failure is a stage, not an exception

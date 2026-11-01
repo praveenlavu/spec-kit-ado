@@ -20,6 +20,30 @@ one-line note and leaves the defaults. It also appends `.ado/` to `.gitignore` b
 config, unless the line is already there. If the file exists but is not a JSON object, `ado setup` refuses to overwrite it
 and exits 2. `speckit.ado.setup` adds `stack` after you confirm the phase map.
 
+### Profiles: `ado setup --profile`
+
+`ado setup --profile starter|team|strict` also writes the keys of one profile, and only these:
+
+| Profile | Keys written |
+|---|---|
+| `starter` | `"mode": "advisory"` |
+| `team` | `"mode": "advisory"`, `"gate": {"block": ["ac_traceability", "open_questions"]}`, `"review_block_on": ["blocker"]` |
+| `strict` | `"mode": "strict"`, `"strict": {"test_command": "<your test command>"}` |
+
+`team` repeats `starter`'s `mode`, but `strict` does not repeat `team`'s two lists: strict mode adds `ac_traceability`, `open_questions`
+and `blocker` to the effective `gate.block` and `review_block_on` itself (the strict floor), so the effective config is the same as
+if they were written, and a config that already has the team lists keeps them.
+
+`strict.test_command` is left alone when `ado.stack.json` is approved (`ado stack approve --apply` writes it) or when the config
+already has one; otherwise setup asks for it, and a blank answer leaves it unset. Setup never removes a key; a list it sets
+(`gate.block`, `review_block_on`) keeps the entries you already have and adds the missing ones. On an existing config it prints
+each change as `key: old -> new` (`(not set)` for a new key; `key: changed` when a value is over 80 characters or looks like a
+secret) and writes only after a `y` typed in a terminal: any other answer, or no terminal, writes nothing and exits 2. Without
+`--profile`, setup behaves as before. The config is checked with the same validator as `load` before anything is stored, written
+atomically (temp file in the same directory, `os.replace`) and read back, keeping its indent and line endings; a symlinked config is
+refused. Setup does not ask for `approvers` yet: that key arrives with the approvals tasks. See the [quickstart](quickstart.md)
+and the [glossary](glossary.md).
+
 ## Keys
 
 Every string in the file, values and object keys at any depth, must be free of control characters (C0, DEL, C1, U+2028/2029, surrogates, private use, and invisible format characters such as bidi overrides, BOM and soft hyphen; the joiner and direction marks U+200C-U+200F are allowed); otherwise `Config.load` fails with `ConfigInvalid` naming the key (exit 3 in CI), and `ado setup` refuses to write such a value, because the file comes from the PR itself and could otherwise inject lines into CI logs.
@@ -48,7 +72,7 @@ Every string in the file, values and object keys at any depth, must be free of c
 | `rules` | object | `{"enabled": false, "types": ["Epic", "Feature"]}` | Business-rules settings; a partial object keeps the defaults. `rules.enabled`: a boolean, `false` leaves every output exactly as without the key; `true` makes `ado dod` walk the ancestors and write the ledger header line `Rules from:`. `rules.types`: a list of 1-10 non-empty strings of at most 64 characters, the work item types whose Description may carry a `Business rules` section; it may not contain `story_type` (compared case-insensitively). An unknown key (reported by position, never echoed), a value of the wrong type or length, or a `rules` that is not an object is a config error (exit 2; `ado gate` exits 3). With `enabled: true` `ado gate` also runs the `rule_coverage` check and adds a `rules` key to its JSON (see [business-rules-reference.md](business-rules-reference.md#the-gate-check)) and the online `rule_drift` check (see [Drift](business-rules-reference.md#drift)). With `mode: "strict"` the `pr` and `done` phases of `ado strict check` (and so `ado pr create` and `ado done`) also run the offline rules check and refuse with `rule-uncovered`, `rule-unknown`, `rule-unconfirmed`, `rule-changed`, `rules-problem`, `rules-missing`, `rules-format` or `rules-header`, which no override can waive; a rejected `out of scope:` decision is then no `decision-rejected` finding and no `open_decisions` entry, because the rule it tried to lift is back in scope (see [Strict mode](business-rules-reference.md#strict-mode)). In strict CI the config comes from the target branch, so a PR cannot switch rules off. |
 | `stack` | object | `{"kit": "", "phases": {}}` | Phase map for routing; see [stack-kits.md](stack-kits.md). |
 
-**`strict.test_command` and the stack profile.** Once a project has a stack profile (`ado.stack.json`), `strict.test_command` comes only from `ado stack approve --apply`: it writes the command composed from the approved stacks, or removes the key when no stack defines a test command, and re-approving is how to change it (the profile's `strict.test_command` must equal the composed command; a hand edit is drift, and so is any `strict.test_command` at all when no stack defines a test command). `ado setup` and `speckit.ado.setup` never write it. Hand edits are for projects without a profile. `approve` rewrites `ado.config.json` keeping the parsed value and key order of every other key (indent, line terminator and trailing newline are kept; spacing may change), refuses when `ADO_CONFIG` is set (`Config.load` would read that file instead) or when the file is invalid, symlinked or not a regular file, and needs a terminal (a guard against accidents, not a security boundary).
+**`strict.test_command` and the stack profile.** Once a project has an approved stack profile (`ado.stack.json`), `strict.test_command` comes only from `ado stack approve --apply` (`ado setup --profile strict` leaves it alone then, and asks for one only while no profile is approved): it writes the command composed from the approved stacks, or removes the key when no stack defines a test command, and re-approving is how to change it (the profile's `strict.test_command` must equal the composed command; a hand edit is drift, and so is any `strict.test_command` at all when no stack defines a test command). `ado setup` and `speckit.ado.setup` never write it. Hand edits are for projects without a profile. `approve` rewrites `ado.config.json` keeping the parsed value and key order of every other key (indent, line terminator and trailing newline are kept; spacing may change), refuses when `ADO_CONFIG` is set (`Config.load` would read that file instead) or when the file is invalid, symlinked or not a regular file, and needs a terminal (a guard against accidents, not a security boundary).
 
 A minimal strict config is `{"mode": "strict", "strict": {"test_command": "python3 -m pytest -q", "test_timeout": 300}}`. The test command runs with the PATH of the environment that runs the check (put the toolkit venv first if your tests need it): a Mac has no `python`, so use `python3`. In strict mode set `close-story: true`: without it no strict `done` runs (it is the CI link-on-merge input; `closeStory` on Azure Pipelines).
 

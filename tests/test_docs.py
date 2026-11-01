@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REQUIRED = [
     "README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "VERSIONING.md", "CHANGELOG.md",
     "LICENSE", "rules/hitl.md",
+    "docs/quickstart.md", "docs/glossary.md",
     "docs/configuration.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md",
     "docs/stack-kits.md", "docs/catalog-submission.md", "docs/business-rules.md", "docs/business-rules-reference.md",
 ]
@@ -421,13 +422,12 @@ def _help(*argv):
     return out.stdout
 
 
-def test_documented_ado_verbs_and_flags_exist_in_the_cli():
+def _ado_command_problems(files):
+    """Every `ado <verb> [flags]` inside code in `files` must name a verb and flags the real CLI has (read from `--help`)."""
     top = _help()
     verbs = set(re.search(r"\{([^}]*)\}", top).group(1).split(","))
     flags = {}  # "pr create" / "gate" -> set of --flags in its --help
     problems = []
-    files = [ROOT / f for f in ("README.md", "AGENTS.md")] + sorted((ROOT / "commands").glob("*.md")) \
-        + sorted((ROOT / "rules").glob("*.md"))
     for md in files:
         for block in _CODE.findall(md.read_text(encoding="utf-8")):
             for line in block.strip("`").splitlines():
@@ -456,7 +456,13 @@ def test_documented_ado_verbs_and_flags_exist_in_the_cli():
                         for f in re.findall(r"(?<![\w-])--[a-z][a-z-]*", w):
                             if f not in flags[cmd] and f not in _ALLOW_FLAGS:
                                 problems.append(f"{md.name}: `ado {cmd}` has no {f}")
-    assert not problems, "\n".join(sorted(set(problems)))
+    return sorted(set(problems))
+
+
+def test_documented_ado_verbs_and_flags_exist_in_the_cli():
+    files = [ROOT / f for f in ("README.md", "AGENTS.md")] + sorted((ROOT / "commands").glob("*.md")) \
+        + sorted((ROOT / "rules").glob("*.md"))
+    assert not _ado_command_problems(files), "\n".join(_ado_command_problems(files))
 
 
 def test_headings_are_unique_within_each_command_and_rule_file():
@@ -2348,3 +2354,83 @@ def test_status_run_awareness_doc_pins():
     assert "only stages that are not met" in wfr and "not modelled" in wfr
     assert "it never lists plan, tasks or implement for work that exists" in status_md and "again after each step" in status_md
     assert "pinned against the shipped workflow" in log and "older runs not examined" in log
+
+
+# ---- quickstart and glossary (P4-6) ----
+def test_quickstart_commands_exist():
+    qs = ROOT / "docs" / "quickstart.md"
+    assert not _ado_command_problems([qs, ROOT / "docs" / "glossary.md"])
+    text = qs.read_text(encoding="utf-8")
+    cmds = {m.group(1) for m in re.finditer(r"(?<![\w./@-])ado ([a-z]+)", "\n".join(_CODE.findall(text)))}
+    # the path the page promises: configure, check, then follow `status` to the pushed Tasks
+    assert {"setup", "doctor", "status", "push"} <= cmds
+    assert "ado setup --profile starter" in text and "ado doctor" in text and "ado status 1001" in text
+    manifest = yaml.safe_load((ROOT / "extension.yml").read_text(encoding="utf-8"))
+    names = {c["name"] for c in manifest["provides"]["commands"]}
+    used = set(re.findall(r"speckit\.ado\.[a-z]+", text))
+    assert {"speckit.ado.pull", "speckit.ado.plan", "speckit.ado.tasks"} <= used and used <= names, used - names
+    assert "Tasks pushed" in text and "](glossary.md)" in text
+
+
+# (concept, first profile that needs it). Each task that adds a concept adds its row here AND to docs/glossary.md.
+GLOSSARY = [
+    ("Story", "starter"), ("Acceptance criterion", "starter"), ("Ledger", "starter"), ("DoD", "starter"),
+    ("Question", "starter"), ("Assumption", "starter"), ("Decision", "starter"), ("Decisions file", "starter"),
+    ("Profile", "starter"), ("Advisory mode", "starter"), ("Preview and apply", "starter"), ("Doctor", "starter"), ("Status", "starter"),
+    ("Stage", "starter"),
+    ("Stack kit", "starter"),
+    ("Gate", "team"), ("Review", "team"), ("CI gate", "team"),
+    ("Strict mode", "strict"), ("Order evidence", "strict"), ("Verification record", "strict"), ("AC fidelity", "strict"),
+    ("Override", "strict"), ("Stack profile", "strict"), ("Kit pin", "strict"),
+    ("Business rules", "opt-in"), ("Rules file", "opt-in"), ("Rules from:", "opt-in"), ("Rules reviewed:", "opt-in"),
+    ("Workflow", "opt-in"),
+]
+_GLOSSARY_ROW = re.compile(r"^\| \*\*(?P<c>[^*|]+)\*\* \| (?P<p>starter|team|strict|opt-in) \| (?P<d>[^|]+) \|$", re.M)
+
+
+def test_glossary_lists_each_concept_with_profile():
+    text = (ROOT / "docs" / "glossary.md").read_text(encoding="utf-8")
+    rows = [(m["c"].strip(), m["p"]) for m in _GLOSSARY_ROW.finditer(text)]
+    assert len(rows) == len(set(rows)), "a concept is listed twice"
+    assert sorted(rows) == sorted(GLOSSARY), (sorted(set(rows) ^ set(GLOSSARY)))
+    for m in _GLOSSARY_ROW.finditer(text):
+        assert len(m["d"].split()) >= 5 and m["d"].strip().endswith("."), m["c"]  # a sentence, not a label
+    for profile in ("starter", "team", "strict"):
+        assert f"`{profile}`" in text  # the page says which profile writes what
+
+
+def test_setup_profile_is_documented_with_the_exact_keys():
+    keys = ['"mode": "advisory"', '"gate": {"block": ["ac_traceability", "open_questions"]}', '"review_block_on": ["blocker"]',
+            '"mode": "strict"', '"strict": {"test_command"']
+    cfg = _flat("docs/configuration.md")
+    for k in keys:
+        assert k in cfg, k
+    for f in ("README.md", "AGENTS.md", "docs/configuration.md", "commands/setup.md"):
+        assert "ado setup --profile" in _flat(f), f
+    sec = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").split("## 0.3.0", 1)[1].split("\n## 0.2.0", 1)[0]
+    assert "ado setup --profile" in sec and "(P4-6)" in sec and "docs/quickstart.md" in sec and "docs/glossary.md" in sec
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    top = readme[:readme.index("## Lifecycle")]
+    assert "docs/quickstart.md" in top and "docs/glossary.md" in top  # above the fold
+
+
+def test_quickstart_step_order_matches_the_status_stages():
+    """The commands step 5 names, in the page's order, are the `Next:` commands of `status.STAGES` in the stages' order, and the way out of an
+    open question (answer on the story, or close it by hand as assumed) sits between posting the questions and planning."""
+    import types
+    from ado import status
+    text = (ROOT / "docs" / "quickstart.md").read_text(encoding="utf-8")
+    step5 = text.split("## 5.", 1)[1].split("## 6.", 1)[0]
+    ctx = types.SimpleNamespace(id=1001)
+    nexts = {}  # next command -> index of the first stage that prints it
+    for i, (sid, _board, _met, nxt) in enumerate(status.STAGES):
+        if sid in ("questions-posted", "questions-answered", "plan", "tasks", "board-tasks"):
+            nexts.setdefault(nxt(ctx), (i, sid))
+    spans = [m for m in re.findall(r"`([^`\n]+)`", step5) if m in nexts]
+    order = [nexts[m][0] for m in spans]
+    assert order == sorted(order), spans
+    assert {nexts[m][1] for m in spans} >= {"questions-posted", "questions-answered", "tasks", "board-tasks"}, spans
+    i, j = step5.index("--plan-out .ado/plan-questions.md"), step5.index("3. `speckit.ado.plan 1001`")
+    between = step5[i:j]
+    assert "product owner answers" in between and "assumed:" in between and "--kind assumption" in between
+    assert "does not move past `questions-answered`" in step5 and "ado-lifecycle` workflow" in step5  # what is NOT automatic
