@@ -1821,3 +1821,15 @@ def test_rules_pull_doc_pins():
     assert "`ado rules` (GET only; writes local `Rules_<id>.md` files)" in _flat("AGENTS.md")
     assert "`ado rules` (GET only)" in _flat("rules/hitl.md") and "`dod/Rules_<id>.md` via `ado rules <id>`" in _flat("rules/hitl.md")
     assert "`ado rules <story id>` and the hierarchy walk `rules.walk` (P3-4b)" in _flat("CHANGELOG.md")
+
+
+def test_ledger_header_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("## Ledger header", "- **Rules from:** 1201, 1200", "recomputed on every `--refresh`", "the ledger is not touched", "no extra request",
+                 "`--refresh` keeps the line exactly as it is, **also when rules are off**", "refuse (exit 2)", "Read only from the header block",
+                 "above the first `## ` heading that is outside a code fence or comment", "no leading zero", "at most 3", "`valid: false`",
+                 "A second line", "CRLF", "process enforcement"):
+        assert word in text, word
+    assert "Rules from:` (see [business rules](docs/business-rules.md#ledger-header))" in _flat("README.md")
+    assert "walk the ancestors and write the ledger header line `Rules from:`" in _flat("docs/configuration.md")
+    assert "Ledger header lines `Rules from:` and `Rules reviewed:` (P3-5)" in _flat("CHANGELOG.md")

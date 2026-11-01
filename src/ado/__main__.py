@@ -260,11 +260,15 @@ def dispatch(client, args):
         wi = workitems.get(client, args.id)
         dod_dir = args.dir or client.config.dod_path
         existed = dod.dod_file(dod_dir, args.id).exists()
+        rules_cfg = client.config.rules
+        # the walk (more GETs) only when rules are on; an ancestor GET error propagates before anything is written
+        rules_from = [a["id"] for a in rules.walk(client, args.id, rules_cfg["types"])] if rules_cfg["enabled"] else None
         path = dod.write_dod(
             wi, dod_dir, client.config.organization, client.config.project,
             synced=date.today().isoformat(), force=args.force, refresh=args.refresh,
             spec_dir=getattr(args, "spec_dir", None) or "",
             extra_dod=dod.stack_dod_items(stack.load_profile()),  # approved profile only; write_dod ignores it on --refresh
+            rules_from=rules_from,
         )
         action = "refreshed" if (args.refresh and existed) else ("overwritten" if existed else "created")
         return {"path": str(path), "action": action, **dod.ac_stats(wi)}

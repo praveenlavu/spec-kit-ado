@@ -232,6 +232,83 @@ def ledger_spec_dir(ledger_md):
     return None if not v or v == SPEC_DIR_UNSET else v
 
 
+_H1 = re.compile(r"^## ", re.M)
+
+
+def _header(md):
+    """(the header block as lines, whether it can be trusted). The block is what comes before the first line-start `## ` heading
+    outside fences and comments; text hidden in them is gone. Untrusted when no heading is found and a fence or comment is still open:
+    the opener may hide header lines, so the readers below call that invalid."""
+    vis, still_open = _visible(md)
+    m = _H1.search(vis)
+    return (vis[:m.start()] if m else vis).splitlines(), bool(m) or not still_open
+
+
+def header_block(md):
+    """The text above the first `## ` heading outside fences and comments (fences and comments removed). The only place `Rules from:` and
+    `Rules reviewed:` are read, so story text in section 1 can never stand in for them."""
+    return "".join(line + "\n" for line in _header(md)[0])
+
+
+_RULES_ID = r"[1-9][0-9]{0,8}"
+_RULES_FROM = re.compile(rf"none|{_RULES_ID}(?:, {_RULES_ID})*")
+MAX_RULES_FROM = 3  # the walk follows at most 3 links
+
+
+def _labelled(md, label):
+    """(present, value) for the header line `- **<label>:** <value>`. Exact form only (one space, no trailing blanks). Value None = malformed:
+    a second line, an unclosed opener in the header, or a list line that names the label in any other way. A title or `Spec dir` that
+    mentions the label is not a line of that kind (it does not begin with the label)."""
+    lines, trusted = _header(md)
+    look = re.compile(r"\s*(?:(?:[-*+]|[0-9]+[.)])\s*)?[*_]*\s*" + label.replace(" ", r"\s+") + r"\b", re.I)
+    hits = [x for x in lines if look.match(x)]
+    prefix = f"- **{label}:** "
+    if not trusted:
+        return True, None
+    if not hits:
+        return False, ""
+    value = hits[0][len(prefix):]
+    return True, value if len(hits) == 1 and hits[0].startswith(prefix) and value and value == value.strip() else None
+
+
+def _parse_from(value):
+    if not _RULES_FROM.fullmatch(value or ""):
+        return None
+    ids = [] if value == "none" else [int(t) for t in value.split(", ")]
+    return ids if len(ids) <= MAX_RULES_FROM and len(set(ids)) == len(ids) else None
+
+
+def _parse_reviewed(value):
+    """{rule id: hash8} for `BR-1201-1@3f2a9c1b, ...` or `none`; None when malformed or an id repeats."""
+    from .rules import TAG_RE  # rules imports this module at load time: import lazily
+    if value == "none":
+        return {}
+    out = {}
+    for tok in (value or "x").split(", "):
+        rid, at, h = tok.partition("@")
+        if not (at and TAG_RE.fullmatch(rid) and re.fullmatch(r"[0-9a-f]{8}", h)) or rid in out:
+            return None
+        out[rid] = h
+    return out
+
+
+def ledger_rules_from(md):
+    """`{"present", "valid", "ids"}` for `- **Rules from:** 1201, 1200` (nearest first) or `none`, read from the header block only. Invalid
+    (and `ids == []`): more than 3 ids, a repeated id, an id that is not 1 to 9 digits without a leading zero, a second line, any other spelling
+    of the line. Absent is `present False, valid True`."""
+    present, value = _labelled(md, "Rules from")
+    ids = _parse_from(value) if present else []
+    return {"present": present, "valid": ids is not None, "ids": ids or []}
+
+
+def ledger_rules_reviewed(md):
+    """`{"present", "valid", "hashes"}` for `- **Rules reviewed:** BR-1201-1@3f2a9c1b, ...` (or `none`), read from the header block only. The same
+    rules as `ledger_rules_from`; ids match `rules.TAG_RE`, hashes are 8 lowercase hex, an id may appear once."""
+    present, value = _labelled(md, "Rules reviewed")
+    hashes = _parse_reviewed(value) if present else {}
+    return {"present": present, "valid": hashes is not None, "hashes": hashes or {}}
+
+
 MAX_EXTRA_DOD = 20
 
 
@@ -250,9 +327,23 @@ def _extra_dod_lines(extra_dod):
     return lines
 
 
-def render_dod(work_item, organization, project, synced="", spec_dir="", extra_dod=()):
+def render_dod(work_item, organization, project, synced="", spec_dir="", extra_dod=(), rules_from=None, rules_reviewed=""):
+    """`rules_from`: None writes no `Rules from:` line (the baseline); a list of ids writes it (`none` when empty). `rules_reviewed`: the value
+    of a `Rules reviewed:` line, written when not empty. Both are checked with the readers' own rules before they reach the header."""
     if "\n" in spec_dir or "\r" in spec_dir:
         raise ValueError("spec dir must be a single line (it is written into the ledger header)")
+    header = []
+    if rules_from is not None:
+        if not isinstance(rules_from, (list, tuple)) or any(type(i) is not int for i in rules_from):
+            raise ValueError("rules_from must be a list of work item ids")
+        value = ", ".join(map(str, rules_from)) or "none"
+        if _parse_from(value) is None:
+            raise ValueError("rules_from must hold at most 3 different work item ids of 1 to 9 digits")
+        header.append(f"- **Rules from:** {value}")
+    if rules_reviewed:
+        if _parse_reviewed(rules_reviewed) is None:
+            raise ValueError("rules_reviewed must be BR-<id>-<n>@<8 hex> entries separated by ', ', each rule once")
+        header.append(f"- **Rules reviewed:** {rules_reviewed}")
     wid = work_item["id"]
     f = work_item.get("fields", {})
     title = f.get("System.Title", "")
@@ -281,6 +372,7 @@ def render_dod(work_item, organization, project, synced="", spec_dir="", extra_d
         f"- **Last synced:** {synced}",
         f"- **AC hash:** {ac_hash(work_item)}",
         f"- **Spec dir:** {spec_dir or SPEC_DIR_UNSET}",
+        *header,
         "",
         f"## 1. Seeded from ADO (verbatim text, ADO HTML converted to plain text — do not edit; refresh via `ado dod {wid} --refresh`)",
         "",
@@ -334,15 +426,22 @@ def dod_file(dod_dir, work_item_id):
 
 
 def write_dod(work_item, dod_dir, organization, project, synced="",
-              force=False, refresh=False, spec_dir="", extra_dod=()):
+              force=False, refresh=False, spec_dir="", extra_dod=(), rules_from=None, rules_reviewed=""):
     path = dod_file(dod_dir, work_item["id"])
     if path.exists() and not force and not refresh:
         raise DodExists(f"{path} exists — pass --force to overwrite or --refresh to re-pull section 1.")
     old = path.read_text(encoding="utf-8") if refresh and path.exists() else None
     if old is not None:
         spec_dir = spec_dir or ledger_spec_dir(old) or ""
+        # written by `ado rules --confirm`: kept like Spec dir, even when rules are off. A header an old ledger left open (an unescaped
+        # `<!--` in its title) cannot be read; it is rebuilt as before, so teams not using rules see no change.
+        present, kept = _labelled(old, "Rules reviewed") if _header(old)[1] else (False, "")
+        if present and _parse_reviewed(kept) is None:
+            raise DodExists(f"{path} has a malformed 'Rules reviewed:' header line — refusing to --refresh "
+                            "(it would drop the hashes a human confirmed). Fix the line, or use --force to fully overwrite.")
+        rules_reviewed = rules_reviewed or kept
     # stack DoD items seed a fresh ledger only: a refresh keeps everything after section 1, section 5 included
-    fresh = render_dod(work_item, organization, project, synced, spec_dir, () if old is not None else extra_dod)
+    fresh = render_dod(work_item, organization, project, synced, spec_dir, () if old is not None else extra_dod, rules_from, rules_reviewed)
     if old is not None:
         idx = _repair_at(old) if unclosed(old) else _section2_at(old)
         if unclosed(old) and idx == -1:
