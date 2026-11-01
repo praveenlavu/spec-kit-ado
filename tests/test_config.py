@@ -658,3 +658,258 @@ def test_rules_story_type_rule_and_shape_apply_from_target_branch(tmp_path, git_
         with pytest.raises(ConfigInvalid, match=msg) as e:
             Config.load_from_ref("refs/heads/main", repo=str(repo))
         assert "user story" not in str(e.value).lower()
+
+
+# ---- P4-7a: the trust keys `approvers`, `approval`, `unattended` and `config.trusted` ----
+G1, G2 = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"
+ANON = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+UNATTENDED_DEFAULT = {"assume_after_hours": None, "approval_requests": False}
+TRUST_BASE = {"organization": "contoso", "project": "Fabrikam"}
+
+
+def test_trust_keys_default_when_absent(tmp_path):
+    cfg = _load(tmp_path)
+    assert (cfg.approvers, cfg.approval, cfg.unattended) == ([], "terminal", UNATTENDED_DEFAULT)
+    assert _load(tmp_path, unattended={}).unattended == UNATTENDED_DEFAULT and _load(tmp_path, unattended={}).unattended is not UNATTENDED_DEFAULT
+    full = _load(tmp_path, approvers=[G1.upper(), G2], approval="comment", unattended={"assume_after_hours": 720, "approval_requests": True})
+    assert (full.approvers, full.approval, full.unattended) == ([G1, G2], "comment", {"assume_after_hours": 720, "approval_requests": True})
+    assert len(_load(tmp_path, approvers=[f"{i:08x}-0000-0000-0000-000000000000" for i in range(1, 21)]).approvers) == 20  # 20 is the cap
+    assert _load(tmp_path, unattended={"assume_after_hours": 1}).unattended == {"assume_after_hours": 1, "approval_requests": False}
+
+
+@pytest.mark.parametrize("extra, where", [
+    ({"approvers": "SECRETVALUE"}, "'approvers' must be a list"),
+    ({"approvers": {"a": 1}}, "'approvers' must be a list"),
+    ({"approvers": [f"{i:08x}-0000-0000-0000-000000000000" for i in range(1, 22)]}, "'approvers' must be a list of at most 20"),  # 21 entries
+    ({"approvers": [G1, "SECRETVALUE"]}, "approvers[1]: not an identity id"),  # not a GUID
+    ({"approvers": [G1, 5]}, "approvers[1]: not an identity id"),
+    ({"approvers": ["{" + G1 + "}"]}, "approvers[0]: not an identity id"),
+    ({"approvers": [" " + G1]}, "approvers[0]: not an identity id"),
+    ({"approvers": [G1 + "\n"]}, "approvers[0]"),
+    ({"approvers": [G1, ANON]}, "approvers[1]: the anonymous identity"),
+    ({"approvers": [ANON.upper()]}, "approvers[0]: the anonymous identity"),
+    ({"approvers": [G1, G2, G1.upper()]}, "approvers[2]: duplicate of an earlier entry"),  # duplicates are rejected, not collapsed
+    ({"approval": "SECRETVALUE"}, "'approval' must be \"terminal\" or \"comment\""),
+    ({"approval": "Comment"}, "'approval' must be"),
+    ({"approval": True}, "'approval' must be"),
+    ({"approval": None}, "'approval' must be"),
+    ({"unattended": "SECRETVALUE"}, "'unattended' must be a JSON object"),
+    ({"unattended": [1]}, "'unattended' must be a JSON object"),
+    ({"unattended": {"SECRETVALUE": 1}}, "unattended entry #1: unknown key"),
+    ({"unattended": {"assume_after_hours": 0}}, "'unattended.assume_after_hours' must be an integer from 1 to 720"),
+    ({"unattended": {"assume_after_hours": 721}}, "'unattended.assume_after_hours' must be an integer from 1 to 720"),
+    ({"unattended": {"assume_after_hours": True}}, "'unattended.assume_after_hours'"),
+    ({"unattended": {"assume_after_hours": "5"}}, "'unattended.assume_after_hours'"),
+    ({"unattended": {"assume_after_hours": 1.5}}, "'unattended.assume_after_hours'"),
+    ({"unattended": {"assume_after_hours": None}}, "'unattended.assume_after_hours'"),
+    ({"unattended": {"approval_requests": 1}}, "'unattended.approval_requests' must be true or false"),
+    ({"unattended": {"approval_requests": "yes"}}, "'unattended.approval_requests' must be true or false"),
+])
+def test_trust_keys_validated(tmp_path, extra, where):
+    with pytest.raises(ConfigInvalid) as e:
+        _load(tmp_path, **extra)
+    assert where in str(e.value)
+    for secret in ("SECRETVALUE", G1, G2, "-0000-0000"):
+        assert secret not in str(e.value), "a value was echoed"
+
+
+def test_trust_keys_validated_from_the_target_branch_too(tmp_path, git_env):
+    repo = _ref_repo(tmp_path, json.dumps({**TRUST_BASE, "approvers": [G1, ANON]}))
+    with pytest.raises(ConfigInvalid, match=r"approvers\[1\]: the anonymous identity") as e:
+        Config.load_from_ref("refs/heads/main", repo=str(repo))
+    assert ANON not in str(e.value)
+
+
+def _trust_repo(tmp_path, target, head=None, origin=True):
+    """A repository whose `main` holds `target` as ado.config.json; the working tree gets `head` (uncommitted) when given."""
+    from tests.conftest import git
+    repo = _ref_repo(tmp_path, None if target is None else json.dumps(target))
+    if origin:
+        git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+        git(repo, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    if head is not None:
+        (repo / "ado.config.json").write_text(head if isinstance(head, str) else json.dumps(head))
+    return repo
+
+
+def test_trusted_reads_the_target_branch(tmp_path, git_env):
+    from ado.config import trusted
+    repo = _trust_repo(tmp_path, {**TRUST_BASE, "approvers": [G1], "approval": "comment", "unattended": {"assume_after_hours": 24, "approval_requests": True}})
+    t = trusted(str(repo))
+    assert (t.approvers, t.approval, t.unattended) == ([G1], "comment", {"assume_after_hours": 24, "approval_requests": True})
+    assert trusted(str(repo), base="refs/heads/main").approvers == [G1]  # an explicit base (CI passes --base)
+    assert trusted(str(repo), base="origin/main").approvers == [G1]
+
+
+def test_trusted_ignores_working_tree_edit(tmp_path, git_env, monkeypatch):
+    from ado.config import trusted
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    # the PR (working tree) adds an approver, switches to comment mode and an unattended window: the target has none of it
+    repo = _trust_repo(tmp_path, TRUST_BASE, {**TRUST_BASE, "approvers": [G2], "approval": "comment", "unattended": {"assume_after_hours": 1}})
+    t = trusted(str(repo))
+    assert (t.approvers, t.approval, t.unattended) == ([], "terminal", UNATTENDED_DEFAULT)
+    # and the other way round: removing the target's approvers in the PR changes nothing
+    (tmp_path / "two").mkdir()
+    repo2 = _trust_repo(tmp_path / "two", {**TRUST_BASE, "approvers": [G1], "approval": "comment"}, TRUST_BASE)
+    t = trusted(str(repo2))
+    assert (t.approvers, t.approval) == ([G1], "comment")
+    (repo2 / "ado.config.json").write_text("{ not json")  # an unparsable working tree is not read either
+    assert trusted(str(repo2)).approvers == [G1]
+
+
+def test_trusted_unreadable_target_refuses(tmp_path, git_env):
+    from ado.config import trusted
+    repo = _trust_repo(tmp_path, TRUST_BASE)
+    from tests.conftest import git
+    git(repo, "commit", "-q", "--allow-empty", "-m", "second")
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")  # origin/main has a reflog entry and a parent now
+    for base in ("origin/nope", "refs/heads/nope", "not a ref", "--upload-pack=x", "main@{0}", "origin/main@{1}", "origin/main~0", "origin/main~1",
+                 "origin/main^", "origin/main^0", "origin/main^{commit}", "origin/main:ado.config.json", "main..origin/main", "origin/main\n", " origin/main",
+                 "origin/ main", "origin/main\t", "-x", "@{-1}", "HEAD~1"):
+        with pytest.raises(ConfigInvalid) as e:
+            trusted(str(repo), base=base)
+        assert base.strip() not in str(e.value) or base.strip() == "", base  # fixed text: the base is never echoed
+    assert trusted(str(repo), base="origin/main").approvers == []  # the plain names still work
+    assert trusted(str(repo), base="refs/remotes/origin/main").approvers == []
+    (tmp_path / "bad").mkdir()
+    bad = _trust_repo(tmp_path / "bad", {**TRUST_BASE, "approvers": "SECRETVALUE"})  # invalid at the target
+    with pytest.raises(ConfigInvalid) as e:
+        trusted(str(bad))
+    assert "SECRETVALUE" not in str(e.value)
+    (tmp_path / "junk").mkdir()
+    from tests.conftest import git
+    junk = _ref_repo(tmp_path / "junk", "{ not json")
+    git(junk, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(junk, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    with pytest.raises(ConfigInvalid):
+        trusted(str(junk))
+    (tmp_path / "dangling").mkdir()
+    dangling = _ref_repo(tmp_path / "dangling")
+    git(dangling, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone")  # origin/HEAD points nowhere
+    with pytest.raises(ConfigInvalid):
+        trusted(str(dangling))
+    with pytest.raises(ConfigInvalid):
+        trusted(str(tmp_path / "missing-dir"), base="origin/main")
+
+
+def test_trusted_returns_only_the_three_trust_keys(tmp_path, git_env):
+    from ado.config import Trust, trusted
+    t = trusted(str(_trust_repo(tmp_path, {**TRUST_BASE, "approvers": [G1]})))
+    assert isinstance(t, Trust) and t._fields == ("approvers", "approval", "unattended") and t.approvers == [G1]
+    assert not hasattr(t, "organization") and not hasattr(t, "mode")
+
+
+def test_trusted_target_without_a_config_is_the_defaults(tmp_path, git_env):
+    from ado.config import trusted
+    repo = _trust_repo(tmp_path, None, {**TRUST_BASE, "approvers": [G1], "approval": "comment"})  # the PR adds the config: it is not trusted
+    t = trusted(str(repo))
+    assert (t.approvers, t.approval, t.unattended) == ([], "terminal", UNATTENDED_DEFAULT)
+
+
+def test_no_base_no_trust_keys_defaults(tmp_path, git_env, monkeypatch):
+    from ado.config import trusted
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    repo = _trust_repo(tmp_path, TRUST_BASE, origin=False)  # a fresh repository: no origin/HEAD
+    t = trusted(str(repo))
+    assert (t.approvers, t.approval, t.unattended) == ([], "terminal", UNATTENDED_DEFAULT)
+    (tmp_path / "none").mkdir()
+    assert trusted(str(tmp_path / "none")).approval == "terminal"  # not even a config file
+
+
+@pytest.mark.parametrize("extra", [{"approvers": []}, {"approvers": [G1]}, {"approval": "terminal"}, {"approval": "comment"}, {"unattended": {}}, {"unattended": {"approval_requests": False}}])
+def test_no_base_with_trust_keys_refuses(tmp_path, git_env, monkeypatch, extra):
+    from ado.config import trusted
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    repo = _trust_repo(tmp_path, TRUST_BASE, {**TRUST_BASE, **extra}, origin=False)
+    with pytest.raises(ConfigInvalid, match="origin/HEAD or pass --base") as e:
+        trusted(str(repo))
+    assert G1 not in str(e.value)
+    # the same file with the key refuses even when it is uncommitted garbage next to a valid committed config
+    (repo / "ado.config.json").write_text("{ not json")
+    with pytest.raises(ConfigInvalid):
+        trusted(str(repo))  # cannot tell whether it holds a trust key: refuse
+    # a config named by $ADO_CONFIG counts too
+    elsewhere = tmp_path / "elsewhere.json"
+    elsewhere.write_text(json.dumps({**TRUST_BASE, **extra}))
+    (repo / "ado.config.json").write_text(json.dumps(TRUST_BASE))
+    monkeypatch.setenv("ADO_CONFIG", str(elsewhere))
+    with pytest.raises(ConfigInvalid, match="origin/HEAD or pass --base"):
+        trusted(str(repo))
+
+
+def test_no_base_reads_a_symlinked_working_tree_config_only_to_look_for_the_keys(tmp_path, git_env, monkeypatch):
+    from ado.config import trusted
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    repo = _trust_repo(tmp_path, TRUST_BASE, origin=False)
+    real = tmp_path / "real.json"
+    real.write_text(json.dumps(TRUST_BASE))  # Config.load accepts a symlink to a regular file, so trusted() must too
+    (repo / "ado.config.json").unlink()
+    (repo / "ado.config.json").symlink_to(real)
+    assert Config.load(start_dir=repo).organization == "contoso"
+    assert trusted(str(repo)).approval == "terminal"
+    real.write_text(json.dumps({**TRUST_BASE, "approvers": [G1]}))  # keys behind the link and no base: still refused
+    with pytest.raises(ConfigInvalid, match="origin/HEAD or pass --base"):
+        trusted(str(repo))
+    (repo / "ado.config.json").unlink()
+    (repo / "ado.config.json").symlink_to(tmp_path / "missing.json")  # a dangling link is no file, as for Config.load
+    assert trusted(str(repo)).approvers == []
+
+
+def test_no_base_refuses_a_huge_or_unreadable_working_tree_config(tmp_path, git_env, monkeypatch):
+    from ado.config import trusted
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    repo = _trust_repo(tmp_path, TRUST_BASE, origin=False)
+    (repo / "ado.config.json").write_text(json.dumps({**TRUST_BASE, "pad": "x" * (1024 * 1024)}))
+    with pytest.raises(ConfigInvalid):
+        trusted(str(repo))
+    (repo / "ado.config.json").write_text(json.dumps({**TRUST_BASE, "pad": "x" * 1000}))  # a big one under the cap is read
+    assert trusted(str(repo)).approvers == []
+    (repo / "ado.config.json").write_text("[1]")
+    with pytest.raises(ConfigInvalid):
+        trusted(str(repo))
+    (repo / "ado.config.json").write_bytes(b"\xff\xfe")
+    with pytest.raises(ConfigInvalid):
+        trusted(str(repo))
+
+
+def test_no_base_refusal_texts_are_fixed_and_name_no_file(tmp_path, git_env, monkeypatch):
+    from ado.config import trusted
+    elsewhere = tmp_path / "SECRETNAME.json"
+    elsewhere.write_text(json.dumps({**TRUST_BASE, "approvers": [G1]}))
+    (tmp_path / "r").mkdir()
+    repo = _trust_repo(tmp_path / "r", TRUST_BASE, origin=False)
+    monkeypatch.setenv("ADO_CONFIG", str(elsewhere))
+    with pytest.raises(ConfigInvalid) as e:
+        trusted(str(repo))
+    assert "the config file sets" in str(e.value) and "ado.config.json" not in str(e.value) and "SECRETNAME" not in str(e.value)
+    elsewhere.write_text("{ not json")
+    with pytest.raises(ConfigInvalid) as e:
+        trusted(str(repo))
+    assert "the config file cannot be read" in str(e.value) and "ado.config.json" not in str(e.value) and "SECRETNAME" not in str(e.value)
+
+
+def test_absent_keys_byte_identical_outputs(tmp_path):
+    """Every verb prints the same bytes and exits with the same code as the commit before this task when the trust keys are absent
+    (the whole baseline comparison, with piece 1's baseline, stays in tests/test_advisory_regression.py)."""
+    import io
+    import subprocess
+    import tarfile
+    from tests import test_advisory_regression as ar
+    before = "f83c868"
+    if subprocess.run(["git", "-C", str(ar.ROOT), "cat-file", "-e", f"{before}^{{commit}}"], capture_output=True).returncode:
+        pytest.skip(f"commit {before} is not in this clone")
+    tar = subprocess.run(["git", "-C", str(ar.ROOT), "archive", "--format=tar", before, "src"], check=True, capture_output=True).stdout
+    base = tmp_path / "before"
+    base.mkdir()
+    with tarfile.open(fileobj=io.BytesIO(tar)) as t:
+        t.extractall(base)
+    home = tmp_path / "home"
+    home.mkdir()
+    argvs = [["strict", "mode"], ["strict", "mode", "--base", "origin/main"], ["gate", "1001", "--offline"], ["gate", "1001", "--offline", "--base", "main"],
+             ["strict", "check", "1001", "--phase", "pr"], ["doctor"], ["doctor", "--json"], ["status", "1001", "--offline"], ["status", "1001", "--offline", "--json"],
+             ["decisions", "1001"], ["questions", "1001"], ["dod", "1001"], ["done", "1001"], ["setup", "--help"], ["doctor", "--help"]]
+    old = ar._run_all(base / "src", tmp_path / "proj", home, argvs)
+    new = ar._run_all(ar.ROOT / "src", tmp_path / "proj", home, argvs)
+    diffs = [f"{a[0]}: rc {a[1]}->{b[1]}, stdout same {a[2] == b[2]}, stderr same {a[3] == b[3]}" for a, b in zip(old, new) if a != b]
+    assert not diffs, "\n".join(diffs)
+    assert any(o[2] for o in old[:-3]) and "approvers" in "".join(o[2] for o in old)  # not vacuous: doctor's rows were printed

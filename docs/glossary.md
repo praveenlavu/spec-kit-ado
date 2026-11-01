@@ -3,8 +3,8 @@
 One sentence for every concept you meet, and the first setup profile that needs it. The profiles are written by
 `ado setup --profile`: `starter` (advisory, nothing blocks), `team` (the gate and the review can block) and `strict` (tests
 proven red before green, a verification record, refusals). `opt-in` marks a feature you switch on yourself in any profile.
-The 10-minute path is the [quickstart](quickstart.md); the keys are in [configuration](configuration.md). Approvers and the
-approval of gates and answers by a comment on the story are not part of this version yet: they are added here when they ship.
+The 10-minute path is the [quickstart](quickstart.md); the keys are in [configuration](configuration.md). The keys for approvers and
+approval by a comment on the story exist; the verbs that act on them are added to the tool during 0.3.0.
 
 | Concept | First needed in | What it is |
 |---|---|---|
@@ -37,4 +37,7 @@ approval of gates and answers by a comment on the story are not part of this ver
 | **Rules file** | opt-in | `<dod_path>/Rules_<id>.md`, the copy of one ancestor's business rules that `ado rules <id>` writes next to the ledger. |
 | **Rules from:** | opt-in | The ledger header line that lists the ancestors whose rules apply to the story, nearest first, or `none`. |
 | **Rules reviewed:** | opt-in | The ledger header line, written by `ado rules <id> --confirm`, that records the fingerprint of each rule a human has confirmed. |
+| **Approver** | team | An ADO identity (a GUID) listed in `approvers` on the target branch, a separate human who is never the agent's token, the CI service identity or a kit posting identity. |
+| **Approval mode** | opt-in | `"approval": "comment"` on the target branch: gates and verdicts need a comment from an approver instead of a keypress at the terminal, while `"terminal"` stays the default. |
+| **Unattended** | opt-in | The `unattended` object on the target branch, with `assume_after_hours` and `approval_requests`, for runs with nobody at a terminal. |
 | **Workflow** | opt-in | `ado-lifecycle`, the Spec Kit workflow that runs the whole lifecycle with a human gate before every ADO write. |

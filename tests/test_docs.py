@@ -2384,6 +2384,7 @@ GLOSSARY = [
     ("Override", "strict"), ("Stack profile", "strict"), ("Kit pin", "strict"),
     ("Business rules", "opt-in"), ("Rules file", "opt-in"), ("Rules from:", "opt-in"), ("Rules reviewed:", "opt-in"),
     ("Workflow", "opt-in"),
+    ("Approver", "team"), ("Approval mode", "opt-in"), ("Unattended", "opt-in"),
 ]
 _GLOSSARY_ROW = re.compile(r"^\| \*\*(?P<c>[^*|]+)\*\* \| (?P<p>starter|team|strict|opt-in) \| (?P<d>[^|]+) \|$", re.M)
 
@@ -2434,3 +2435,23 @@ def test_quickstart_step_order_matches_the_status_stages():
     between = step5[i:j]
     assert "product owner answers" in between and "assumed:" in between and "--kind assumption" in between
     assert "does not move past `questions-answered`" in step5 and "ado-lifecycle` workflow" in step5  # what is NOT automatic
+
+
+def test_trust_keys_doc_pins():
+    cfg, readme, agents, hitl, glossary = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "docs/glossary.md"))
+    log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert log.index("## 0.3.0 \u2014 unreleased") < log.index("(P4-7a)") < log.index("## 0.2")
+    for needle in ("| `approvers` | list of strings | `[]` |", "| `approval` |", "| `unattended` |", "`assume_after_hours`", "`approval_requests`",
+                   "0 to 20", "the anonymous identity", "a duplicate is rejected", "Read only from the target branch", "`config.trusted(repo, base)`",
+                   "set origin/HEAD or pass --base", "`Trust(approvers, approval, unattended)`", "not a plain ref name", "a `warn` row would not change the exit code", "### Approvers and comment mode: the recommended setup",
+                   "never runs as an admin or an approver", 'Contributor without the "Bypass rules on work item updates" permission', "never an approver",
+                   "Deleting `origin/HEAD`", "`refs/remotes/origin/<base>`", "ado setup --profile team", "optional"):
+        assert needle in cfg, needle
+    for t in (readme, agents, hitl):
+        assert "`approvers`" in t and "target branch" in t and "as an admin or approver" in t, t[:40]
+    assert "separate account" in cfg and "no approver PAT" in cfg
+    sec = log.split("## 0.3.0", 1)[1].split("\n## 0.2", 1)[0]
+    assert "`config.trusted`" in sec and "`approvers`" in sec and "`unattended`" in sec and "ado doctor" in sec
+    for c in ("Approver", "Approval mode", "Unattended"):
+        assert f"| **{c}** |" in glossary, c
+    assert "Approvers and the approval of gates" not in glossary  # the "not part of this version yet" sentence is gone

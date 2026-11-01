@@ -34,6 +34,16 @@ request) is a no — revise the preview and ask again.
 | Tokens (PAT, OAuth, any secret) | Never ask for, accept, echo, log, or store one. If a token is pasted into chat, do not use it — tell the user to revoke it now and create a new one via `ado setup` in their own terminal. |
 | Sensitive data | Never put customer or member data in ADO fields, comments, URLs, ledgers, or attachments. Attachments are limited to the configured allowlist (`attachments_allow`, default `.md`, `.svg`, `.txt`); anything else is a hard abort. |
 
+## Who may approve: `approvers`, `approval`, `unattended`
+
+These `ado.config.json` keys are a trust boundary. They are read only from the target branch (`config.trusted`: `origin/HEAD` locally, `--base` in CI),
+never from the working tree or a pull request: an edit in a branch changes nothing, and an unreadable target config refuses. The agent never
+runs as an admin or approver: it runs as a Contributor without the "Bypass rules on work item updates" permission, approvers are separate human identities (no approver PAT in
+the agent's environment), and the CI service identity is never an approver. The agent never adds a token identity (its own or CI's) to
+`approvers` and never approves anything on a human's behalf. `ado doctor` fails when an approver is the identity of the token it runs with. In
+this build only the keys, `config.trusted`, the doctor row and the `ado setup --profile team|strict` prompt exist; the verbs that act on
+`approval: "comment"` come later in 0.3.0. See [docs/configuration.md](../docs/configuration.md#approvers-and-comment-mode-the-recommended-setup) for the setup and residuals.
+
 ## How to preview
 
 - **Batch verbs** (`ado push`, `ado done`, `ado pr create`, `ado questions <id> --post`, `ado decisions <id> --post`, `ado branch <id> --link`) are dry-run by default. Run

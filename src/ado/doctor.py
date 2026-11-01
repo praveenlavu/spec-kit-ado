@@ -180,17 +180,6 @@ def _working_tree_lacks(repo, key):
         return False
 
 
-def _raw_has(repo, target, key):
-    """True when the target commit's raw ado.config.json (already validated by load_from_ref) has the top-level `key`."""
-    if not target.source_commit:
-        return False
-    try:
-        raw = strict._blob_at(str(repo), target.source_commit, "ado.config.json", MAX_MANIFEST * 4, "ado.config.json at the target branch")
-        return raw is not None and key in json.loads(raw.decode("utf-8"))
-    except (ConfigInvalid, ValueError, TypeError, RecursionError):
-        return True  # cannot tell: treat as present, so the row is unknown, never ok
-
-
 def _probe(client):
     """('ok', identity dict) or (what went wrong: 'rejected' | 'network' | 'unknown', HTTP status or None). One GET."""
     try:
@@ -243,23 +232,27 @@ def _token_rows(cfg, client):
     return ("ok", ""), ("ok", ""), ident.strip().lower()
 
 
+ONE_HUMAN = ("approvers must be separate human identities: identity binding protects against the agent only while an approver's credentials "
+             "are not available to it (a separate account or browser profile, no approver PAT in the agent's environment)")
+
+
 def _approvers_row(repo, target, readable, identity):
+    """The `approvers` and `approval` keys come only from the target branch. Not checked here (they need a story's comments, which
+    doctor does not read): the CI token identity and the authors of `[spec-kit-ado:*]` comments."""
     if not readable:
-        if _working_tree_lacks(repo, "approvers"):
+        if _working_tree_lacks(repo, "approvers") and _working_tree_lacks(repo, "approval"):
             return "ok", ""  # no approvers are configured anywhere doctor can see; the target branch could not be read
         return "unknown", "approvers are read only from the target branch, which could not be read"
-    if target is not None and not hasattr(target, "approvers") and _raw_has(repo, target, "approvers"):
-        return "unknown", "approvers are set on the target branch, but this build does not check them yet"
-    approvers = getattr(target, "approvers", None) if target is not None else None  # the key arrives with the approvals task
+    approvers = target.approvers if target is not None else []
+    if target is not None and target.approval == "comment" and not approvers:
+        return "fail", 'approval is "comment" on the target branch but no approvers are configured, so nobody can approve: add `approvers` there'
     if not approvers:
         return "ok", ""
-    if not isinstance(approvers, (list, tuple)):
-        return "unknown", "the approvers on the target branch are not a list doctor can read"
     if identity is None:
         return "unknown", "approvers are configured, but the token identity is unknown, so doctor cannot compare them"
-    if any(isinstance(a, str) and a.strip().lower() == identity for a in approvers):
+    if identity in approvers:
         return "fail", "an approver is the identity of this token, so the agent could approve itself: run the agent with a token that is not an approver"
-    return "ok", ""
+    return "ok", ONE_HUMAN
 
 
 def _bad(mode):

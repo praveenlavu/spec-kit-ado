@@ -131,6 +131,16 @@ def _strict_test_command(profile, data, path, input_fn):
     return input_fn("Command that runs your tests in strict mode (blank to set it later): ").strip() or None
 
 
+def _approvers(profile, data, input_fn):
+    """The `approvers` to write for the team and strict profiles: typed as GUIDs separated by commas or spaces, blank skips (nothing is
+    written). Not asked again when the config already has the key. The validator (run on the result) names a bad entry by position."""
+    if profile not in ("team", "strict") or "approvers" in data:
+        return []
+    print("approvers are read only from the target branch: the list takes effect once this file is merged there.")
+    typed = input_fn("Approver identity ids (GUIDs), comma-separated; they must not be the agent's own identity; blank to skip: ")
+    return [t.lower() for t in typed.replace(",", " ").split()]
+
+
 def _write_config(path, raw, data):
     """Atomic write (temp file in the same directory + os.replace, read back); an existing file keeps its indent and line endings."""
     from . import stack
@@ -212,6 +222,9 @@ def run_setup(input_fn=input, getpass_fn=None, out_path="ado.config.json", profi
     lines = []
     if profile is not None:
         data = _merge_profile(data, PROFILES[profile], _strict_test_command(profile, data, path, input_fn))
+        approvers = _approvers(profile, data, input_fn)
+        if approvers:
+            data["approvers"] = approvers
         Config._from_data(data, path.name)  # ConfigInvalid names the key, never the value
         lines = diff_lines(before, data) if raw is not None else []
         if lines:  # an existing config: show what changes, write only on an explicit y from a terminal

@@ -335,35 +335,62 @@ def test_stack_and_kits_reuse_the_existing_functions(env, monkeypatch):
     assert calls == ["stack", "kits"] and r["stack"]["status"] == "ok" and r["kits"]["status"] == "ok"
 
 
-def _target_with_approvers(monkeypatch, approvers):
-    # the `approvers` key arrives with a later task; the row reads it from the target branch's Config
-    target = Config(**CFG)
-    target.approvers = approvers
-    monkeypatch.setattr(Config, "load_from_ref", classmethod(lambda cls, ref, repo=".": target))
+def _target(repo, **keys):
+    _origin(repo, json.dumps({**CFG, **keys}))
 
 
-def test_approver_equal_to_token_identity_fails(env, monkeypatch):
+def test_approver_equal_to_token_identity_fails(env):
     repo, _ = env
     _origin(repo, json.dumps(CFG))
-    assert run(repo)[0]["approvers"]["status"] == "ok"  # the key does not exist yet: none
-    _target_with_approvers(monkeypatch, [OTHER, f"  {ME.upper()} "])
+    r, _ = run(repo)
+    assert r["approvers"] == {"id": "approvers", "status": "ok", "fix": ""}  # no keys: today's row, byte for byte
+    _target(repo, approvers=[OTHER, ME.upper()])
     r, _ = run(repo)
     assert r["approvers"]["status"] == "fail" and ME not in json.dumps(r) and OTHER not in json.dumps(r)
-    _target_with_approvers(monkeypatch, [OTHER])
+    assert "not an approver" in r["approvers"]["fix"]
+    _target(repo, approvers=[OTHER])
     assert run(repo)[0]["approvers"]["status"] == "ok"
     r, _ = run(repo, [AdoError("x", None, "network")])
-    assert r["approvers"]["status"] == "unknown"  # the token identity is unknown
-    _target_with_approvers(monkeypatch, "not a list")
-    assert run(repo)[0]["approvers"]["status"] == "unknown"
+    assert r["approvers"]["status"] == "unknown" and OTHER not in json.dumps(r)  # the token identity is unknown
 
 
-def test_approvers_key_on_the_target_is_not_checked_yet(env):
+def test_approvers_row_prints_the_one_human_reminder_only_when_approvers_are_configured(env):
     repo, _ = env
-    _origin(repo, json.dumps({**CFG, "approvers": [OTHER]}))
+    _target(repo, approvers=[OTHER])
     r, _ = run(repo)
-    assert r["approvers"]["status"] == "unknown" and "does not check them yet" in r["approvers"]["fix"] and OTHER not in json.dumps(r)
-    _origin(repo, json.dumps(CFG))
+    fix = r["approvers"]["fix"]
+    assert r["approvers"]["status"] == "ok" and "separate account" in fix and "no approver PAT" in fix and "agent" in fix
+    assert OTHER not in json.dumps(r) and ME not in json.dumps(r)
+    _target(repo)
+    assert run(repo)[0]["approvers"]["fix"] == ""
+
+
+def test_comment_mode_without_approvers_fails(env):
+    repo, _ = env
+    _target(repo, approval="comment")
+    r, _ = run(repo)
+    assert r["approvers"]["status"] == "fail" and "nobody can approve" in r["approvers"]["fix"]
+    _target(repo, approval="comment", approvers=[])
+    assert run(repo)[0]["approvers"]["status"] == "fail"
+    _target(repo, approval="comment", approvers=[OTHER])
     assert run(repo)[0]["approvers"]["status"] == "ok"
+    _target(repo, approval="terminal")
+    assert run(repo)[0]["approvers"]["status"] == "ok"
+    # comment mode and an approver that is the token's identity: still the identity failure, and the unknown identity is unknown
+    _target(repo, approval="comment", approvers=[ME])
+    assert run(repo)[0]["approvers"]["status"] == "fail"
+    r, _ = run(repo, [AdoError("x", None, "network")])
+    assert r["approvers"]["status"] == "unknown"
+    _target(repo, approval="comment")
+    assert run(repo, [AdoError("x", None, "network")])[0]["approvers"]["status"] == "fail"  # needs no identity
+
+
+def test_working_tree_trust_keys_change_nothing_in_the_approvers_row(env):
+    repo, _ = env
+    _origin(repo, json.dumps(CFG))
+    (repo / "ado.config.json").write_text(json.dumps({**CFG, "approvers": [ME], "approval": "comment"}))  # the PR's edit
+    r, _ = run(repo)
+    assert r["approvers"] == {"id": "approvers", "status": "ok", "fix": ""}
 
 
 def test_approvers_unknown_when_target_unreadable_unless_none_configured(env):
@@ -372,6 +399,8 @@ def test_approvers_unknown_when_target_unreadable_unless_none_configured(env):
     (repo / "ado.config.json").write_text(json.dumps({**CFG, "approvers": [ME]}))
     r, _ = run(repo)
     assert r["approvers"]["status"] == "unknown"  # a working-tree key counts for nothing: only the target branch is read
+    (repo / "ado.config.json").write_text(json.dumps({**CFG, "approval": "comment"}))
+    assert run(repo)[0]["approvers"]["status"] == "unknown"
 
 
 def test_json_shape(env, capsys, monkeypatch):

@@ -41,7 +41,9 @@ each change as `key: old -> new` (`(not set)` for a new key; `key: changed` when
 secret) and writes only after a `y` typed in a terminal: any other answer, or no terminal, writes nothing and exits 2. Without
 `--profile`, setup behaves as before. The config is checked with the same validator as `load` before anything is stored, written
 atomically (temp file in the same directory, `os.replace`) and read back, keeping its indent and line endings; a symlinked config is
-refused. Setup does not ask for `approvers` yet: that key arrives with the approvals tasks. See the [quickstart](quickstart.md)
+refused. The `team` and `strict` profiles also ask for `approvers` (optional: identity GUIDs separated by commas or spaces, blank to skip; a skipped
+question writes nothing, an `approvers` already in the file is kept and not asked again, a bad entry is refused by position before anything is
+stored). See [Approvers and comment mode](#approvers-and-comment-mode-the-recommended-setup), the [quickstart](quickstart.md)
 and the [glossary](glossary.md).
 
 ## Keys
@@ -71,6 +73,9 @@ Every string in the file, values and object keys at any depth, must be free of c
 | `strict` | object | `{"test_command": null, "test_timeout": 300}` | Strict-mode settings; a partial object keeps the defaults. `strict.test_command`: a string of 1-500 characters, the command the strict test run executes. `strict.test_timeout`: an integer from 1 to 3600, the seconds that run may take. An unknown key (reported by position, never echoed), a value of the wrong type or range, or a `strict` that is not an object is a config error. |
 | `rules` | object | `{"enabled": false, "types": ["Epic", "Feature"]}` | Business-rules settings; a partial object keeps the defaults. `rules.enabled`: a boolean, `false` leaves every output exactly as without the key; `true` makes `ado dod` walk the ancestors and write the ledger header line `Rules from:`. `rules.types`: a list of 1-10 non-empty strings of at most 64 characters, the work item types whose Description may carry a `Business rules` section; it may not contain `story_type` (compared case-insensitively). An unknown key (reported by position, never echoed), a value of the wrong type or length, or a `rules` that is not an object is a config error (exit 2; `ado gate` exits 3). With `enabled: true` `ado gate` also runs the `rule_coverage` check and adds a `rules` key to its JSON (see [business-rules-reference.md](business-rules-reference.md#the-gate-check)) and the online `rule_drift` check (see [Drift](business-rules-reference.md#drift)). With `mode: "strict"` the `pr` and `done` phases of `ado strict check` (and so `ado pr create` and `ado done`) also run the offline rules check and refuse with `rule-uncovered`, `rule-unknown`, `rule-unconfirmed`, `rule-changed`, `rules-problem`, `rules-missing`, `rules-format` or `rules-header`, which no override can waive; a rejected `out of scope:` decision is then no `decision-rejected` finding and no `open_decisions` entry, because the rule it tried to lift is back in scope (see [Strict mode](business-rules-reference.md#strict-mode)). In strict CI the config comes from the target branch, so a PR cannot switch rules off. |
 | `stack` | object | `{"kit": "", "phases": {}}` | Phase map for routing; see [stack-kits.md](stack-kits.md). |
+| `approvers` | list of strings | `[]` | Who may approve in comment mode: 0 to 20 ADO identity ids (GUIDs, any case, stored lowercase). An entry that is not a GUID, the anonymous identity (all `a`), a 21st entry, or a duplicate is a config error naming the entry by position (a duplicate is rejected, not collapsed). **Read only from the target branch**: see [Approvers and comment mode](#approvers-and-comment-mode-the-recommended-setup). |
+| `approval` | `"terminal"` or `"comment"` | `"terminal"` | How gates and verdicts are approved. `"terminal"` is today's behaviour; `"comment"` asks for an approver's comment on the story. Read only from the target branch. |
+| `unattended` | object | `{"assume_after_hours": null, "approval_requests": false}` | Settings for runs with nobody at a terminal; a partial object keeps the defaults. `assume_after_hours`: an integer from 1 to 720 (no `null` in the file: leave the key out). `approval_requests`: a boolean, `false` unless you turn it on (owner ruling: the kit posts no approval-request comments by default). An unknown key is reported by position. Read only from the target branch. |
 
 **`strict.test_command` and the stack profile.** Once a project has an approved stack profile (`ado.stack.json`), `strict.test_command` comes only from `ado stack approve --apply` (`ado setup --profile strict` leaves it alone then, and asks for one only while no profile is approved): it writes the command composed from the approved stacks, or removes the key when no stack defines a test command, and re-approving is how to change it (the profile's `strict.test_command` must equal the composed command; a hand edit is drift, and so is any `strict.test_command` at all when no stack defines a test command). `ado setup` and `speckit.ado.setup` never write it. Hand edits are for projects without a profile. `approve` rewrites `ado.config.json` keeping the parsed value and key order of every other key (indent, line terminator and trailing newline are kept; spacing may change), refuses when `ADO_CONFIG` is set (`Config.load` would read that file instead) or when the file is invalid, symlinked or not a regular file, and needs a terminal (a guard against accidents, not a security boundary).
 
@@ -93,7 +98,7 @@ In CI the PR controls the files it is judged by, so `ado gate --base REF`, `ado 
 
 `organization` and `project` must be present and non-empty, `story_type` and
 `removed_state` and `done_state` must be non-empty strings when set, `gate`, `stack`, `strict` and `rules` must be
-objects, `mode` must be `advisory` or `strict`, `attachments_allow` must be a list of strings, `branch_prefix` must be
+objects (so must `unattended`), `approvers` a list of at most 20 GUIDs, `approval` `terminal` or `comment`, `mode` must be `advisory` or `strict`, `attachments_allow` must be a list of strings, `branch_prefix` must be
 git-ref-safe as above, `gate.block` entries must be known check names (`ac_traceability`,
 `assertion`, `ac_drift`, `open_questions`, `commits_without_story`, `open_decisions`, `rule_coverage`, `rule_drift`) and `review_block_on` entries
 must be `blocker`, `major` or `minor`; otherwise the CLI exits 2
@@ -106,6 +111,41 @@ ado.config.json is invalid: <message>` as the PR comment and turns the check red
 the build with an error annotation carrying the first line of the CLI message and posts no PR thread
 (`ado pr comment` needs the same config); the workflow's `gate-check` halts on exit 3. A missing config
 file or token stays exit 2 and advisory.
+
+### Approvers and comment mode: the recommended setup
+
+`approvers`, `approval` and `unattended` decide who may approve things, so they are a trust boundary. They are read **only from the target
+branch** (`origin/HEAD` locally, `--base` in CI). The reader for the verbs is `config.trusted(repo, base)`, which returns only the three
+keys (`Trust(approvers, approval, unattended)`); `ado doctor` reads the same target-branch file through its own code (`Config.load_from_ref`),
+never the working tree that a pull request edits: a PR that adds an approver, switches `approval` or sets `unattended` changes nothing until it is merged. A target branch with
+no `ado.config.json` means the defaults (no approvers, `terminal`). An unreadable or invalid target config, or a base that is no commit
+here, refuses (`ConfigInvalid`, exit 3 where that already applies) instead of falling back. `config.trusted` also refuses a base that is not a
+plain ref name (a revision expression such as `main@{1}` or `origin/main~1`, a range, a space, a `:` or a leading dash), since it could pick an
+older target config. With **no** base at all (a fresh repository without
+`origin/HEAD`) the defaults apply while the working-tree config (found as `Config.load` finds it, a symlink to a regular file included, and the
+file `$ADO_CONFIG` names) sets none of the three keys, exactly as before; if it sets any of them, or is over 1 MiB or not a JSON object, the answer is
+a refusal, "set origin/HEAD or pass --base", because the keys cannot be checked against anything. The refusal texts are fixed and name no file. Absent keys change no
+output of any verb.
+
+In this build the keys are validated, `trusted` reads them, `ado doctor` checks them and `ado setup --profile team|strict` asks for the
+approvers. The verbs that act on `approval: "comment"` (reading approver comments, `ado approvals`, the sync verbs) come with the later tasks of
+this version: until they ship, setting `approval` changes no behaviour other than the doctor row.
+
+**Recommended setup** (identity binding protects against the agent, not against anyone who holds an approver's credentials):
+
+- The agent never runs as an admin or an approver. It runs as a **Contributor without the "Bypass rules on work item updates" permission**,
+  with that identity's PAT.
+- Approvers are **separate human identities**: a separate account or browser profile, and no approver PAT in the agent's environment. If your
+  own PAT runs the agent, you cannot be its approver: you need a second identity.
+- The CI service identity is never an approver.
+- `ado doctor` fails when an approver is the identity of the token it runs with, and, when approvers are configured and nothing fails, shows this reminder in the fix text of the `approvers` row (text and JSON). The reminder
+  sits on the `ok` row on purpose: a `warn` row would not change the exit code either (only `fail` does), and it would be a warning that never goes away.
+
+**Residuals (stated, not closed).** Deleting `origin/HEAD`, or rewriting `refs/remotes/origin/<base>` locally, changes what the local CLI trusts
+(CI fetches fresh, so it is not affected). Other verbs' `--base` still accepts revision expressions (`main@{1}`) through `strict._resolve_base`, so a
+local run of those can be pointed at an older target config; CI is not affected, and `config.trusted` refuses such a base. Anyone who holds an approver's credentials, the bypass-rules permission or admin rights on the
+repository is outside this protection, and so is raw REST with the PAT. This is process enforcement plus identity-bound approvals where you
+turn them on, not a security boundary.
 
 ## `gate`
 
@@ -180,7 +220,7 @@ an email or a config value (a config error names the key by position).
 | `config-target` | the target branch's (`origin/HEAD`) `ado.config.json` validates | `fail` if unreadable or invalid, `warn` if absent, `unknown` without `origin/HEAD` |
 | `token`, `identity` | a token is found and ADO accepts it as a real user | `fail` with no token, a rejected token, an anonymous `connectionData`, or a 404 (check `organization`); `unknown` when ADO cannot be reached or does not say who you are. `connectionData` is organization-level and does not check the project: a wrong project still shows `ok` here, and only the scope probes (a later task) will catch it |
 | `extension`, `workflow` | the installed version (`.specify/extensions/ado/extension.yml`, `.specify/workflows/ado-lifecycle/workflow.yml`) equals the CLI's | `fail` on a mismatch, `warn` if not installed |
-| `approvers` | no approver is the token's identity | `fail` if one is. The `approvers` key is read only from the target branch and does not exist yet, so for now this row is `ok` (none) unless the target branch could not be read, and `unknown` ("does not check them yet") if the target branch sets the key |
+| `approvers` | the target branch has no approvers and is not in comment mode, or none of its approvers is the token's identity | `fail` if an approver is the identity of this token, or if the target branch sets `"approval": "comment"` and lists no approvers (nobody can approve); `unknown` when the target branch cannot be read (unless the working-tree config has neither key) or the token identity is unknown. With approvers configured and no failure the row is `ok` and carries the one-human reminder below. Doctor compares with the local token identity only: the CI token identity and the authors of `[spec-kit-ado:*]` comments need a story's comments, which doctor does not read yet |
 | `stack`, `kits` | `ado stack show` says approved with no note; `ado kits verify` has no finding | `warn` in advisory mode, `fail` in strict (no profile at all reads "no stack profile yet (optional): run `ado stack detect`" in advisory mode) |
 
 `git` and `specify` run with a scrubbed environment (no token), a timeout and no input; only a version number is kept from their output.

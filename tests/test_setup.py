@@ -319,7 +319,7 @@ _PROFILE_KEYS = {
 @pytest.mark.parametrize("name", ["starter", "team", "strict"])
 def test_profile_writes_exact_keys(monkeypatch, tmp_path, name):
     out = tmp_path / "ado.config.json"
-    answers = ("contoso", "Fabrikam") + (("python3 -m pytest -q",) if name == "strict" else ())
+    answers = ("contoso", "Fabrikam") + (("python3 -m pytest -q",) if name == "strict" else ()) + (("",) if name != "starter" else ())  # blank: no approvers
     assert _setup(monkeypatch, tmp_path, out, answers, profile=name) == 0
     assert _json.loads(out.read_text()) == {"organization": "contoso", "project": "Fabrikam", **_PROFILE_KEYS[name]}
     from ado import setup_cmd
@@ -331,14 +331,14 @@ def test_strict_profile_leaves_test_command_when_profile_approved(monkeypatch, t
     from ado import stack
     monkeypatch.setattr(stack, "read_profile", lambda root=".", blob=None: {"status": "approved", "profile": {}, "errors": []})
     out = tmp_path / "ado.config.json"
-    assert _setup(monkeypatch, tmp_path, out, profile="strict") == 0  # a third answer would raise StopIteration
+    assert _setup(monkeypatch, tmp_path, out, ("contoso", "Fabrikam", ""), profile="strict") == 0  # a fourth answer would raise StopIteration
     assert _json.loads(out.read_text()) == {"organization": "contoso", "project": "Fabrikam", "mode": "strict"}
 
 
 def test_strict_profile_keeps_a_test_command_already_set(monkeypatch, tmp_path):
     out = tmp_path / "ado.config.json"
     out.write_text(_json.dumps({"organization": "contoso", "project": "Fabrikam", "strict": {"test_command": "make test"}}))
-    assert _setup(monkeypatch, tmp_path, out, ("", "", "y"), profile="strict", interactive=True) == 0  # no test-command question
+    assert _setup(monkeypatch, tmp_path, out, ("", "", "", "y"), profile="strict", interactive=True) == 0  # no test-command question
     assert _json.loads(out.read_text())["strict"] == {"test_command": "make test"}
 
 
@@ -351,7 +351,7 @@ def _existing(tmp_path, **extra):
 def test_existing_config_diff_and_no_write_on_n(monkeypatch, tmp_path, capsys):
     out = _existing(tmp_path, mode="strict", gate={"block": ["assertion"]})
     before = out.read_bytes()
-    assert _setup(monkeypatch, tmp_path, out, ("", "", "n"), profile="team", interactive=True) == 2
+    assert _setup(monkeypatch, tmp_path, out, ("", "", "", "n"), profile="team", interactive=True) == 2
     shown = capsys.readouterr().out
     assert 'mode: "strict" -> "advisory"' in shown
     assert 'gate.block: ["assertion"] -> ["assertion", "ac_traceability", "open_questions"]' in shown
@@ -389,7 +389,7 @@ def test_profile_never_removes_keys_and_keeps_crlf(monkeypatch, tmp_path):
     out = tmp_path / "ado.config.json"
     out.write_bytes(_json.dumps({"organization": "contoso", "project": "Fabrikam", **extra}, indent=2).replace("\n", "\r\n").encode() + b"\r\n")
     for name, ans in (("team", ()), ("strict", ("python3 -m pytest -q",))):
-        assert _setup(monkeypatch, tmp_path, out, ("", "", *ans, "y"), profile=name, interactive=True) == 0
+        assert _setup(monkeypatch, tmp_path, out, ("", "", *ans, "", "y"), profile=name, interactive=True) == 0
         after = _json.loads(out.read_text())
         assert all(k in after for k in extra) and after["gate"]["tests"] == {"*.py": "assert"} and after["strict"]["test_timeout"] == 600
         assert after["gate"]["block"][0] == "assertion" and "major" in after["review_block_on"]
@@ -416,7 +416,7 @@ def test_profile_refuses_a_symlinked_config_and_an_invalid_result(monkeypatch, t
     bad = _existing(tmp_path, gate={"block": ["nope"]})
     before = bad.read_bytes()
     with pytest.raises(ConfigError):
-        _setup(monkeypatch, tmp_path, bad, ("", "", "y"), profile="team", interactive=True)
+        _setup(monkeypatch, tmp_path, bad, ("", "", "", "y"), profile="team", interactive=True)
     assert bad.read_bytes() == before
 
 
@@ -471,3 +471,58 @@ def test_nothing_to_change_does_not_say_wrote(monkeypatch, tmp_path, capsys):
     assert _setup(monkeypatch, tmp_path, out, profile="starter", interactive=True) == 0  # no y asked: nothing to confirm
     shown = capsys.readouterr().out
     assert "nothing to change in" in shown and "wrote" not in shown and out.read_bytes() == before
+
+
+# ---- `ado setup --profile team|strict` asks for `approvers` (P4-7a) ----
+A1, A2 = "11111111-2222-3333-4444-555555555555", "66666666-7777-8888-9999-000000000000"
+
+
+@pytest.mark.parametrize("name", ["team", "strict"])
+def test_team_and_strict_profiles_ask_for_approvers(monkeypatch, tmp_path, capsys, name):
+    out = tmp_path / "ado.config.json"
+    prompts, answers = [], iter(("contoso", "Fabrikam", *(("make test",) if name == "strict" else ()), f" {A1.upper()}, {A2}  {A1.replace('1', '3')}"))
+    from ado import setup_cmd, secretstore
+    from tests.conftest import FakeClient
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr(secretstore, "resolve_store", lambda: secretstore.FileStore())
+    monkeypatch.setattr(setup_cmd, "AdoClient", lambda cfg: FakeClient(cfg, responses=[{"name": "Fabrikam"}]))
+    assert setup_cmd.run_setup(input_fn=lambda p: prompts.append(p) or next(answers), getpass_fn=lambda _p: "pat", out_path=out, profile=name) == 0
+    assert _json.loads(out.read_text())["approvers"] == [A1, A2, A1.replace("1", "3")]  # lowercased, in the order typed
+    ask = [p for p in prompts if "pprover" in p]
+    assert len(ask) == 1 and "blank to skip" in ask[0] and "--author-ids" not in ask[0]  # that flag ships with P4-7b
+    assert "target branch" in capsys.readouterr().out  # says where they are read from
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_starter_profile_and_no_profile_do_not_ask_for_approvers(monkeypatch, tmp_path):
+    out = tmp_path / "ado.config.json"
+    assert _setup(monkeypatch, tmp_path, out, profile="starter") == 0  # a third answer would raise StopIteration
+    assert "approvers" not in _json.loads(out.read_text())
+    out.unlink()
+    assert _setup(monkeypatch, tmp_path, out) == 0
+    assert "approvers" not in _json.loads(out.read_text())
+
+
+def test_existing_approvers_are_kept_and_not_asked_again(monkeypatch, tmp_path):
+    out = _existing(tmp_path, approvers=[A1])
+    assert _setup(monkeypatch, tmp_path, out, ("", "", "y"), profile="team", interactive=True) == 0  # no approvers question
+    assert _json.loads(out.read_text())["approvers"] == [A1]
+
+
+def test_existing_config_shows_approvers_in_the_diff(monkeypatch, tmp_path, capsys):
+    out = _existing(tmp_path)
+    before = out.read_bytes()
+    assert _setup(monkeypatch, tmp_path, out, ("", "", A2, "n"), profile="team", interactive=True) == 2
+    assert f'approvers: (not set) -> ["{A2}"]' in capsys.readouterr().out and out.read_bytes() == before
+
+
+@pytest.mark.parametrize("typed, where", [("SECRETVALUE", r"approvers\[0\]: not an identity id"), (f"{A1} nope", r"approvers\[1\]: not an identity id"),
+                                          ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", r"approvers\[0\]: the anonymous identity"),
+                                          (f"{A1}, {A1.upper()}", r"approvers\[1\]: duplicate of an earlier entry")])
+def test_bad_approvers_answer_refuses_and_stores_nothing(monkeypatch, tmp_path, typed, where):
+    from ado.config import ConfigError
+    out = tmp_path / "ado.config.json"
+    with pytest.raises(ConfigError, match=where) as e:
+        _setup(monkeypatch, tmp_path, out, ("contoso", "Fabrikam", typed), profile="team")
+    assert "SECRETVALUE" not in str(e.value) and A1 not in str(e.value)
+    assert not out.exists() and not (tmp_path / ".azdo").exists()  # nothing written, token not stored

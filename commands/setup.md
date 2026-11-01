@@ -41,7 +41,7 @@ Run each and report a short table (tool, found version, required/optional):
   Claude Code: `! ado setup`). It prompts for organization and project, and reads the
   PAT through a hidden prompt into the OS keychain or a 0600 file. The PAT must never
   pass through this chat.
-- For a first-time user suggest `ado setup --profile starter` (`team` and `strict` add the gate lists or strict mode; see
+- For a first-time user suggest `ado setup --profile starter` (`team` and `strict` add the gate lists or strict mode and ask for the optional `approvers`, which are read only from the target branch; see
   `docs/quickstart.md`); on an existing config it shows `key: old -> new` and writes only after a `y` the user types.
 - `ado setup` updates only `organization` and `project`; every other key in an existing
   `ado.config.json` is preserved. If the file exists but is not a valid JSON object,

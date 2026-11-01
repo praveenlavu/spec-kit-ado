@@ -1,3 +1,4 @@
+import collections
 import json
 import os
 import re
@@ -14,6 +15,11 @@ STRICT_REVIEW_BLOCK = ("blocker",)  # review_block_on floor in strict mode
 STRICT_DEFAULTS = {"test_command": None, "test_timeout": 300}
 RULES_DEFAULTS = {"enabled": False, "types": ["Epic", "Feature"]}  # business rules (R§ config); off = baseline
 MAX_REF_CONFIG = 1024 * 1024  # bytes: a config read from a git ref is the PR's neighbour's text; the same cap as the ledger
+MAX_APPROVERS = 20
+APPROVAL_MODES = ("terminal", "comment")
+UNATTENDED_DEFAULTS = {"assume_after_hours": None, "approval_requests": False}  # approval_requests: owner ruling Q4, off by default
+TRUST_KEYS = ("approvers", "approval", "unattended")  # read only from the target branch (`trusted`), never from the working tree
+GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I | re.A)
 REF_LABEL = "ado.config.json at the target branch"  # names the file in messages, never the ref (it is a CLI value)
 
 
@@ -37,7 +43,8 @@ _HARMLESS_FORMAT = "\u200c\u200d\u200e\u200f"  # ZWNJ, ZWJ, LRM, RLM: Persian/In
 _FIELDS = frozenset({  # fixed config field names: safe to print
     "organization", "project", "api_version", "dod_path", "gate", "tests", "block", "attachments_allow", "review_block_on",
     "done_state", "task_type", "repo_host", "repository", "story_type", "removed_state", "branch_prefix", "stack", "kit",
-    "phases", "dod_gate", "mode", "strict", "test_command", "test_timeout", "rules", "enabled", "types"})
+    "phases", "dod_gate", "mode", "strict", "test_command", "test_timeout", "rules", "enabled", "types",
+    "approvers", "approval", "unattended", "assume_after_hours", "approval_requests"})
 
 
 def _has_control(s):
@@ -79,7 +86,7 @@ class Config:
                  done_state="Done", task_type="Task",
                  repo_host="github", repository="",
                  story_type="User Story", removed_state="Removed", branch_prefix="feature/",
-                 mode="advisory", strict=None, rules=None):
+                 mode="advisory", strict=None, rules=None, approvers=None, approval="terminal", unattended=None):
         self.organization = organization
         self.project = project
         self.api_version = api_version
@@ -99,6 +106,9 @@ class Config:
         self.strict = {**STRICT_DEFAULTS, **(strict or {})}
         self.rules = {**RULES_DEFAULTS, **(rules or {})}
         self.rules["types"] = list(self.rules["types"])
+        self.approvers = list(approvers or [])  # lowercase identity GUIDs; only the target branch's value may be trusted (`trusted`)
+        self.approval = approval
+        self.unattended = {**UNATTENDED_DEFAULTS, **(unattended or {})}
         self.source_commit = None  # the 40-hex target commit load_from_ref resolved; None for a config read from disk
         self.from_target = False  # True when CI took this config from the PR's target branch (`ado gate --base`)
         self.target_profile_blob = None  # ado.stack.json / ado.kits.lock.json bytes at source_commit (strict.read_target_trust); None: absent
@@ -137,7 +147,7 @@ class Config:
         if "dod_gate" in data:
             raise ConfigInvalid(f"{path}: `dod_gate` was renamed to `gate` in 0.1.1; "
                               "move `dod_gate.block` to `gate.block`")
-        for k in ("gate", "stack", "rules"):
+        for k in ("gate", "stack", "rules", "unattended"):
             if k in data and not isinstance(data[k], dict):
                 raise ConfigInvalid(f"{path}: '{k}' must be a JSON object")
         org = data["organization"]
@@ -215,6 +225,7 @@ class Config:
             for i, t in enumerate(types):
                 if t.casefold() == story:
                     raise ConfigInvalid(f"{path}: rules.types[{i}]: a story type cannot carry rules (it is 'story_type')")
+        approvers = cls._validate_trust_keys(data, path)
         return cls(
             organization=data["organization"],
             project=data["project"],
@@ -233,7 +244,40 @@ class Config:
             mode=data.get("mode", "advisory"),
             strict=strict,
             rules=rules,
+            approvers=approvers,
+            approval=data.get("approval", "terminal"),
+            unattended=data.get("unattended"),
         )
+
+    @staticmethod
+    def _validate_trust_keys(data, path):
+        """`approvers`, `approval`, `unattended` (P4-7a). Errors name the key and the position, never a value. Returns the approvers:
+        lowercased, in order. A duplicate is rejected (not collapsed), as every duplicate id is in this kit."""
+        from .client import is_anonymous  # local: client -> config
+        approvers = data.get("approvers", [])
+        if not (isinstance(approvers, list) and len(approvers) <= MAX_APPROVERS):
+            raise ConfigInvalid(f"{path}: 'approvers' must be a list of at most {MAX_APPROVERS} identity ids")
+        out = []
+        for i, a in enumerate(approvers):
+            if not (isinstance(a, str) and GUID_RE.fullmatch(a)):
+                raise ConfigInvalid(f"{path}: approvers[{i}]: not an identity id (a GUID: 8-4-4-4-12 hex digits)")
+            if is_anonymous(a):
+                raise ConfigInvalid(f"{path}: approvers[{i}]: the anonymous identity cannot approve")
+            if a.lower() in out:
+                raise ConfigInvalid(f"{path}: approvers[{i}]: duplicate of an earlier entry")
+            out.append(a.lower())
+        if "approval" in data and data["approval"] not in APPROVAL_MODES:
+            raise ConfigInvalid(f"{path}: 'approval' must be \"terminal\" or \"comment\"")
+        unattended = data.get("unattended", {})
+        for n, k in enumerate(unattended, 1):
+            if k not in UNATTENDED_DEFAULTS:  # named by position: the key is PR-controlled text
+                raise ConfigInvalid(f"{path}: unattended entry #{n}: unknown key (valid: {', '.join(UNATTENDED_DEFAULTS)})")
+        hours = unattended.get("assume_after_hours")
+        if "assume_after_hours" in unattended and not (isinstance(hours, int) and not isinstance(hours, bool) and 1 <= hours <= 720):
+            raise ConfigInvalid(f"{path}: 'unattended.assume_after_hours' must be an integer from 1 to 720")
+        if "approval_requests" in unattended and not isinstance(unattended["approval_requests"], bool):
+            raise ConfigInvalid(f"{path}: 'unattended.approval_requests' must be true or false")
+        return out
 
     @classmethod
     def load_from_ref(cls, ref, repo="."):
@@ -283,3 +327,53 @@ class Config:
             "No ADO config found. Run `ado setup` to create ado.config.json here, "
             "or point $ADO_CONFIG at a config file."
         )
+
+
+Trust = collections.namedtuple("Trust", "approvers approval unattended")  # what `trusted` returns: nothing but the three trust keys
+_BAD_BASE = re.compile(r"[~^:\s\x00-\x1f\x7f]|@\{|\.\.|^-")  # a revision expression, a range or an option, not a plain ref name
+
+
+def _working_tree_has_trust_keys(repo):
+    """True when a config file this process would read from the working tree holds a trust key. Read the way `Config.load` finds it (a
+    symlink to a regular file is followed: the file is only searched for the three keys). A file that is over 1 MiB, unreadable, or
+    not a JSON object raises ConfigInvalid: when it cannot be read, nobody can say it holds none. A path that is no file is absent."""
+    paths = [Path(repo) / "ado.config.json"]
+    if os.environ.get("ADO_CONFIG"):
+        paths.insert(0, Path(os.environ["ADO_CONFIG"]))
+    for p in paths:
+        if not p.is_file():
+            continue
+        try:
+            with p.open("rb") as f:
+                raw = f.read(MAX_REF_CONFIG + 1)
+            data = json.loads(raw.decode("utf-8")) if len(raw) <= MAX_REF_CONFIG else None
+        except (OSError, ValueError, RecursionError):
+            data = None
+        if not isinstance(data, dict):
+            raise ConfigInvalid("the config file cannot be read as a JSON object of at most 1 MiB, so it cannot be checked for the approval keys")
+        if any(k in data for k in TRUST_KEYS):
+            return True
+    return False
+
+
+def trusted(repo=".", base=None):
+    """`Trust(approvers, approval, unattended)` that may be believed: the TARGET branch's, never the working tree's (the PR edits that).
+    `base` (CI: `--base`) or else `strict.default_base(repo)` (`origin/HEAD`). A base is read with `load_from_ref` (a target without a
+    config = the defaults; anything unreadable raises ConfigInvalid). A base that is not a plain ref name (a revision expression such as
+    `main@{1}` or `origin/main~1`, a range, whitespace, a leading `-`) is refused: it could pick an older target config. With NO base: the
+    defaults when the working-tree config sets none of the three keys (a fresh repository behaves as before), else ConfigInvalid, because
+    the keys could not be checked against anything. Residual: deleting `origin/HEAD`, or rewriting `refs/remotes/origin/<base>` locally,
+    changes what the local CLI trusts; CI fetches fresh."""
+    from . import strict  # local: strict -> gate -> questions -> auth -> secretstore -> config
+    ref = base or strict.default_base(str(repo))
+    if ref:
+        if not isinstance(ref, str) or _BAD_BASE.search(ref):
+            raise ConfigInvalid("the base is not a plain branch or ref name (no revision expressions, ranges, spaces or leading dash)")
+        cfg = Config.load_from_ref(ref, repo=str(repo))
+    elif _working_tree_has_trust_keys(repo):
+        raise ConfigInvalid("the config file sets approvers, approval or unattended, which are read only from the target branch, "
+                            "and there is none to read: set origin/HEAD or pass --base")
+    else:
+        cfg = None
+    cfg = cfg or Config("", "")  # no config at the target (or no base): the defaults
+    return Trust(list(cfg.approvers), cfg.approval, dict(cfg.unattended))
