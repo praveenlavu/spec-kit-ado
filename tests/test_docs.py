@@ -8,7 +8,7 @@ REQUIRED = [
     "README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "VERSIONING.md", "CHANGELOG.md",
     "LICENSE", "rules/hitl.md",
     "docs/configuration.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md",
-    "docs/stack-kits.md", "docs/catalog-submission.md", "docs/business-rules.md",
+    "docs/stack-kits.md", "docs/catalog-submission.md", "docs/business-rules.md", "docs/business-rules-reference.md",
 ]
 _LINK = re.compile(r"\]\(([^)\s]+)\)")
 _SKIP_DIRS = {".git", ".venv", ".pytest_cache", ".superpowers", "node_modules"}
@@ -26,6 +26,30 @@ def test_readme_lists_all_commands():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     missing = [n for n in names if n not in readme]
     assert len(names) == 13 and not missing, f"README is missing: {missing}"
+
+
+def _slug(heading):
+    """GitHub's anchor for a heading: lower case, punctuation (other than - and _) dropped, spaces to hyphens."""
+    return re.sub(r"[^a-z0-9 _-]", "", re.sub(r"[`*]", "", heading.strip().lower())).replace(" ", "-")
+
+
+def test_markdown_anchors_resolve():
+    """Every `](page.md#anchor)` and `](#anchor)` in the user docs names a heading that exists (a heading typo broke one in ci-azure-pipelines)."""
+    broken = []
+    for md in ROOT.rglob("*.md"):
+        rel = md.relative_to(ROOT)
+        if _SKIP_DIRS & set(rel.parts) or rel.parts[:2] == ("docs", "superpowers"):
+            continue
+        for target in _LINK.findall(md.read_text(encoding="utf-8")):
+            path, _, frag = target.partition("#")
+            if not frag or re.match(r"^[a-z][a-z0-9+.-]*:", target) or target[0] in "<{":
+                continue
+            dest = md if not path else md.parent / path
+            if dest.is_file() and dest.suffix == ".md":
+                heads = {_slug(h) for h in re.findall(r"^#{1,6} +(.+?)\s*$", dest.read_text(encoding="utf-8"), re.M)}
+                if frag not in heads:
+                    broken.append(f"{rel} -> {target}")
+    assert not broken, "broken anchors:\n" + "\n".join(broken)
 
 
 def test_relative_links_resolve():
@@ -772,7 +796,7 @@ def test_gate_open_decisions_documented():
     assert "`open_decisions` | present only when `Decisions_<id>.md` exists and has at least one `D<n>` line" in gate
     assert "The `- open decisions:` line is written only when the story has decisions in `Decisions_<id>.md`" in gate
     assert gate.split("### Gate — <YYYY-MM-DD>", 1)[1].count("- open decisions: <none | D ids>") == 1
-    assert "Valid names are exactly the seven below" in cfg and "`open_decisions` — the story's decisions file `<dod_path>/Decisions_<id>.md`" in cfg
+    assert "Valid names are exactly the eight below" in cfg and "`open_decisions` — the story's decisions file `<dod_path>/Decisions_<id>.md`" in cfg
     assert "**only when that file has at least one `D<n>` line**" in cfg
     for f in ("README.md", "docs/configuration.md"):
         assert "`commits_without_story`, `open_decisions`" in _flat(f), f
@@ -1784,35 +1808,126 @@ def test_toolkit_own_files_unchecked_and_specify_in_ci_documented():
 # ---- V3 piece 3 (P3-3): the PO's guide to business rules ----
 
 def test_business_rules_doc_pins():
+    """The PO guide (docs/business-rules.md): plain words, the template, the rules for writing, a problems table that says what to change."""
     from ado import rules
     text = _flat("docs/business-rules.md")
     for key in rules.ISSUES:
-        assert f"`{key}`" in text, key  # every problem key the parser can raise is explained
+        assert f"`{key}`" in text, key  # every problem key the parser can raise is explained, with what to change in ADO
     for word in ("Business rules", "Rule <n>:", "Never renumber", "`Status: retired`", "Only `approved` rules bind developers",
-                 "treated as `draft`", "`Owner:` is a role", "STATUS: APPROVED", "Status : Approved", "`€5 off` stays `€5 off`",
-                 "process enforcement, not a security boundary", '"rules": {"enabled": true}', "`Status quo applies` is ordinary text",
-                 "Put the section **last**", "A table of rules is **not** read", "is kept as typed", "is reported as `bad-rule-line`",
-                 "do not change the fingerprint"):
+                 "It counts as `draft`", "`Owner:` is a role", "`STATUS: APPROVED` and `Status : Approved` both work",
+                 "process enforcement, not a security boundary", '"rules": {"enabled": true}', "Put the section **last**", "A table of rules is **not** read",
+                 "What to change in ADO", "`BR-1201-1`", "[configuration](configuration.md)", "[the developer and trust reference](business-rules-reference.md)",
+                 "## Setting it up for your team", "Make the `gate` job a required check, and optionally the strict re-run job once you have run it", "`ado rules <story id> --confirm`"):
+        assert word in text, word
+    assert "2,000 characters" in text and "64 KiB" in text and "100 rules" in text and "1 MiB" in text
+    # readable by a non-technical PO: no developer words, no hashes, headers or markers, and the page is short
+    for word in ("fingerprint", "hash", "header", "marker", "posted:", "validated", "ledger", "SHA", "dod_path", "`### ", "Rules_<"):
+        assert word not in text, word
+    assert len((ROOT / "docs/business-rules.md").read_text().splitlines()) < 140
+    # every table row of the problems tables has three cells and names a change
+    rows = [ln for ln in (ROOT / "docs/business-rules.md").read_text().splitlines() if ln.startswith("| `") and ln.split("`")[1] in rules.ISSUES]
+    assert len(rows) == len(rules.ISSUES) and all(ln.count("|") == 4 for ln in rows)
+
+
+def test_business_rules_reference_pins():
+    """The developer reference keeps what the PO page dropped."""
+    from ado import rules
+    text = _flat("docs/business-rules-reference.md")
+    for key in rules.ISSUES:
+        assert f"`{key}`" in text, key
+    for word in ("Business rules", "Rule <n>:", "STATUS: APPROVED", "Status : Approved", "`€5 off` stays `€5 off`", "process enforcement, not a security boundary",
+                 '"rules": {"enabled": true}', "`Status quo applies` is ordinary text", "is kept as typed", "is reported as `bad-rule-line`", "do not change the fingerprint",
+                 "[business-rules.md](business-rules.md)"):
         assert word in text, word
     for b in rules.BULLETS:
         assert f"`{b}`" in text, b  # the tolerated bullet set is documented in full
     assert "`BR-<work item id>-<your number>`" in text and "[configuration](configuration.md)" in text
-    assert "2,000 characters" in text and "64 KiB" in text and "100 rules" in text and "1 MiB" in text
+    assert "## Team quick-start" not in text  # the quick-start lives in the PO guide
+
+
+def test_po_guide_split_links_and_anchors():
+    """P3-13d: the old page was split; no link, anchor or pin still points developer material at the PO page."""
+    import re as _re
+    po, ref = (ROOT / "docs/business-rules.md").read_text(), (ROOT / "docs/business-rules-reference.md").read_text()
+    anchors = {_re.sub(r"[^a-z0-9 -]", "", h.lower()).replace(" ", "-") for h in _re.findall(r"^#{1,6} (.+)$", ref, _re.M)}
+    po_anchors = {_re.sub(r"[^a-z0-9 -]", "", h.lower()).replace(" ", "-") for h in _re.findall(r"^#{1,6} (.+)$", po, _re.M)}
+    for f in ("README.md", "AGENTS.md", "CHANGELOG.md", "docs/configuration.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md",
+              "workflows/ado-lifecycle/README.md", "docs/business-rules.md", "docs/business-rules-reference.md", "rules/hitl.md"):
+        for page, frag in _re.findall(r"business-rules(-reference)?\.md#([a-z0-9-]+)", (ROOT / f).read_text()):
+            assert frag in (anchors if page else po_anchors), (f, page, frag)  # every anchor exists on the page it names
+    for f in ("README.md", "AGENTS.md", "docs/configuration.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        assert "business-rules.md#" not in (ROOT / f).read_text().replace("business-rules-reference.md#", ""), f
+    assert "[business rules guide](docs/business-rules.md)" in _flat("README.md") and "docs/business-rules-reference.md#known-limits" in _flat("README.md")
+    assert "the PO's own guide is [docs/business-rules.md](docs/business-rules.md)" in _flat("AGENTS.md")
+    assert "docs/business-rules-reference.md" in _flat("CHANGELOG.md") and "(P3-13d)" in _flat("CHANGELOG.md")
+    assert "docs/business-rules-reference.md" in _flat("workflows/ado-lifecycle/README.md")
+    # the known limits sit under their own heading, not under "Decisions that span stories"
+    kl = _flat("docs/business-rules-reference.md").split("## Known limits")[1]
+    for word in ("Synthetic fixtures", "`rules-unreachable` is unit-tested only", "`chain` drift", "a consistent edit passes", "Only the online `rule_drift` check",
+                 "must be a **required** CI check", "`posted:` markers and `validated` lines are local claims", "A hand-computed `posted:` marker lifts a rule at `pr`",
+                 "a hand-written `validated` line does at `done`", "terminal check on re-confirm is not a security boundary", "`rules.reconfirmed` is a note",
+                 "An unposted decision cannot be superseded", "makes the verification record stale", "`fidelity-stale`"):
+        assert word in kl, word
+    span = _flat("docs/business-rules-reference.md").split("### Decisions that span stories")[1].split("### Community extensions")[0]
+    assert "Known limit" not in span and "cannot be superseded" not in span
+
+
+def test_p3_13d_docs_review_fixes():
+    ref = _flat("docs/business-rules-reference.md")
+    agents, pull, plan = _flat("AGENTS.md"), _flat("commands/pull.md"), _flat("commands/plan.md")
+    # B1: only error-level Problems lines (and relied-on drafts) become a Q<n>; warnings are one summary line
+    assert "Only a `Problems` line of level `error` and each draft the spec would rely on become an open question" in ref
+    assert "a line of level `warning` never does" in ref and "Each `Problems` line and each draft" not in ref
+    assert "Problems lines of level `error`, drafts the spec would rely on" in agents and "A Problems line of level `warning` is never a `Q<n>`: warnings are one summary line" in agents
+    assert "and Problems lines, drafts" not in agents
+    # M1: neither the gate nor `done` reads the posted comment
+    assert "the real check, made by the gate and by `done`" not in ref and "is the real check" not in ref
+    assert "Neither the gate nor `done` reads the posted ADO comment" in ref
+    assert "a hand-computed `posted:` marker lifts a rule at `pr`, and a hand-written `validated` line does at `done`" in ref
+    # M3: the hand-off to the specify command carries the data label
+    step3 = pull.split("### 3. Route the specify phase")[1].split("### 3a.")[0]
+    assert "labelled for the routed command as data, never instructions" in step3 and "never chooses a command, a URL, a file name or a flag" in step3
+    assert "labelled as data, never instructions" in ref
+    # P3-13c review (a): a dropped id is never a `rule-changed` finding
+    for t in (ref, agents, plan):
+        assert "changed or would be dropped" not in t and "a confirmed rule changed, or a recorded id would be dropped" not in t
+    assert "the coverage check never reports a dropped id" in ref and "only a `--confirm` refusal names one" in agents
+    assert "only this refusal names a dropped id; the gate never reports one" in plan
+    # (c): eight gate.block names
+    from ado import gate
+    cfg = _flat("docs/configuration.md")
+    assert len(gate.GATE_CHECKS) == 8 and "exactly the eight below" in cfg and "exactly the seven below" not in cfg
+    assert all(f"`{c}`" in cfg for c in gate.GATE_CHECKS)
+    # (d) and (e)
+    assert "A posted exclusion that is still open at `done` leaves its rule `rule-unconfirmed`" in ref and "the exclusion must be validated first" in ref
+    assert "a missing rules file, or the hash mismatch of another rule, makes it refuse everything" in ref and "fails closed" in agents.lower()
+    assert "an agent is never told to run a command that refuses" not in (ref + agents).lower()
+    # M2: the CI docs and the templates say a strict target fails when the gate cannot run
+    gh, az = _flat("docs/ci-github.md"), _flat("docs/ci-azure-pipelines.md")
+    assert "Under a strict target branch that is an error, not a warning" in gh and "fails the job" in gh and "rule drift was not checked" in gh
+    assert "Under a strict target branch it does" in az and "fails the build" in az and "rule drift was not checked" in az
+    assert "An advisory target keeps today's behaviour" in gh and "under an advisory target it never fails the build" in az
+    assert "When the gate cannot run (CI)" in ref and "must not read as a pass" in ref
+    assert "strict target" in (ROOT / ".github/workflows/ado-gate.yml").read_text() and "cannot run" in (ROOT / "pipelines/ado-gate.yml").read_text()
+    # minor: the cleanup candidate is recorded
+    assert "v0.3.x cleanup candidates (P3-13d" in _flat("CHANGELOG.md") and "shared row iterator" in _flat("CHANGELOG.md")
 
 
 def test_no_silent_rules_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("`unparsed-rule-text`", "`Rule one: ...`", "`R1: ...`", "`BR-1: ...`", "look-alike letters", "`after BR-<id>-<n>`", "`before the first rule`",
                  "All the mistakes of one pull are listed together", "under `## Notes` of the rules file", "`notes` of the `ado rules` output",
                  "`section (after BR-1201-2)`", "`Business rule 1: ...`", "`Rule No. 2:`, `Rules 2:`, `R2:`, `BR-2:` or `Business rule 2:`", "reported `after` that rule", "`after` for a problem of the whole section"):
         assert word in text, word
+    po = _flat("docs/business-rules.md")
+    assert "`unparsed-rule-text`" in po and "`Rule one:`" in po and "`before the first rule`" in po and "`after BR-1201-1`" in po
     pull = _flat("commands/pull.md")
     assert "`unparsed-rule-text`" in pull and "`(after BR-<id>-<n>)` or `(before the first rule)`" in pull and "A `## Notes` section is information only" in pull
     assert "text ... is ignored" not in text and "Text between the `Business rules` line and `Rule 1:` is ignored" not in text
 
 
 def test_rules_file_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("## The rules file", "`Rules_<work item id>.md`", "rules-format: 2", "### BR-1201-1 · approved · 3f2a9c1b", "8-hex fingerprint",
                  "never your text", "no \"first one wins\"", "makes the whole file `invalid`", "at most 1 MiB in UTF-8, not a symlink",
                  "inside `dod_path` and inside the repository", "process enforcement, not a security boundary", "bumps `rules-format`",
@@ -1822,7 +1937,7 @@ def test_rules_file_doc_pins():
 
 
 def test_rules_pull_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("## Pulling rules", "`ado rules <story id>`", "up to **3 links**", "`bad-parent-link`", "Every request is a GET",
                  "All of them finish before any file is written", "never rule text or a title", "the `Last pulled` date is kept",
                  "process enforcement, not a security boundary", "`decisions` (for an ancestor", "works whatever `rules.enabled` says", "run the command again", "`rules-problem`", "no leading zero", "`ado decisions <feature id> --post`"):
@@ -1835,13 +1950,13 @@ def test_rules_pull_doc_pins():
 
 
 def test_ledger_header_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("## Ledger header", "- **Rules from:** 1201, 1200", "recomputed on every `--refresh`", "the ledger is not touched", "no extra request",
                  "`--refresh` keeps the line exactly as it is, **also when rules are off**", "refuse (exit 2)", "Read only from the header block",
                  "above the first `## ` heading that is outside a code fence or comment", "no leading zero", "at most 3", "`valid: false`",
                  "A second line", "CRLF", "process enforcement"):
         assert word in text, word
-    assert "Rules from:` (see [business rules](docs/business-rules.md#ledger-header))" in _flat("README.md")
+    assert "Rules from:` (see [business rules](docs/business-rules-reference.md#ledger-header))" in _flat("README.md")
     assert "walk the ancestors and write the ledger header line `Rules from:`" in _flat("docs/configuration.md")
     assert "Ledger header lines `Rules from:` and `Rules reviewed:` (P3-5)" in _flat("CHANGELOG.md")
     assert "Ledger header hardening (P3-5b)" in _flat("CHANGELOG.md")
@@ -1850,7 +1965,7 @@ def test_ledger_header_doc_pins():
 
 
 def test_tags_and_exclusions_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("## Tags and exclusions", "`| AC-2 | gift cards earn nothing [BR-1201-3] | ... |`", "criterion cell", "`unknown`", "`xBR-1201-1`",
                  "- [ ] D3: out of scope: BR-1201-1, BR-1200-1 → _(open)_ · kind: decision", "`bad_exclusions`", "as it reads now",
                  "open or validated for a pull request (`pr`), validated only at `done`", "A rejected exclusion excludes nothing",
@@ -1860,7 +1975,7 @@ def test_tags_and_exclusions_doc_pins():
 
 
 def test_confirming_rules_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("## Confirming rules", "`ado rules <story id> --confirm`", "local only (no token, no request)", "combines with no other flag",
                  "- **Rules reviewed:** BR-1200-1@0c77e2d4, BR-1201-1@3f2a9c1b", "The heading hash", "does not match its heading hash",
                  "New ids need no terminal", "Re-confirming needs a human", "stdin and stdout are both terminals", "`approval code: <12 hex>`",
@@ -1873,13 +1988,13 @@ def test_confirming_rules_doc_pins():
     for word in ("`ado rules <id> --confirm`", "Re-confirming is human only", "unless stdin and stdout are both terminals", "never the rule text",
                  "`approval code: <12 hex>`", "not a security boundary", "can read and type the code", "Never run a re-confirmation yourself"):
         assert word in hitl, word
-    assert "`rules <id> --confirm` is local only" in _flat("README.md") and "docs/business-rules.md#confirming-rules" in _flat("README.md")
-    assert _flat("README.md").count("See [business rules](docs/business-rules.md#pulling-rules) and [confirming rules]") == 1
+    assert "`rules <id> --confirm` is local only" in _flat("README.md") and "docs/business-rules-reference.md#confirming-rules" in _flat("README.md")
+    assert _flat("README.md").count("See [business rules](docs/business-rules-reference.md#pulling-rules) and [confirming rules]") == 1
     assert "Never run it for the human" in _flat("AGENTS.md") and "`ado rules <story id> --confirm` (P3-7)" in _flat("CHANGELOG.md")
 
 
 def test_gate_rule_coverage_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("## The gate check", "`rule_coverage`", "`--offline` changes nothing", "no rules file is read", "In CI with `--base REF` the config (rules included) comes from the target branch",
                  "still judged with rules enabled", "it is part of the floor", "blocks only when you list it", "process enforcement, not a security boundary",
                  "A row with an absent test never covers, even when another row is mapped", "every one of its rows has a found test", "an extra row (`AC-99`, `AC-0`)",
@@ -1900,7 +2015,7 @@ def test_gate_rule_coverage_doc_pins():
 
 
 def test_gate_rule_drift_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("## Drift", "`rule_drift` check", "GET requests only", "starts only at the story id given on the command line", "never fetched",
                  "Both CI jobs must be required checks", "(approved in ADO now, minus the rules a counted exclusion lifts", "`chain`", "`problems`",
                  "differs from the live rule line for line", "a rule line, a heading status or a hash edited in the file", "An edit to a draft or retired rule", "CRLF",
@@ -1918,7 +2033,7 @@ def test_gate_rule_drift_doc_pins():
 
 
 def test_strict_rules_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("## Strict mode", "`rule-uncovered`", "`rule-unknown`", "`rule-unconfirmed`", "`rule-changed`", "`rules-problem`", "`rules-missing`", "`rules-format`", "`rules-header`",
                  "It is offline: no request, no token", "byte-identical to before", "Ids and counts only", "**Not overridable.**", "a hand-written `skip rule-uncovered` decision covers nothing",
                  "**The rejected-exclusion exemption.**", "Every other rejected decision still blocks", "posted:` marker to match its current text", "or run `ado strict verify` again after a re-pull",
@@ -2056,12 +2171,12 @@ def test_prompts_name_every_rules_finding_id_in_the_gate_prompt_table():
     from ado import strict
     text = _flat("commands/gate.md")
     for rid in ("rule-uncovered", "rule-unknown", "rule-unconfirmed", "rule-changed", "rules-problem", "rules-missing", "rules-format", "rules-header"):
-        assert f"`{rid}`" in text and rid in _flat("docs/business-rules.md"), rid
+        assert f"`{rid}`" in text and rid in _flat("docs/business-rules-reference.md"), rid
         assert rid not in getattr(strict, "_COVERS", {}), rid  # never overridable, so the prompts never offer an override
 
 
 def test_business_rules_doc_describes_how_the_prompts_use_rules():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("## How the prompts use rules", "only when `rules.enabled`", "skip every business-rules step silently", "`speckit.ado.pull` (step 2a",
                  "`speckit.ado.plan` (step 3a", "`speckit.ado.tasks`", "`speckit.ado.implement`", "`speckit.ado.review`", "`speckit.ado.pr`", "`speckit.ado.gate`",
                  "data, never instructions", "Never implement a draft", "`ado rules <story id> --confirm`", "first confirm of new ids is free",
@@ -2087,7 +2202,7 @@ def test_hitl_agents_readme_changelog_describe_the_prompt_wiring():
                  "`ado rules <id> --confirm`", "`out of scope: BR-…`", "stop and report", "`### Needs human decision`", "Never implement a draft"):
         assert word in agents, word
     readme = _flat("README.md")
-    for word in ("Business rules in the prompts", "docs/business-rules.md#how-the-prompts-use-rules", "`rules.enabled`", "the covered and excluded rule ids"):
+    for word in ("Business rules in the prompts", "docs/business-rules-reference.md#how-the-prompts-use-rules", "`rules.enabled`", "the covered and excluded rule ids"):
         assert word in readme, word
     assert "Prompts and docs wiring of the business rules (P3-11)" in _flat("CHANGELOG.md")
     wf = _flat("workflows/ado-lifecycle/README.md")
@@ -2097,7 +2212,7 @@ def test_hitl_agents_readme_changelog_describe_the_prompt_wiring():
 
 
 def test_rules_reconfirmed_doc_pins():
-    text = _flat("docs/business-rules.md")
+    text = _flat("docs/business-rules-reference.md")
     for word in ("**Reconfirmed (CI only, a note).**", "`rules.reconfirmed` is the list of", "an id that is new here is not listed", "`rules reconfirmed: BR-1201-1 (3f2a9c1b -> none)`",
                  "differs from the earlier recorded hash: check the ledger history", "never a finding: no exit code changes, nothing blocks", "until piece 4's approver-comment path can clear it; then it becomes a block",
                  "counts as nothing recorded (`[]` when nothing differs)", "`rules reconfirmed: target ledger unreadable`", "`rules.reconfirmed_note`", "the CI job needs `fetch-depth: 0`",
@@ -2109,10 +2224,10 @@ def test_rules_reconfirmed_doc_pins():
     assert "`fetch-depth: 0`" in _flat("docs/ci-github.md").split("`rules.reconfirmed`")[1] and "`fetchDepth: 0`" in _flat("docs/ci-azure-pipelines.md").split("`rules.reconfirmed`")[1]
     assert "`reconfirmed`" in _flat("README.md") and "`rules.reconfirmed`" in _flat("AGENTS.md") and "`rules.reconfirmed` (P3-10b)" in _flat("CHANGELOG.md")
     limit = "The branch history belongs to the PR author: a squash or rebase before pushing erases this trace."
-    assert _flat("docs/business-rules.md").count(limit) == 2 and "the branch history belongs to the PR author, a squash or rebase before pushing erases this trace" in _flat("CHANGELOG.md")
-    assert _flat("docs/business-rules.md").split("**`Rules reviewed:`**")[1].split("- **Read only from the header block.**")[0].count(limit) == 1
-    assert "`git log --full-history --no-merges <base>..HEAD -- <ledger>`" in _flat("docs/business-rules.md") and "a merge commit is nobody's earlier record" in _flat("docs/business-rules.md")
-    assert "`rules reconfirmed: a ledger version in the branch history is unreadable`" in _flat("docs/business-rules.md") and "when the head records no id" in _flat("docs/business-rules.md")
+    assert _flat("docs/business-rules-reference.md").count(limit) == 2 and "the branch history belongs to the PR author, a squash or rebase before pushing erases this trace" in _flat("CHANGELOG.md")
+    assert _flat("docs/business-rules-reference.md").split("**`Rules reviewed:`**")[1].split("- **Read only from the header block.**")[0].count(limit) == 1
+    assert "`git log --full-history --no-merges <base>..HEAD -- <ledger>`" in _flat("docs/business-rules-reference.md") and "a merge commit is nobody's earlier record" in _flat("docs/business-rules-reference.md")
+    assert "`rules reconfirmed: a ledger version in the branch history is unreadable`" in _flat("docs/business-rules-reference.md") and "when the head records no id" in _flat("docs/business-rules-reference.md")
     assert "(P3-13a)" in _flat("CHANGELOG.md") and "`--force` refuses" in _flat("README.md") and "`ado dod <id> --force` refuses" in _flat("rules/hitl.md")
     assert "the diff shows it)" not in _flat("rules/hitl.md") and "only visible trace" not in text
 
@@ -2129,12 +2244,12 @@ def test_p3_12b_live_findings_pins():
     assert "one `Q<n>` per in-scope rule, raised here and only here, whatever other `Q<n>` already touch the same rule's wording or status" in _block("commands/plan.md", "### 3a. Business rules")
     new = "differs from the earlier recorded hash: check the ledger history"
     assert rules.RECONFIRM_NOTE == new
-    for f in ("docs/business-rules.md", "README.md"):
+    for f in ("docs/business-rules-reference.md", "README.md"):
         assert new in _flat(f), f
     assert "differs from the earlier recorded hash" in _flat("CHANGELOG.md")
-    for f in ("docs/business-rules.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md", "commands/gate.md", "CHANGELOG.md"):
+    for f in ("docs/business-rules-reference.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md", "commands/gate.md", "CHANGELOG.md"):
         assert "`chain`" in _flat(f), f
-    br = _flat("docs/business-rules.md")
+    br = _flat("docs/business-rules-reference.md")
     assert "ADO removes the parent link from the child when the parent is deleted" in br and "not `rules-unreachable`" in br and "still linked but cannot be read" in br
     for f in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
         assert "an Epic or Feature deleted in ADO loses its link, so the gate reports `chain` drift (strict blocks)" in _flat(f), f
@@ -2142,7 +2257,7 @@ def test_p3_12b_live_findings_pins():
     readme = _flat("README.md")
     assert "`stack-check` step (`ado stack show --check`) also needs an approved stack profile" in readme and "matches `strict.test_command`" in readme
     assert "the run stops at `stack-check` (exit 2)" in readme and "docs/stack-kits.md" in readme.split("`stack-check` step")[1][:400]
-    for f in ("README.md", "docs/business-rules.md"):
+    for f in ("README.md", "docs/business-rules-reference.md"):
         assert "A decision that was never posted cannot be superseded (`post D<n> first`): the PO has not seen it, so it must be posted before it can be replaced" in _flat(f), f
     assert "post the stale line first and then supersede it, or ask the human" in _flat("AGENTS.md")
 
@@ -2154,7 +2269,7 @@ def test_unconfirmed_split_doc_pins():
     for f in ("README.md", "commands/gate.md"):
         assert list_ in _flat(f), f
     assert "The eight strict ids (" + list_ + ")" in _flat("commands/gate.md")
-    assert "one of the eight ids" in _flat("docs/business-rules.md") and "one of the seven ids" not in _flat("docs/business-rules.md")
+    assert "one of the eight ids" in _flat("docs/business-rules-reference.md") and "one of the seven ids" not in _flat("docs/business-rules-reference.md")
     assert "seven strict ids" not in _flat("commands/gate.md")
     assert "(now eight business-rules finding ids)" in _flat("CHANGELOG.md") and "Not confirmed yet is not changed (P3-13c)" in _flat("CHANGELOG.md")
     for f, words in {
@@ -2162,7 +2277,7 @@ def test_unconfirmed_split_doc_pins():
             "commands/gate.md": ("`rules.unconfirmed`", "run `ado rules <id> --confirm` yourself (local, no terminal needed)", "**STOP**", "`Needs human decision`"),
             "commands/pr.md": ("`rule-unconfirmed`: read the rule, then run `ado rules <id> --confirm` yourself", "`rule-changed`: **STOP**", "`Needs human decision`"),
             "commands/implement.md": ("`rule-unconfirmed` finding", "run `ado rules <id> --confirm` yourself (no terminal needed)", "`rule-changed`", "`Needs human decision`"),
-            "docs/business-rules.md": ("`rule-unconfirmed`", "records every new (unrecorded) id in one atomic write", "names the two lists", "`unconfirmed`: an in-scope rule with no recorded hash",
+            "docs/business-rules-reference.md": ("`rule-unconfirmed`", "records every new (unrecorded) id in one atomic write", "names the two lists", "`unconfirmed`: an in-scope rule with no recorded hash",
                                        '"unknown": [ids and "?"], "unconfirmed": [ids], "changed": [ids]', "the two lists never share an id"),
             "rules/hitl.md": ("`rule-unconfirmed`", "first records every new id in one atomic write"),
             "AGENTS.md": ("`rule-unconfirmed` (no hash recorded yet: run `ado rules <id> --confirm` yourself, no terminal needed)", "exits 2 naming the recorded ids"),
@@ -2172,7 +2287,7 @@ def test_unconfirmed_split_doc_pins():
         for word in words:
             assert word in _flat(f), (f, word)
     # no stale meaning: `rule-changed` is never defined as "unconfirmed" any more
-    for f in ("README.md", "AGENTS.md", "commands/gate.md", "commands/plan.md", "docs/business-rules.md", "rules/hitl.md", "docs/configuration.md"):
+    for f in ("README.md", "AGENTS.md", "commands/gate.md", "commands/plan.md", "docs/business-rules-reference.md", "rules/hitl.md", "docs/configuration.md"):
         t = _flat(f)
         assert "`rule-changed`: the rule is unconfirmed" not in t and "a rule is unconfirmed, differs" not in t and "rule is unconfirmed or changed" not in t, f
     assert "`rule-unconfirmed`, `rule-changed`" in _flat("docs/configuration.md")

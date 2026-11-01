@@ -423,7 +423,10 @@ def _rules_line(rl):
              (unknown, lambda v: "cited but in no rules file: " + _ids(v)),
              (["?"] * (len(rl["unknown"]) - len(unknown)), lambda v: f"{len(v)} malformed `BR-` tag(s) in section 3"),
              (rl["unconfirmed"], lambda v: "not confirmed yet (read the rule, then run `ado rules <story id> --confirm` yourself, no terminal needed): " + _ids(v)),
-             (rl["changed"], lambda v: "changed since confirmed, or its text no longer matches its hash (a human re-confirms with `ado rules <story id> --confirm` in their own terminal after reading the change): " + _ids(v)),
+             (rl["changed"], lambda v: ("cannot be judged while the `Rules reviewed:` line is malformed (fix it by hand; then a human re-confirms with `ado rules <story id> --confirm` in their own terminal): "
+                                        if "rules-reviewed" in rl["header"] else
+                                        "changed since confirmed, or its text no longer matches its hash (re-pull with `ado rules <story id>` if the file was edited by hand; "
+                                        "a human re-confirms with `ado rules <story id> --confirm` in their own terminal after reading the change): ") + _ids(v)),
              (rl["problems"], lambda v: "error problem(s) in a rules file: " + _ids(v)),
              (rl["missing"], lambda v: "no usable rules file for work item " + _ids(v) + " (`ado rules <story id>`)"),
              (rl["format"], lambda v: "a rules file in another format for work item " + _ids(v) + " (re-pull with `ado rules <story id>`)"),

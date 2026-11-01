@@ -1,6 +1,7 @@
 # ADO gate (step template) for Azure Repos PR validation builds. Posts the result on the PR.
 # Advisory: the step fails ONLY when `ado gate` exits 1 and gate.json says blocking: true, or `ado strict mode` / the story-id step finds an invalid ado.config.json (exit 3).
-# Strict (the target branch's ado.config.json says mode: strict): the step also fails when no story id can be read from the branch, and runs
+# Strict (the target branch's ado.config.json says mode: strict): the step also fails when no story id can be read from the branch, when `ado gate` itself
+# cannot run (code 2, or code 1 without blocking: true: rule_drift is checked only by the gate), and runs
 # `ado strict check <id> --phase pr` after the gate (its rule ids go into the PR thread; the check runs without the token).
 #   - template: pipelines/ado-gate.yml@spec-kit-ado
 # The story id comes from the source branch name by the `ado branch --id-from` rule
@@ -99,9 +100,15 @@ steps:
         echo "##vso[task.logissue type=error]ADO gate FAILED: strict check failed - rule ids: ${rules:-none reported}"
         exit 1
       fi
-      [ "$code" -eq 0 ] || { [ "$code" -eq 1 ] && python3 -I -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1]))["blocking"] is True else 1)' "$AGENT_TEMPDIRECTORY/gate.json" 2>/dev/null; } || echo "##vso[task.logissue type=warning]spec-kit-ado gate could not run (see the PR comment and job log)"
       # Fail ONLY when ado gate exits 1 AND gate.json says blocking: true; anything else is advisory.
       if [ "$code" -eq 1 ] && python3 -I -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1]))["blocking"] is True else 1)' "$AGENT_TEMPDIRECTORY/gate.json" 2>/dev/null; then exit 1; fi
+      # Strict target: a gate that could not run (code 2, or code 1 without blocking: true) fails the build. rule_drift runs only in this gate,
+      # so a gate that did not run must not read as a pass. Advisory targets keep the warning below.
+      if [ "$mode" = strict ] && [ "$code" -ne 0 ]; then
+        echo "##vso[task.logissue type=error]ADO gate FAILED: strict mode - ado gate exit $code, the gate could not run, so rule drift was not checked (see the PR comment and job log)"
+        exit 1
+      fi
+      [ "$code" -eq 0 ] || { [ "$code" -eq 1 ] && python3 -I -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1]))["blocking"] is True else 1)' "$AGENT_TEMPDIRECTORY/gate.json" 2>/dev/null; } || echo "##vso[task.logissue type=warning]spec-kit-ado gate could not run (see the PR comment and job log)"
     displayName: Run gate and post summary
     workingDirectory: $(Agent.BuildDirectory)/${{ parameters.repoPath }}
     condition: eq(variables['Build.Reason'], 'PullRequest')

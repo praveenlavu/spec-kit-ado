@@ -5,6 +5,7 @@ name: ADO gate (reusable)
 # Blocks the PR when `ado gate` exits 1 with blocking findings, or exits 3 (invalid ado.config.json); otherwise advisory.
 # Strict (the target branch's ado.config.json says mode: strict, read by `ado strict mode`): a PR with no AB# reference fails instead of skipping the gate,
 # `ado strict check --phase pr` runs after the gate (rule ids only in the comment) and fails the job; a mode that cannot be determined fails too.
+# A strict target also fails the job when the gate itself cannot run (code 2, or code 1 without blocking: true): rule_drift is checked only by the gate.
 on:
   workflow_call:
     inputs:
@@ -142,9 +143,12 @@ jobs:
           else gh pr comment "$PR_NUM" --body-file "$RUNNER_TEMP/comment.md" || echo "::warning::Could not post PR comment."; fi
           # An invalid config is explicit misconfiguration: fail closed (a missing config/token stays advisory, exit 2).
           if [ "$code" -eq 3 ]; then echo "::error::spec-kit-ado: ado.config.json is invalid (see the PR comment and job log)"; exit 3; fi
-          [ "$code" -eq 0 ] || { [ "$code" -eq 1 ] && python3 -I -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1]))["blocking"] is True else 1)' "$RUNNER_TEMP/gate.json" 2>/dev/null; } || echo "::warning::spec-kit-ado gate could not run (see the PR comment and job log)"
           # Fail ONLY when ado gate exits 1 AND gate.json says blocking: true; anything else is advisory.
           if [ "$code" -eq 1 ] && python3 -I -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1]))["blocking"] is True else 1)' "$RUNNER_TEMP/gate.json" 2>/dev/null; then exit 1; fi
+          # Strict target: a gate that could not run (code 2, or code 1 without blocking: true) fails the job. rule_drift runs only in this gate,
+          # so a gate that did not run must not read as a pass. Advisory targets keep the warning below.
+          if [ "$MODE" = strict ] && [ "$code" -ne 0 ]; then echo "::error::spec-kit-ado strict mode: ado gate exit $code - the gate could not run, so rule drift was not checked (see the PR comment and job log)"; exit 1; fi
+          [ "$code" -eq 0 ] || { [ "$code" -eq 1 ] && python3 -I -c 'import json,sys;sys.exit(0 if json.load(open(sys.argv[1]))["blocking"] is True else 1)' "$RUNNER_TEMP/gate.json" 2>/dev/null; } || echo "::warning::spec-kit-ado gate could not run (see the PR comment and job log)"
       - name: Enforce strict check
         # Last, so the comment above is posted whatever the verdict: a strict check that failed or never finished fails the job.
         if: steps.story.outputs.id != '' && steps.mode.outputs.mode == 'strict'

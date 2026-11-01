@@ -224,7 +224,7 @@ def test_malformed_prefix_forms_are_bad_exclusions():
 def test_doc_example_marker_is_the_real_hash():
     import re
     from pathlib import Path
-    doc = (Path(__file__).resolve().parent.parent / "docs" / "business-rules.md").read_text(encoding="utf-8")
+    doc = (Path(__file__).resolve().parent.parent / "docs" / "business-rules-reference.md").read_text(encoding="utf-8")
     m = re.search(r"- \[ \] (D3): (out of scope: [^→]+?) → _\(open\)_ · kind: decision · why: [^·]+ · posted: 5512:([0-9a-f]{8})", doc)
     d = D(m.group(2), n=3)
     assert m.group(3) == decisions.marker_hash(d) and rules.exclusion_ids(d) == ["BR-1201-1", "BR-1200-1"]

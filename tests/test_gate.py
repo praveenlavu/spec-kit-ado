@@ -1061,6 +1061,18 @@ def test_a_malformed_record_makes_nothing_free_to_confirm():
     assert c["header"] == ["rules-reviewed"] and c["unconfirmed"] == [] and c["changed"] == ["BR-1201-1", "BR-1201-2"]
 
 
+def test_changed_summary_words_follow_the_cause():
+    """P3-13d: a hash mismatch names the re-pull; a malformed `Rules reviewed:` line is not 'changed since confirmed' (ids only in both)."""
+    def line(led):
+        return next(x for x in render_summary(_rg(led, block=["rule_coverage"])).splitlines() if x.startswith("- Business rules:"))
+    mismatch = line(_gl(*ROWS, reviewed=f"BR-1201-1@deadbeef, BR-1201-2@{H['BR-1201-2']}"))
+    assert "changed since confirmed" in mismatch and "re-pull with `ado rules <story id>` if the file was edited by hand" in mismatch and "`BR-1201-1`" in mismatch
+    assert "malformed" not in mismatch and "BR-1201-2" not in mismatch
+    bad = line(_gl(*ROWS, reviewed=ALL).replace("@" + H["BR-1201-1"], "@XYZ"))
+    assert "changed since confirmed" not in bad and "cannot be judged while the `Rules reviewed:` line is malformed" in bad
+    assert "`BR-1201-1`" in bad and "`BR-1201-2`" in bad and "XYZ" not in bad
+
+
 def test_an_excluded_or_draft_rule_without_a_record_is_neither_list():
     ex = decisions.render_file(1001) + _excl("BR-1201-2") + "\n"
     c = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}"), decisions_md=ex)

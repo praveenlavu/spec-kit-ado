@@ -68,7 +68,7 @@ answers in the story's comment thread, and a human records each verdict in their
 In strict mode `ado done` refuses while any is open; if nothing was posted just approve. Approve it once they are all recorded; the story closes after merge.
 
 **Business rules.** With `rules.enabled` in `ado.config.json` the same steps run business rules (see
-[business rules](https://github.com/praveenlavu/spec-kit-ado/blob/main/docs/business-rules.md)): no step was added, no input and no shell line changed,
+[business rules](https://github.com/praveenlavu/spec-kit-ado/blob/main/docs/business-rules-reference.md)): no step was added, no input and no shell line changed,
 and with `rules` absent or `enabled: false` the run is exactly what it was. The prompts do the work: `pull` pulls the Epic/Feature rules
 (`ado rules`, GET only) before specify and `ado dod` writes `Rules from:`; `plan` tags the AC rows, raises a question for a rule no AC reflects and
 records the first `ado rules <id> --confirm`; the exclusions it records after a PO answer are posted by the existing `decisions-loop`, behind

@@ -146,8 +146,9 @@ def test_ado_gate_comment_comes_from_cli_summary():
     assert "ADO_TOKEN" not in run and "${msg" not in run
     assert "--edit-last" not in run  # it can overwrite another workflow's comment
     assert "could not run (see job log)" in run
-    fail = [ln for ln in run.splitlines() if "exit 1" in ln]
-    assert len(fail) == 1 and '"$code" -eq 1' in fail[0] and '["blocking"] is True' in fail[0]
+    blocking, strict = [ln for ln in run.splitlines() if "exit 1" in ln]  # P3-13d: the blocking line first (its verdict is not 'could not run'), then the strict-target line
+    assert '"$MODE" = strict' in strict and '"$code" -ne 0' in strict
+    assert '"$code" -eq 1' in blocking and '["blocking"] is True' in blocking
 
 
 def test_branch_guard_fails_only_on_confirmed_not_found():
@@ -1049,7 +1050,7 @@ def test_github_post_step_adds_the_rule_ids_to_the_comment_only_under_strict(tmp
 
 
 # ---- Azure gate: the whole script, real bash, an `ado` shim ----
-def _az_shim(*, mode=("strict", 0), id_rc=0, gate_rc=0, strict_rc=2, strict_doc=FINDINGS, mode_err="", mode_out=None):
+def _az_shim(*, mode=("strict", 0), id_rc=0, gate_rc=0, strict_rc=2, strict_doc=FINDINGS, mode_err="", mode_out=None, blocking=False):
     mode_name, mode_rc = mode
     mode_json = mode_out if mode_out is not None else json.dumps({"mode": mode_name, "source": "target branch"})
     return ('echo "$* | token=${ADO_TOKEN:+set}" >> calls.log\n'
@@ -1058,7 +1059,7 @@ def _az_shim(*, mode=("strict", 0), id_rc=0, gate_rc=0, strict_rc=2, strict_doc=
             f' "branch --id-from="*|"branch --id-from") [ {id_rc} = 0 ] && echo 1001; exit {id_rc};;\n'
             f' "strict check") cat strict-doc.json; echo "error: strict check failed: boom" >&2; exit {strict_rc};;\n'
             ' "pr comment") cp "$5" posted.md; exit 0;;\n'
-            f' "gate 1001") echo \'{{"blocking": false}}\'; exit {gate_rc};;\n'
+            f' "gate 1001") echo \'{{"blocking": {"true" if blocking else "false"}}}\'; exit {gate_rc};;\n'
             'esac\nexit 0\n')
 
 
@@ -1543,3 +1544,33 @@ def test_azure_verify_fails_closed_when_the_checkout_of_the_head_fails(tmp_path,
 def test_azure_verify_drops_a_token_from_the_verify_call_only_as_the_gate_does(tmp_path, shell_flags):
     rc, out = _run_az_verify(tmp_path, _v_ado(tmp_path, verify_doc={"ok": True, "findings": []}), extra_env={"ADO_TOKEN": "tok-secret"})
     assert rc == 0 and _calls(tmp_path)[-1] == CALL_VERIFY and "tok-secret" not in out, out  # `env -u ADO_TOKEN`: the call sees none
+
+
+# ---- P3-13d: under a strict target a gate that cannot run fails the job (rule_drift is checked only by the gate) ----
+GATE_RC_CASES = [  # gate exit code, gate.json blocking flag, expected job result under a strict target / an advisory target
+    (0, False, 0, 0), (2, False, 1, 0), (1, False, 1, 0), (1, True, 1, 1), (3, False, 3, 3),
+]
+NOT_CHECKED = "rule drift was not checked"
+
+
+@pytest.mark.parametrize("gate_rc,blocking,strict_rc,advisory_rc", GATE_RC_CASES)
+def test_github_post_step_strict_target_fails_when_the_gate_cannot_run(tmp_path, gate_rc, blocking, strict_rc, advisory_rc, shell_flags):
+    for mode, want in (("strict", strict_rc), ("advisory", advisory_rc)):
+        d = tmp_path / mode
+        (d / "rt").mkdir(parents=True)
+        (d / "rt" / "gate.md").write_text("GATE-BODY\n")
+        (d / "rt" / "gate.code").write_text(f"{gate_rc}\n")
+        (d / "rt" / "gate.json").write_text(json.dumps({"blocking": blocking}))
+        rc, out = _gh_run(d, _gh("ado-gate", STEP_POST), {"GH_TOKEN": "t", "PR_NUM": "7", "MODE": mode}, gh="exit 0\n")
+        assert rc == want, (mode, out)
+        if mode == "advisory" and gate_rc in (1, 2) and not blocking:
+            assert "::warning::spec-kit-ado gate could not run" in out and "::error::" not in out, out  # advisory: today's warning only
+        # "could not run" text only when the gate did not run: never for a blocking verdict (exit 1 + blocking: true), nor under advisory
+        assert (NOT_CHECKED in out) == (mode == "strict" and gate_rc == 2 or mode == "strict" and gate_rc == 1 and not blocking), (mode, gate_rc, blocking, out)
+
+
+def test_github_post_step_strict_target_missing_gate_verdict_fails(tmp_path, shell_flags):
+    (tmp_path / "rt").mkdir()
+    (tmp_path / "rt" / "gate.md").write_text("x\n")  # no gate.code: the gate step did not finish
+    rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_POST), {"GH_TOKEN": "t", "PR_NUM": "7", "MODE": "strict"}, gh="exit 0\n")
+    assert rc == 1 and "::error::" in out, out

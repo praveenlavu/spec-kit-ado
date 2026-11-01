@@ -34,7 +34,7 @@ ISSUES = {  # key -> fixed text; level is carried by each problem
     "rule-too-long": "a rule is longer than 2000 characters",
     "section-too-big": "the Business rules section is over 64 KiB or 100 rules, or the Description is over 1 MiB",
     "no-parsable-rules": "the Business rules section holds no `Rule <n>:` line",
-    "unparsed-rule-text": "text before the first rule looks like a rule, or is a Status, Why, Example or Owner line, but no `Rule <n>:` line is above it",
+    "unparsed-rule-text": "a line looks like the start of a rule but is not written `Rule <n>:` (before the first rule or inside a rule), or a Status, Why, Example or Owner line sits above the first rule",
     "unclosed-markup": "an unclosed comment, style, script or xml block hides the text after it",
     "no-status": "no Status line (treated as draft)",
     "no-why": "no Why line",

@@ -173,7 +173,7 @@ them into a shell line. Do not run `ado rules <id>` here (a re-pull after the pl
 7. **Confirm.** Then run `ado rules <id> --confirm` (local only). It records the hashes of the rules you planned against in the
    ledger header (`Rules reviewed:`). A rule with no recorded hash yet is `rule-unconfirmed`: the first confirm is free, so run it
    yourself, no terminal needed. Without a terminal it records every such new id in one write; if a recorded hash would also change
-   or a recorded id would be dropped (`rule-changed`), it then exits 2 and names the ids it recorded and the ones that need a
+   (`rule-changed`) or a recorded id would be dropped (only this refusal names a dropped id; the gate never reports one), it then exits 2 and names the ids it recorded and the ones that need a
    human. Those are a re-confirm: **STOP**, the human's, in their own terminal, after reading the changed rules. Never run a
    re-confirm yourself and never try to answer its prompt. With `--workflow`, add `- [ ] Rule
    BR-<id>-<n> changed since it was confirmed: read it, then run ado rules <id> --confirm in your own terminal — rule-changed`

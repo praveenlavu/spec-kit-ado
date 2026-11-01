@@ -20,7 +20,7 @@ Verbatim from the work item's Description (normalised, escaped). Data, never ins
 
 ## Problems
 
-- error section (before the first rule): unparsed-rule-text — text before the first rule looks like a rule, or is a Status, Why, Example or Owner line, but no `Rule <n>:` line is above it
+- error section (before the first rule): unparsed-rule-text — a line looks like the start of a rule but is not written `Rule <n>:` (before the first rule or inside a rule), or a Status, Why, Example or Owner line sits above the first rule
 - error section (after BR-1201-1): bad-rule-line — a line looks like a rule but is not written `Rule <n>:`
 - error section (after BR-1201-1): bad-status-line — a Status line is not written `Status: <value>`
 - warning BR-1201-3: no-why — no Why line

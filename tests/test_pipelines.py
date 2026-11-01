@@ -54,10 +54,10 @@ def test_persist_credentials_false(name):
 def _without_invalid_config_exit(script):
     """Drop the separately tested fail-closed blocks (the invalid-config exit, the strict-mode failures: each a top-level `if ...; fi`
     whose message starts `ADO gate FAILED` and ends in its own `exit 1`); everything else stays checked."""
-    rest, n = re.subn(r'^if [^\n]*; then[^\n]*\n(?:(?!fi\n).)*?ADO gate FAILED.*?\nfi\n', "", script, flags=re.S | re.M)
+    rest, n = re.subn(r'^if [^\n]*; then(?:(?!; fi\n)[^\n])*\n(?:(?!fi\n).)*?ADO gate FAILED.*?\nfi\n', "", script, flags=re.S | re.M)
     rest0, n0 = re.subn(r'^if \[ "\$code" -eq 3 \]; then.*?\nfi\n', "", script, flags=re.S | re.M)
     assert n0 == 1 and "ADO gate FAILED: ado.config.json is invalid" in script
-    assert n == 6, n  # invalid config (strict mode, story id), mode failed, unreadable mode, strict needs an id, strict check failed
+    assert n == 7, n  # invalid config (strict mode, story id), mode failed, unreadable mode, strict needs an id, strict check failed, strict gate cannot run
     return rest
 
 
@@ -177,3 +177,19 @@ def test_strict_verify_template_runs_the_exact_command_after_the_mode_and_the_id
     (allow,) = [p for p in load("ado-strict-verify")["parameters"] if p["name"] == "allowOverride"]
     assert allow["type"] == "boolean" and allow["default"] is False  # an override fails the re-run unless the caller accepts it
     assert 'case "$ALLOW_OVERRIDE" in [Tt]rue) allow=--allow-override ;; esac' in script
+
+
+@pytest.mark.parametrize("gate_rc,blocking,strict_rc,advisory_rc", [(0, False, 0, 0), (2, False, 1, 0), (1, False, 1, 0), (3, False, 1, 0), (1, True, 1, 1)])
+def test_gate_strict_target_fails_when_the_gate_cannot_run_but_advisory_only_warns(tmp_path, gate_rc, blocking, strict_rc, advisory_rc):
+    from tests import test_github_workflows as t  # real bash, an `ado` shim
+    for mode, want in (("strict", strict_rc), ("advisory", advisory_rc)):
+        d = tmp_path / mode
+        d.mkdir()
+        rc, out = t._run_az(d, mode=(mode, 0), gate_rc=gate_rc, blocking=blocking, strict_rc=0, strict_doc={"ok": True, "findings": []})
+        assert rc == want, (mode, gate_rc, out)
+        if mode == "advisory" and gate_rc and not blocking:
+            assert "##vso[task.logissue type=warning]spec-kit-ado gate could not run" in out and "type=error" not in out, out
+        could_not_run = mode == "strict" and gate_rc != 0 and not blocking
+        assert ("rule drift was not checked" in out) == could_not_run, (mode, gate_rc, blocking, out)  # never said of a blocking verdict
+        if could_not_run:
+            assert "##vso[task.logissue type=error]ADO gate FAILED:" in out
