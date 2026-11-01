@@ -64,6 +64,33 @@ def _plan(args, text):
         Path(f"{out}.new").unlink(missing_ok=True)
 
 
+def _pr_trust(base):
+    """The trust that judges `pr create --apply`: the stricter of the PR's target branch (`--base`, when it resolves to a commit here) and `origin/HEAD`.
+    Comment mode from either wins; with both in comment mode the approvers must be the same set (two lists cannot be ordered: refuse). When the base does
+    not resolve, `origin/HEAD` alone (as every other apply). An unreadable target config raises (exit 2)."""
+    home = trusted(".")
+    ref = strict.base_ref(".", base)
+    if not strict._resolve_base(".", ref):
+        return home
+    target = trusted(".", base=ref)
+    strict_ones = [t for t in (home, target) if t.approval == "comment"]
+    if not strict_ones:
+        return home
+    if len(strict_ones) == 2 and set(home.approvers) != set(target.approvers):
+        raise ValueError("comment approval: the default branch and the PR's target branch name different approvers, so it is unclear who may approve; "
+                         "make `approvers` the same on both (docs/configuration.md, 'Approvers and comment mode')")
+    return strict_ones[0]
+
+
+def _approved(client, args, verb, text, writes=True, trust=None):
+    """`--apply` in `approval: "comment"` mode (P4-12a): after `_plan` has bound the apply to the approved preview and before the first write, a trusted
+    approver's `/approve <gate> <hash>` comment on the story must name this plan (`approvals.require`; the hash covers the rendered plan `text`, UTF-8).
+    The trust keys come only from the target branch. A plan that would write nothing needs no approval. Not used by `done`, `strict override`, `--force`
+    or the single-item verbs."""
+    if args.apply and writes:
+        approvals.require(client, trusted(".") if trust is None else trust, args.id, verb, text.encode("utf-8"))
+
+
 def _push(client, args):
     path = _tasks_path(client, args)
     try:
@@ -71,7 +98,9 @@ def _push(client, args):
     except (OSError, UnicodeDecodeError) as e:
         raise ValueError(f"cannot read {path}: {e}")
     ops = push.plan_push(client, args.id, parsed)  # read-only: GET/WIQL only
-    _plan(args, push.render_plan(args.id, ops))
+    text = push.render_plan(args.id, ops)
+    _plan(args, text)
+    _approved(client, args, "push", text, any(o["action"] in ("create", "update") for o in ops))
     result = push.apply_push(client, args.id, ops) if args.apply else {}
     return {"parent": args.id, "from": str(path), "applied": args.apply, "ops": ops, **result}
 
@@ -201,11 +230,12 @@ def _pr(client, args):
     body = _read_body(args.body_file)
     title = prs.with_ab_ref(args.title, args.id)
     host = "azure" if azure else "github"
-    _plan(args, prs.render_plan(host, title, prs.azure_description(body) if azure else body, args.base, args.head,
-                                [args.id], tasks_row))
+    text = prs.render_plan(host, title, prs.azure_description(body) if azure else body, args.base, args.head, [args.id], tasks_row)
+    _plan(args, text)
     info = {"applied": args.apply, "host": host, "title": title, "base": args.base, "head": args.head}
     if not args.apply:
         return info
+    _approved(client, args, "pr-create", text, trust=_pr_trust(args.base))
     _stamp_used(client, args, used)
     if args.push and (pushed := prs.push_branch(args.head)).get("error"):
         return pushed
@@ -216,7 +246,7 @@ def _pr(client, args):
             if note:
                 print(f"note: {note}", file=sys.stderr)
     else:
-        res = prs.github_create(title, args.body_file, args.base, args.head, draft)
+        res = prs.github_create(title, body, args.base, args.head, draft)
     return res if res.get("error") else {**info, **res}
 
 
@@ -238,9 +268,11 @@ def dispatch(client, args):
         branch.require_work_tree()  # before the ADO request
         if args.link:
             p = branch.link_plan(client, args.id)  # read-only
-            _plan(args, branch.render_link_plan(p))
+            text = branch.render_link_plan(p)
+            _plan(args, text)
             do = args.apply and p["action"] == "link"
             if do:
+                _approved(client, args, "branch-link", text)
                 workitems.add_relation(client, args.id, branch.link_value(p["url"]))
             return {**p, "applied": do}
         title = (workitems.get(client, args.id).get("fields") or {}).get("System.Title", "")
@@ -302,7 +334,9 @@ def dispatch(client, args):
         if not (args.post or args.plan_out):
             return parsed
         plan = questions.plan_post(client, args.id, parsed)  # read-only: GET only
-        _plan(args, questions.render_plan(args.id, plan, parsed["unparsed"]))
+        text = questions.render_plan(args.id, plan, parsed["unparsed"])
+        _plan(args, text)
+        _approved(client, args, "questions-post", text, plan["action"] in ("add", "edit"))
         if args.apply:
             questions.apply_post(client, args.id, plan)
         return {"id": args.id, "applied": args.apply, "action": plan["action"], "comment_id": plan["comment_id"]}
@@ -317,7 +351,9 @@ def dispatch(client, args):
         if not (args.post or args.plan_out):
             return parsed
         plan = decisions.plan_post(client, args.id, parsed)
-        _plan(args, decisions.render_plan(args.id, plan, parsed["unparsed"]))
+        text = decisions.render_plan(args.id, plan, parsed["unparsed"])
+        _plan(args, text)
+        _approved(client, args, "decisions-post", text, plan["action"] == "add")
         res = decisions.apply_post(client, args.id, plan, path) if args.apply else {}
         return {"id": args.id, "applied": args.apply, "action": plan["action"], "lines": plan["lines"],
                 "comment_id": res.get("comment_id"), **({"note": "no decisions file; nothing to post"} if path is None else {})}

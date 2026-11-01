@@ -73,10 +73,11 @@ def github_create_args(title, body_file, base, head, draft=False):
             "--base", base, "--head", head] + (["--draft"] if draft else [])
 
 
-def github_create(title, body_file, base, head, draft=False):
+def github_create(title, body, base, head, draft=False):
+    """`body` is the text already read (and shown in the plan): it goes to `gh` on stdin, so a body file swapped after the approval is never read."""
     try:
-        r = subprocess.run(github_create_args(title, body_file, base, head, draft),
-                           check=False, capture_output=True, text=True)
+        r = subprocess.run(github_create_args(title, "-", base, head, draft), input=body,
+                           check=False, capture_output=True, text=True, encoding="utf-8")
     except FileNotFoundError:
         raise ValueError("`gh` (GitHub CLI) is not installed or not on PATH; install it or set repo_host to azure")
     return {"error": r.stderr} if r.returncode else {"url": r.stdout.strip()}

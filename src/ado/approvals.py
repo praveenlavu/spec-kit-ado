@@ -1,4 +1,5 @@
 import datetime
+import hashlib
 import re
 import unicodedata
 import urllib.parse
@@ -366,3 +367,75 @@ def newest(client, story_id, comments, target, approvers, excluded, tally=None):
     if newer:
         count("bad_newer", newer)
     return None if out is None else {**out[1], "bad_newer": newer}
+
+
+# ---- comment approval inside the five applies (P4-12a) ------------------------------------------------------------------------------------
+
+VERB_GATES = {"questions-post": {"approve-questions", "approve-plan-questions", "approve-answers-questions"}, "push": {"approve-push", "approve-sync"},
+              "decisions-post": {"approve-decisions"}, "pr-create": {"approve-pr"}, "branch-link": {"branch-link"}}  # the ONLY applies a comment can authorise
+_REQUEST = re.compile(r"\[spec-kit-ado:approval-request\][ \t]+([a-z][a-z0-9-]{2,40})[ \t]+([0-9a-f]{64})")  # the kit's own request comment (P4-13 posts it)
+E_MISSING = ("comment approval: no valid approval for this plan on story {story}. A trusted approver must comment `/approve <gate> <hash>` (first line, "
+             "unedited, newer than any approval request) with one of: {gates}.{bad}")
+E_UNREADABLE = "comment approval: the story's comments are unreadable or incomplete (page limit, repeated page token or an unexpected answer), so nothing is approved."
+E_NO_APPROVERS = "comment approval: no approvers are configured on the target branch (`approvers` in ado.config.json there), so nothing can be approved."
+E_IDENTITY = "comment approval: the token identity cannot be established, so the comments cannot be attributed and nothing is approved."
+
+
+class ApprovalMissing(ApprovalRefused):
+    """The apply has no valid approver comment for this plan (or cannot tell): exit 2, nothing written. Fixed text, never ADO text."""
+
+
+def gate_hash(gate_id, story_id, data):
+    """What an approver's `/approve <gate> <hash>` names: sha256 over the gate id, the story id and the plan bytes (64 lowercase hex)."""
+    return hashlib.sha256(b"spec-kit-ado/1\n" + gate_id.encode("utf-8") + b"\n" + str(story_id).encode("utf-8") + b"\n" + data).hexdigest()
+
+
+def _requests(found, hashes):
+    """Creation keys of every approval-request comment for any (gate, hash) of the set; None in the list = a time that cannot be read."""
+    return [_order(c) for c in found if (m := _REQUEST.match(c.get("text") or "")) and hashes.get(m.group(1)) == m.group(2)]
+
+
+def require(client, trust_cfg, story_id, verb, plan_bytes, ci_identity=None):
+    """The gate in front of an ADO write in `approval: "comment"` mode (a no-op otherwise); called after the `--expect-plan` check. The verb's gates
+    (`VERB_GATES[verb]`) are ONE target for this plan: the newest valid command over all of them (each gate's hash is `gate_hash(g, story_id,
+    plan_bytes)`; a command with any other hash still counts as a command, so a later reject or another plan's approval cancels) must be an
+    `/approve` with that gate's hash, newer than every approval request for the set, with no newer malformed approver line (`newest()["bad_newer"]`)
+    on any gate of the set: fail closed, and the count is shown. Anything else raises (`ApprovalRefused`: bypass bit; `ApprovalMissing`: the
+    rest), with a fixed text. Reads only; an HTTP error propagates."""
+    if trust_cfg.approval != "comment":
+        return
+    hashes = {g: gate_hash(g, story_id, plan_bytes) for g in sorted(VERB_GATES[verb])}
+    comment_mode_allowed(client)
+    if not trust_cfg.approvers:
+        raise ApprovalMissing(E_NO_APPROVERS)
+    try:
+        found, truncated = comments.fetch(client, story_id, with_meta=True)
+    except comments.CommentsUnreadable:
+        raise ApprovalMissing(E_UNREADABLE) from None
+    if truncated:
+        raise ApprovalMissing(E_UNREADABLE)
+    try:
+        skip = excluded(client, found, ci_identity)
+    except ValueError:  # `questions._me` puts the client's error text into its message
+        raise ApprovalMissing(E_IDENTITY) from None
+
+    def scan(rows):
+        wins, bad = {}, 0
+        for g in hashes:
+            tally = {}
+            wins[g] = newest(client, story_id, rows, g, trust_cfg.approvers, skip, tally=tally)
+            bad = max(bad, tally.get("bad_newer", 0))
+        return {g: w for g, w in wins.items() if w}, bad
+
+    wins, bad = scan(found)
+    key = lambda w: _order({"date": w["created"], "id": w["id"]})  # noqa: E731
+    g, best = max(wins.items(), key=lambda kv: key(kv[1]), default=(None, None))
+    if best and best["verb"] == "approve" and best["hash"] == hashes[g]:
+        reqs, cut = _requests(found, hashes), key(best)
+        if None not in reqs and all(r < cut for r in reqs):
+            # a malformed approver line anywhere in the set newer than the winner: the comments newer than it are read again, so a line older than the approval is harmless
+            _, bad = scan([c for c in found if (k := _order(c)) is None or k > cut])
+            if not bad:
+                return
+    raise ApprovalMissing(E_MISSING.format(story=int(story_id), gates=", ".join(f"{g} {h}" for g, h in hashes.items()),
+                                           bad=f" {bad} newer malformed command line(s) by an approver for this plan: check the thread." if bad else ""))

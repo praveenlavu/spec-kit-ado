@@ -6,6 +6,7 @@ the full project history is in the
 
 ## Unreleased (0.3.0 work)
 
+- In `approval: "comment"` mode the `--apply` steps of `questions`, `push`, `decisions`, `pr create` and `branch --link` need the approver's `/approve <gate> <hash>` comment (P4-12a); the step list is unchanged, and an apply that refuses ends the run FAILED (start a new run).
 - New shell step `stack-check` (`ado stack show --check`) after `pull` and before `review-spec`: in strict mode it stops the run with exit 2
   unless the stack profile is approved, matches `strict.test_command` and covers every detected root; in an advisory project it exits 0 with notes.
   The fix is the `speckit.ado.stack` command run by hand (the workflow has no step for it: it asks the human questions and the human approves in a terminal).

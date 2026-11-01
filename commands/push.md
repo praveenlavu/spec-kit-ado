@@ -79,6 +79,7 @@ ado push <id> --apply --expect-plan .ado/plan-push.md
 The CLI re-renders the plan and compares it with the file the user approved. If they differ
 (exit 2, `plan changed since approval`), nothing was written and the current plan is in
 `.ado/plan-push.md.new`: go back to step 1 and ask again.
+In `approval: "comment"` mode (target branch) the apply also needs a trusted approver's `/approve approve-push <hash>` (or `approve-sync`) comment on the story for this exact plan: on exit 2 `comment approval: no valid approval ...` nothing was written; show the human the line from the refusal and wait, never post it yourself (`rules/hitl.md`).
 
 ### 4. Report
 

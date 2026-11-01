@@ -22,7 +22,8 @@ specify workflow run ado-lifecycle -i story_id=1001
 
 Command steps run the agent once with `--workflow`, so they make no ADO writes and never stop
 to ask: open decisions go to section 2 of the DoD ledger. Approval happens only at gate steps;
-rejecting any gate aborts the run.
+rejecting any gate aborts the run. With `approval: "comment"` on the target branch, each `--apply` step of the five writes also needs the approver's
+`/approve <gate> <hash>` comment on the story (`rules/hitl.md`); an apply that refuses ends the run FAILED even with a persisted verdict: start a new run.
 
 | Step | What happens | Gate |
 |---|---|---|

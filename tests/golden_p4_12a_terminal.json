@@ -1,0 +1,124 @@
+{
+ "branch-link/no-git": {
+  "calls": [],
+  "err": "",
+  "out": "{\n  \"id\": 1001,\n  \"branch\": \"feature/ab1001-x\",\n  \"repository\": \"r\",\n  \"url\": \"vstfs:///Git/Ref/p%2Fr%2FGBx\",\n  \"action\": \"link\",\n  \"applied\": true\n}\n",
+  "rc": 0,
+  "writes": 1
+ },
+ "branch-link/origin-head": {
+  "calls": [],
+  "err": "",
+  "out": "{\n  \"id\": 1001,\n  \"branch\": \"feature/ab1001-x\",\n  \"repository\": \"r\",\n  \"url\": \"vstfs:///Git/Ref/p%2Fr%2FGBx\",\n  \"action\": \"link\",\n  \"applied\": true\n}\n",
+  "rc": 0,
+  "writes": 1
+ },
+ "decisions-post/no-git": {
+  "calls": [
+   [
+    "POST",
+    "/Fabrikam/_apis/wit/workItems/1001/comments?api-version=7.1-preview.4",
+    {
+     "text": "[spec-kit-ado:decisions]<br>Decisions and assumptions made during development; please validate or reject:<br>D1 (decision): Use cursor paging \u2014 why: the story names no page size"
+    }
+   ]
+  ],
+  "err": "",
+  "out": "{\n  \"id\": 1001,\n  \"applied\": true,\n  \"action\": \"add\",\n  \"lines\": [\n    \"D1\"\n  ],\n  \"comment_id\": 777\n}\n",
+  "rc": 0,
+  "writes": 1
+ },
+ "decisions-post/origin-head": {
+  "calls": [
+   [
+    "POST",
+    "/Fabrikam/_apis/wit/workItems/1001/comments?api-version=7.1-preview.4",
+    {
+     "text": "[spec-kit-ado:decisions]<br>Decisions and assumptions made during development; please validate or reject:<br>D1 (decision): Use cursor paging \u2014 why: the story names no page size"
+    }
+   ]
+  ],
+  "err": "",
+  "out": "{\n  \"id\": 1001,\n  \"applied\": true,\n  \"action\": \"add\",\n  \"lines\": [\n    \"D1\"\n  ],\n  \"comment_id\": 777\n}\n",
+  "rc": 0,
+  "writes": 1
+ },
+ "pr-create/no-git": {
+  "calls": [],
+  "err": "",
+  "out": "{\n  \"applied\": true,\n  \"host\": \"github\",\n  \"title\": \"T AB#1001\",\n  \"base\": \"main\",\n  \"head\": \"feat\",\n  \"url\": \"https://example.test/pr/1\"\n}\n",
+  "rc": 0,
+  "writes": 1
+ },
+ "pr-create/origin-head": {
+  "calls": [],
+  "err": "",
+  "out": "{\n  \"applied\": true,\n  \"host\": \"github\",\n  \"title\": \"T AB#1001\",\n  \"base\": \"main\",\n  \"head\": \"feat\",\n  \"url\": \"https://example.test/pr/1\"\n}\n",
+  "rc": 0,
+  "writes": 1
+ },
+ "push/no-git": {
+  "calls": [],
+  "err": "",
+  "out": "{\n  \"parent\": 1001,\n  \"from\": \"tasks.md\",\n  \"applied\": true,\n  \"ops\": [\n    {\n      \"action\": \"create\",\n      \"task_id\": \"T001\",\n      \"title\": \"[sk:T001] Do it\",\n      \"work_item_id\": null,\n      \"state\": null,\n      \"truncated\": false,\n      \"from_state\": null,\n      \"old_title\": null\n    }\n  ],\n  \"created\": [\n    {\n      \"task_id\": \"T001\",\n      \"work_item_id\": 2000,\n      \"title\": \"[sk:T001] Do it\"\n    }\n  ],\n  \"updated\": [],\n  \"failed\": []\n}\n",
+  "rc": 0,
+  "writes": 1
+ },
+ "push/origin-head": {
+  "calls": [],
+  "err": "",
+  "out": "{\n  \"parent\": 1001,\n  \"from\": \"tasks.md\",\n  \"applied\": true,\n  \"ops\": [\n    {\n      \"action\": \"create\",\n      \"task_id\": \"T001\",\n      \"title\": \"[sk:T001] Do it\",\n      \"work_item_id\": null,\n      \"state\": null,\n      \"truncated\": false,\n      \"from_state\": null,\n      \"old_title\": null\n    }\n  ],\n  \"created\": [\n    {\n      \"task_id\": \"T001\",\n      \"work_item_id\": 2000,\n      \"title\": \"[sk:T001] Do it\"\n    }\n  ],\n  \"updated\": [],\n  \"failed\": []\n}\n",
+  "rc": 0,
+  "writes": 1
+ },
+ "questions-post/no-git": {
+  "calls": [
+   [
+    "GET",
+    "/_apis/connectionData?api-version=7.1-preview",
+    null
+   ],
+   [
+    "GET",
+    "/Fabrikam/_apis/wit/workItems/1001/comments?$top=200&api-version=7.1-preview.4",
+    null
+   ],
+   [
+    "POST",
+    "/Fabrikam/_apis/wit/workItems/1001/comments?api-version=7.1-preview.4",
+    {
+     "text": "[spec-kit-ado:questions]<br>Open questions for the product owner:<br>Q1: Are contractors &lt;in&gt; scope?<br>Q3: Retention?"
+    }
+   ]
+  ],
+  "err": "",
+  "out": "{\n  \"id\": 1001,\n  \"applied\": true,\n  \"action\": \"add\",\n  \"comment_id\": null\n}\n",
+  "rc": 0,
+  "writes": 1
+ },
+ "questions-post/origin-head": {
+  "calls": [
+   [
+    "GET",
+    "/_apis/connectionData?api-version=7.1-preview",
+    null
+   ],
+   [
+    "GET",
+    "/Fabrikam/_apis/wit/workItems/1001/comments?$top=200&api-version=7.1-preview.4",
+    null
+   ],
+   [
+    "POST",
+    "/Fabrikam/_apis/wit/workItems/1001/comments?api-version=7.1-preview.4",
+    {
+     "text": "[spec-kit-ado:questions]<br>Open questions for the product owner:<br>Q1: Are contractors &lt;in&gt; scope?<br>Q3: Retention?"
+    }
+   ]
+  ],
+  "err": "",
+  "out": "{\n  \"id\": 1001,\n  \"applied\": true,\n  \"action\": \"add\",\n  \"comment_id\": null\n}\n",
+  "rc": 0,
+  "writes": 1
+ }
+}

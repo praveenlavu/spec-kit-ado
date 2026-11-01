@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ado import dod, prs
-from ado.config import Config
+from ado.config import Config, Trust
 from tests.conftest import FakeClient, commit, git, ledger_md, review_md
 
 
@@ -65,6 +65,8 @@ def _env(tmp_path, monkeypatch, host="github", repository="", responses=()):
         fake["c"] = FakeClient(cfg, responses=list(responses))
         return fake["c"]
     monkeypatch.setattr(m, "AdoClient", make)
+    monkeypatch.setattr(m, "trusted", lambda repo=".", base=None: Trust([], "terminal", {}))  # these tests forbid or fake every subprocess; the trust read runs git
+    monkeypatch.setattr(m, "_pr_trust", lambda base: Trust([], "terminal", {}))  # (`pr create` also resolves --base with git)
     return m, fake
 
 
@@ -97,8 +99,8 @@ def test_open_apply_github_calls_gh(tmp_path, monkeypatch, capsys):
         return subprocess.CompletedProcess(args, 0, stdout="https://github.com/contoso/x/pull/5\n", stderr="")
     monkeypatch.setattr(subprocess, "run", run)
     assert m.main(ARGS + ["--apply"]) == 0
-    assert seen["args"] == prs.github_create_args("Add x AB#1001", "body.md", "main", "feat")
-    assert seen["kw"] == {"check": False, "capture_output": True, "text": True}
+    assert seen["args"] == prs.github_create_args("Add x AB#1001", "-", "main", "feat")  # the body goes on stdin, the file is not read again
+    assert seen["kw"] == {"input": "Body text\n", "check": False, "capture_output": True, "text": True, "encoding": "utf-8"}
     assert json.loads(capsys.readouterr().out)["url"] == "https://github.com/contoso/x/pull/5"
     assert fake["c"].calls == []
 
@@ -195,7 +197,8 @@ def test_push_is_list_form_and_only_with_apply(tmp_path, monkeypatch, capsys):
     assert seen == []
     assert m.main(["pr", "create", "1001", "--from-prepared", "--push", "--apply"]) == 0
     assert seen[0][0] == ["git", "push", "-u", "origin", "feat"] and seen[0][1].get("shell") is None
-    assert seen[1][0] == prs.github_create_args("Add x AB#1001", ".ado/pr-body.md", "main", "feat")
+    assert seen[1][0] == prs.github_create_args("Add x AB#1001", "-", "main", "feat")
+    assert seen[1][1]["input"] == "Prepared body\n"
     # a failed push stops before the PR is created
     seen.clear()
     capsys.readouterr()
@@ -986,3 +989,35 @@ def test_git_helper_ignores_inherited_repository_selectors(tmp_path, monkeypatch
         monkeypatch.setenv(k, v)
     r = prs._git(str(tmp_path), "rev-parse", "--show-toplevel")
     assert r.returncode == 0 and r.stdout.decode().strip() == str(tmp_path.resolve())
+
+
+def test_github_gets_the_body_that_was_approved_not_a_swapped_file(tmp_path, monkeypatch):
+    """P4-12a fix: the body is read once; `gh` receives that text on stdin, so a body file swapped after the approval check is never sent."""
+    m, _ = _env(tmp_path, monkeypatch)
+    seen = {}
+
+    def run(args, **kw):
+        seen["args"], seen["input"] = args, kw.get("input")
+        return subprocess.CompletedProcess(args, 0, stdout="https://github.com/contoso/x/pull/5\n", stderr="")
+    monkeypatch.setattr(subprocess, "run", run)
+    monkeypatch.setattr(m.approvals, "require", lambda *a, **k: (tmp_path / "body.md").write_text("SWAPPED after the approval check\n", encoding="utf-8"))
+    assert m.main(ARGS + ["--apply"]) == 0
+    assert seen["input"] == "Body text\n" and "SWAPPED" not in seen["input"]
+    assert seen["args"][seen["args"].index("--body-file") + 1] == "-" and "body.md" not in seen["args"]
+
+
+def test_github_body_reaches_gh_as_utf8_bytes(tmp_path, monkeypatch):
+    """The body goes on stdin as UTF-8 whatever the locale says (text mode with an explicit encoding), non-ASCII text and an emoji included."""
+    m, _ = _env(tmp_path, monkeypatch)
+    body = "Change \u2192 done \U0001F680 caf\u00e9\n"
+    (tmp_path / "body.md").write_text(body, encoding="utf-8")
+    out = tmp_path / "stdin.bin"
+    gh = tmp_path / "bin" / "gh"
+    gh.parent.mkdir()
+    gh.write_text(f'#!/bin/sh\ncat > "{out}"\necho https://github.com/contoso/x/pull/5\n')
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{gh.parent}{os.pathsep}{os.environ['PATH']}")
+    import locale
+    monkeypatch.setattr(locale, "getpreferredencoding", lambda *a, **k: "ascii")  # a locale that could not encode the body
+    assert m.main(ARGS + ["--apply"]) == 0
+    assert out.read_bytes() == body.encode("utf-8")

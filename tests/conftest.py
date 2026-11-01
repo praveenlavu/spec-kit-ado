@@ -90,6 +90,37 @@ def connection_data(identity_id, descriptor="aad.fictional"):
     return {"authenticatedUser": {"id": identity_id, "descriptor": descriptor}}
 
 
+class RouteClient(FakeClient):
+    """ADO stand-in for comment mode: the bypass-permission, identity, comment and revision reads are answered by path (so the order of the
+    reads does not matter); anything else comes from the `responses` queue as in FakeClient. `raw` is read at each request (a test may
+    append to it between runs). `bypass` may be a bool or an exception."""
+    PROJECT = "99999999-9999-4999-8999-999999999999"
+
+    def __init__(self, config, raw=None, bypass=False, me="aaaa1111-0000-4000-8000-00000000000a", responses=None):
+        super().__init__(config, responses=responses)
+        self.raw, self.bypass, self.me = raw if raw is not None else [], bypass, me
+
+    def request(self, method, path, body=None, content_type="application/json", raw=False):
+        out = None
+        if method == "GET":
+            if path.startswith("/_apis/projects/"):
+                out = {"id": self.PROJECT}
+            elif path.startswith("/_apis/permissions/"):
+                out = self.bypass if isinstance(self.bypass, BaseException) else {"count": 1, "value": [self.bypass]}
+            elif path.startswith("/_apis/connectionData"):
+                out = connection_data(self.me)
+            elif "/revisions?" in path:
+                out = {"value": []}
+            elif "/comments?" in path and "/versions" not in path:
+                out = {"comments": copy.deepcopy(self.raw)}
+        if out is None:
+            return super().request(method, path, body, content_type, raw)
+        self.calls.append({"method": method, "path": path, "body": body, "content_type": content_type})
+        if isinstance(out, BaseException):
+            raise out
+        return out
+
+
 @pytest.fixture
 def cfg():
     return Config(organization="contoso", project="Fabrikam")

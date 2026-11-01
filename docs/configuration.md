@@ -128,8 +128,39 @@ a refusal, "set origin/HEAD or pass --base", because the keys cannot be checked 
 output of any verb.
 
 In this build the keys are validated, `trusted` reads them, `ado doctor` checks them and `ado setup --profile team|strict` asks for the
-approvers. The code that decides which comment counts exists (`ado.approvals`, below). Three places use it so far, `ado decisions <id> --sync`, `ado questions <id> --sync` and the done-time cross-check of `ado done` (below); `ado approvals`, the other sync verbs and
-the applies in comment mode come with the later tasks of this version: until they ship, setting `approval` changes no behaviour other than the doctor row, and with `approvers` set `ado decisions --resolve` is refused.
+approvers. The code that decides which comment counts exists (`ado.approvals`, below). Three places use it so far, `ado decisions <id> --sync`, `ado questions <id> --sync` and the done-time cross-check of `ado done` (below); the applies of the five ADO writes use it too (below, "Comment approval inside the five applies"); `ado approvals` and the poller come with the later tasks of this version. With `approvers` set `ado decisions --resolve` is refused.
+
+**Comment approval inside the five applies (`approval: "comment"`).** With `approval: "comment"` on the target branch, `--apply` of the five ADO
+writes (`ado questions <id> --post`, `ado push`, `ado decisions <id> --post`, `ado pr create`, `ado branch <id> --link`) also needs a trusted
+approver's comment on the story: `/approve <gate> <hash>` as the first non-empty line, with a gate from the verb's fixed set (questions:
+`approve-questions`, `approve-plan-questions`, `approve-answers-questions`; push: `approve-push`, `approve-sync`; decisions: `approve-decisions`;
+pr create: `approve-pr`; branch link: `branch-link`; any one of the set will do) and the hash `sha256("spec-kit-ado/1\n" + gate + "\n" + story id + "\n"
++ the rendered plan text in UTF-8)` (`approvals.gate_hash`), so the approval names this plan: a changed plan has another hash and the comment is stale.
+The check runs after `--expect-plan` has compared the plan (a changed plan still says "plan changed since approval" first), always hashes the fresh plan
+(with or without `--expect-plan`), reads the trust keys from `origin/HEAD` (the default branch; `ado pr create` takes the stricter of `origin/HEAD` and the PR's `--base` branch when
+that resolves to a commit here: comment mode from either wins, and when both are in comment mode their `approvers` must be the same set, else the
+apply is refused; an unresolvable `--base` leaves `origin/HEAD` alone), and then applies everything above: comment mode is refused while the token identity can bypass rules or that cannot be read, with no
+approvers, or when the comments are cut off or unreadable (exit 2, nothing written); the gates of one verb are ONE target for this plan: the newest valid command over all of them must be an `/approve` with that
+gate's hash, so a later `/reject` on any gate of the set (or an approval of another plan hash) cancels an earlier approval; the approval must be newer
+than every `[spec-kit-ado:approval-request] <gate> <hash>` comment of the set; and a newer malformed command line by an approver on any gate of the set
+refuses (fail closed) and is reported as `N newer malformed command line(s) by an approver for this plan: check the thread` (a count, never the text).
+The refusal text is fixed: it names the story, the gates and the hashes that would be accepted, never comment text or a display name. A plan that would
+write nothing (nothing to post, no task to create, a branch already linked) needs no approval. **Terminal mode (the default):** with no trust key anywhere,
+output and ADO requests are those of the previous build; the only addition is 1 to 4 read-only git calls per `--apply` of the five (1 without `origin/HEAD`, 3 when the target branch has no
+`ado.config.json`, 4 when it has one; `pr create` also resolves `--base`: 7 to 10). Three cases that applied before now exit 2 with nothing written, because the target branch's
+trust keys cannot be read (the same fail-closed rule as `ado done` since P4-11): `origin/HEAD` points at a branch that does not exist here, the
+target branch's `ado.config.json` is unreadable or invalid, and the working-tree config sets `approvers`, `approval` or `unattended` while there is no
+`origin/HEAD` ("set origin/HEAD or pass --base"). On GitHub, `gh` receives the PR body on stdin (the text that was read, shown in the plan and
+approved), never the body file again, so a file swapped after the approval is not sent.
+**Never approvable by comment** (they keep today's rules): `ado done --apply` (its own gates and the strict check), `ado strict override`, any
+`--force`, and the single-item verbs `create`, `update`, `link`, `comment`, `attach` and `pr comment`. **Residual:** in a Spec Kit workflow a
+persisted verdict does not stand in for the comment; a persisted verdict whose apply refuses ends FAILED: start a new run once the approver has
+commented. **Residuals (stated, not closed):** an approval stays valid for the same plan bytes, so re-running the apply of an identical plan (for
+example after the markers were stripped) is covered by the same comment until a newer `/reject` or request; the single-item verbs (`create`, `update`,
+`link`, `comment`) reach the same kinds of writes with no comment at all; and a hash handed to an approver without its plan is a blank check (the
+approver must read the plan text the hash was computed from, which is why the hash covers that text and not a summary). The poller of a later task must
+hash the rendered plan TEXT, not the `--plan-out` file: a plan over 190 lines gets a `⚠` first line naming the file, so the two differ. The CI service identity is added to the excluded identities by a later task of this version (the `ci_identity` parameter of
+`approvals.excluded` and `approvals.require` already exists).
 
 **Which comment counts (`ado.approvals`).** An approver approves by posting a comment whose **first non-empty line is the whole command**:
 `/approve D<n>` or `/reject D<n>: note` for a decision, `/answer Q<n>: text` for a question, `/approve <gate-id> <64 lowercase hex>` or

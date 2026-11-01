@@ -2563,3 +2563,29 @@ def test_done_time_cross_check_is_documented():
     assert "padding" in ci_az and "backstop" in ci_az and "backstop" in azr and "the merge-type limit is the control" in azr
     assert "Hangul fillers" in cfg and "variation-selector" in cfg and "first 64 characters" in cfg and "variation-selector" in log
     assert "on Azure after a rebase / fast-forward merge see the next row" in cfg
+
+
+def test_comment_approval_of_the_five_applies_is_documented():
+    """P4-12a: the gates, the hash, the never-approvable list and the FAILED residual are named where comment mode is."""
+    from ado import approvals
+    cfg, readme, agents, hitl, log, wf = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "CHANGELOG.md", "workflows/ado-lifecycle/README.md"))
+    for g in {g for gs in approvals.VERB_GATES.values() for g in gs}:
+        assert f"`{g}`" in cfg and f"`{g}`" in hitl, g
+    for needle in ("### Approvers and comment mode", "Comment approval inside the five applies", "approvals.gate_hash", "`origin/HEAD`", "newer malformed command line(s) by an approver for this plan",
+                   "**Never approvable by comment**", "`ado done --apply`", "`ado strict override`", "any `--force`", "a persisted verdict whose apply refuses ends FAILED: start a new run",
+                   "[spec-kit-ado:approval-request] <gate> <hash>", "A plan that would write nothing",
+                   "ONE target for this plan", "`gh` receives the PR body on stdin",
+                   "`origin/HEAD` points at a branch that does not exist here", "unreadable or invalid", "1 to 4 read-only git calls per `--apply` of the five", "`pr create` also resolves `--base`: 7 to 10", "a blank check",
+                   "hash the rendered plan TEXT, not the `--plan-out` file", "the single-item verbs", "for the same plan bytes"):
+        assert needle in cfg, needle
+    for doc in (hitl, readme, agents):
+        assert "/approve <gate> <hash>" in doc and "strict override" in doc and "--force" in doc, doc[:30]
+    assert "a persisted verdict whose apply refuses ends FAILED: start a new run" in hitl and "Never approvable by comment" in hitl
+    assert "newest valid command over the verb's whole gate set" in hitl and "newest valid command over the verb's whole gate set" in log
+    assert "newest valid command per gate" not in hitl + log + cfg
+    assert "blank check" in hitl and "stricter of `origin/HEAD`" in hitl and "one target for the plan" in hitl
+    assert "(P4-12a)" in log and "approvals.require(client, trust, story, verb, plan_bytes, ci_identity=None)" in log and "start a new run" in log
+    assert "`/approve <gate> <hash>` comment on the story" in wf and "ends the run FAILED" in wf
+    for cmd in ("commands/push.md", "commands/pr.md"):
+        assert "approval: \"comment\"" in _flat(cmd) and "never post it yourself" in _flat(cmd), cmd
+    assert "the other verbs that act on" not in hitl and "come later" not in cfg.split("Comment approval inside", 1)[0].split("### Approvers and comment mode", 1)[1]

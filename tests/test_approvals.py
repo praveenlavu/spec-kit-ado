@@ -536,3 +536,167 @@ def test_a_first_line_that_only_looks_empty_is_a_bad_line(cfg):
     for html in ("", "<p></p>", "<p> </p>", "<br><br>", "<p>&nbsp;</p>"):
         tally = {}
         assert _newest(cfg, [_cmd(1, html)], tally=tally)[0] is None and "bad" not in tally, repr(html)
+
+
+# ---- P4-12a: comment approval inside the five applies --------------------------------------------------------------------------------------
+import hashlib  # noqa: E402
+
+from ado.config import Trust  # noqa: E402
+from tests.conftest import RouteClient  # noqa: E402
+
+PLAN, STORY = b"# Plan: push\n| create | T001 |\n", 2
+T12 = Trust([HUMAN], "comment", {})
+GATES = {"questions-post": {"approve-questions", "approve-plan-questions", "approve-answers-questions"}, "push": {"approve-push", "approve-sync"},
+         "decisions-post": {"approve-decisions"}, "pr-create": {"approve-pr"}, "branch-link": {"branch-link"}}
+
+
+def _ok(g="approve-push", cid=11, date=D1, plan=PLAN, verb="approve", **kw):
+    return _cmd(cid, f"/{verb} {g} {approvals.gate_hash(g, STORY, plan)}", date, **kw)
+
+
+def _req(g="approve-push", cid=5, date="2026-10-01T09:00:00Z", plan=PLAN):
+    return raw_comment(cid, f"[spec-kit-ado:approval-request] {g} {approvals.gate_hash(g, STORY, plan)}<br>Plan shown here", date, author=KIT)
+
+
+def _require(cfg, raws, verb="push", trust=T12, plan=PLAN, **kw):
+    client = RouteClient(cfg, raws, me=ME, **kw)
+    approvals.require(client, trust, STORY, verb, plan)
+    return client
+
+
+def _refused(cfg, raws, verb="push", **kw):
+    with pytest.raises(approvals.ApprovalMissing) as e:
+        _require(cfg, raws, verb, **kw)
+    assert isinstance(e.value, approvals.ApprovalRefused) and isinstance(e.value, ValueError)
+    return str(e.value)
+
+
+def test_gate_hash_is_pinned():
+    h = approvals.gate_hash("approve-push", 1001, b"plan")
+    assert h == hashlib.sha256(b"spec-kit-ado/1\napprove-push\n1001\nplan").hexdigest() and len(h) == 64
+    assert len({h, approvals.gate_hash("approve-sync", 1001, b"plan"), approvals.gate_hash("approve-push", 1002, b"plan"),
+                approvals.gate_hash("approve-push", 1001, b"plan2")}) == 4
+
+
+def test_verb_gates_are_the_five_applies():
+    assert approvals.VERB_GATES == GATES
+
+
+@pytest.mark.parametrize("verb,gate", [(v, g) for v, gs in sorted(GATES.items()) for g in sorted(gs)])
+def test_apply_passes_with_any_gate_in_verb_set(cfg, verb, gate):
+    client = _require(cfg, [_ok(gate)], verb)
+    assert all(c["method"] == "GET" for c in client.calls)  # reads only
+
+
+@pytest.mark.parametrize("verb", sorted(GATES))
+def test_apply_refuses_without_comment_in_comment_mode(cfg, verb):
+    msg = _refused(cfg, [_cmd(1, "looks good to me", D1), _cmd(2, "/approve D1", D1)], verb)
+    assert all(g in msg for g in GATES[verb]) and str(STORY) in msg
+
+
+def test_gate_outside_verb_set_refused(cfg):
+    for verb, other in (("push", "approve-pr"), ("pr-create", "approve-push"), ("questions-post", "approve-decisions"), ("decisions-post", "branch-link"),
+                        ("branch-link", "approve-sync")):
+        _refused(cfg, [_ok(other)], verb)
+
+
+def test_stale_hash_refused(cfg):
+    _refused(cfg, [_ok(plan=b"an older plan\n")])
+    assert _require(cfg, [_ok(plan=b"an older plan\n"), _ok(cid=12, date=D2)]) is not None  # a newer approval of this plan wins
+    _refused(cfg, [_ok(cid=12, date=D1), _ok(plan=b"an older plan\n", cid=13, date=D2)])  # newest wins: the later approval is of another plan
+
+
+def test_comment_older_than_request_refused(cfg):
+    late = _req(date="2026-10-01T11:00:00Z")
+    _refused(cfg, [_ok(date="2026-10-01T10:00:00Z"), late])
+    assert _require(cfg, [late, _ok(cid=12, date="2026-10-01T12:00:00Z")]) is not None
+    assert _require(cfg, [_req(plan=b"another plan"), _ok(date="2026-10-01T10:00:00Z")]) is not None  # a request for another plan is not this plan's
+    assert _require(cfg, [_req(g="approve-sync"), _ok("approve-push")]) is not None  # nor is the other gate's request for the same hash...
+    _refused(cfg, [_req(g="approve-sync", date="2026-10-01T11:00:00Z"), _ok("approve-sync", date="2026-10-01T10:00:00Z")])
+    _refused(cfg, [raw_comment(5, f"[spec-kit-ado:approval-request] approve-push {approvals.gate_hash('approve-push', STORY, PLAN)}", "not a date", author=KIT), _ok()])
+
+
+def test_refused_when_bypass_bit_true_or_unreadable(cfg):
+    for bypass in (True, AdoError("HTTP 403", status=403)):
+        client = RouteClient(cfg, [_ok()], bypass=bypass, me=ME)
+        with pytest.raises(approvals.ApprovalRefused) as e:
+            approvals.require(client, T12, STORY, "push", PLAN)
+        assert str(e.value) == approvals.BYPASS_REFUSAL and not isinstance(e.value, approvals.ApprovalMissing)
+        assert not any("/comments" in c["path"] for c in client.calls)  # refused before the comments are read
+
+
+def test_refused_without_approvers_unreadable_or_unknown_identity(cfg):
+    assert "approvers" in _refused(cfg, [_ok()], trust=Trust([], "comment", {}))
+    cut = {"comments": [raw_comment(1, "x", D1)], "continuationToken": "same"}
+    for resp in ([cut, cut], [{"comments": "SEKRET dana@contoso.example"}], [{"comments": [{"id": "SEKRET"}]}]):
+        client = RouteClient(cfg, [], me=ME)
+        client.raw = None
+        calls = iter(resp)
+        client.request = lambda method, path, body=None, **k: next(calls) if "/comments?" in path else RouteClient.request(client, method, path, body, **k)
+        with pytest.raises(approvals.ApprovalMissing) as e:
+            approvals.require(client, T12, STORY, "push", PLAN)
+        assert "SEKRET" not in str(e.value) and "unreadable" in str(e.value)
+    with pytest.raises(approvals.ApprovalMissing) as e:
+        approvals.require(RouteClient(cfg, [_ok()], me=ANON), T12, STORY, "push", PLAN)
+    assert "SEKRET" not in str(e.value)
+
+
+def test_agent_kit_and_strangers_never_approve(cfg):
+    for who in (ME, KIT, "88888888-8888-4888-8888-888888888888", CI):
+        _refused(cfg, [_ok(author=who)])
+    _refused(cfg, [_ok(on_behalf=HUMAN)])
+    _refused(cfg, [_ok(version=2)], responses=[versions_response((1, "/approve", D1))])  # edited
+    with pytest.raises(approvals.ApprovalMissing):  # the CI identity plumbing: excluded when given
+        approvals.require(RouteClient(cfg, [_ok(author=CI)], me=ME), Trust([CI], "comment", {}), STORY, "push", PLAN, ci_identity=CI)
+
+
+def test_bad_newer_is_reported_and_refuses(cfg):
+    ok = _ok(date=D1)
+    msg = _refused(cfg, [ok, _cmd(12, f"/approve approve-push {approvals.gate_hash('approve-push', STORY, PLAN)[:60]}", D2)])  # truncated hash
+    assert "1 newer malformed" in msg
+    assert "2 newer malformed" in _refused(cfg, [ok, _cmd(12, "/reject (approve-push)", D2), _cmd(13, "/reject approve-push", "2026-10-01T10:00:01Z")])
+    assert _require(cfg, [_cmd(12, "/reject approve-push", D1), _ok(cid=13, date=D2)]) is not None  # an OLDER malformed line is harmless
+    assert _require(cfg, [ok, _cmd(12, "/approve (D1)", D2, author="99999999-9999-4999-8999-999999999999")]) is not None  # not an approver's
+    assert _require(cfg, [ok, _cmd(12, "/reject approve-pr", D2)]) is not None  # a different well-formed target
+    assert "malformed" in _refused(cfg, [_cmd(12, "/approve approve-push", D2)])  # no valid approval, but the count is still shown
+    assert "malformed" not in _refused(cfg, [])
+
+
+def test_newer_valid_reject_refuses(cfg):
+    _refused(cfg, [_ok(date=D1), _ok(verb="reject", cid=12, date=D2)])
+    assert _require(cfg, [_ok(verb="reject", cid=12, date=D1), _ok(cid=13, date=D2)]) is not None
+
+
+def test_refusal_text_is_fixed(cfg):
+    a = _refused(cfg, [_cmd(1, f"/reject approve-push {approvals.gate_hash('approve-push', STORY, PLAN)}: SEKRET dana@contoso.example Dana Fictional", D1)])
+    b = _refused(cfg, [_cmd(1, "something else", D1)])
+    assert a == b and "SEKRET" not in a and "Dana" not in a and "contoso" not in a
+    assert a == approvals.E_MISSING.format(story=STORY, gates=", ".join(f"{g} {approvals.gate_hash(g, STORY, PLAN)}" for g in sorted(GATES["push"])), bad="")
+
+
+def test_terminal_mode_noop(cfg):
+    for trust in (Trust([HUMAN], "terminal", {}), Trust([], "terminal", {})):
+        client = RouteClient(cfg, [], bypass=True)
+        assert approvals.require(client, trust, STORY, "push", PLAN) is None and client.calls == []
+
+
+def test_the_verbs_gates_are_one_target_for_this_plan(cfg):
+    """P4-12a fix 1: a human's `/reject` (valid or malformed) or an approval request on a SIBLING gate of the same verb stops the apply."""
+    ok = _ok("approve-push", date=D1)
+    _refused(cfg, [ok, _ok("approve-sync", verb="reject", cid=12, date=D2)])  # same hash, other gate of the set
+    _refused(cfg, [ok, _cmd(12, "/reject approve-sync", D2)])  # malformed reject on the other gate
+    _refused(cfg, [ok, _cmd(12, "/reject (approve-sync)", D2)])
+    _refused(cfg, [ok, _req("approve-sync", date="2026-10-01T11:00:00Z")])  # a newer request on the other gate
+    _refused(cfg, [ok, _req("approve-push", date="2026-10-01T11:00:00Z")])
+    _refused(cfg, [ok, _ok("approve-sync", plan=b"an older plan\n", cid=12, date=D2)])  # another plan's approval on the sibling gate
+    for older in ("approve-push", "approve-sync"):  # reject first, a later approval wins; either gate may carry either command
+        for newer in ("approve-push", "approve-sync"):
+            assert _require(cfg, [_ok(older, verb="reject", cid=12, date=D1), _ok(newer, cid=13, date=D2)]) is not None
+    # three gates: questions
+    q = ("approve-questions", "approve-plan-questions", "approve-answers-questions")
+    _refused(cfg, [_ok(q[0], date=D1), _ok(q[2], verb="reject", cid=12, date=D2)], "questions-post")
+    assert _require(cfg, [_ok(q[2], verb="reject", cid=12, date=D1), _ok(q[0], cid=13, date=D2)], "questions-post") is not None
+    # an older malformed line, before the approval, is harmless on every gate of the set
+    assert _require(cfg, [_cmd(12, "/reject approve-sync", D1), _cmd(13, "/reject (x)", D1), _ok(cid=14, date=D2)]) is not None
+    # a request that is OLDER than the approval is fine for every gate
+    assert _require(cfg, [_req("approve-sync"), _req("approve-push", cid=6), _ok(date=D1)]) is not None
