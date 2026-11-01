@@ -189,7 +189,7 @@ argument problem, or a plan that changed since approval (`--expect-plan`); `3` o
 ## Where a story is
 
 `ado status <id>` answers "what do I do next?" with the first stage a story has not met and one command: `Story 1001: tasks-ticked. Next: speckit.ado.implement 1001`
-(`Why:` adds a fixed sentence; `--json` prints `{stage, next, why, board_checked, run, not_checked, board}`). It writes nothing and prints stage ids, counts and the
+(`Why:` adds a fixed sentence; `--json` prints `{stage, next, why, board_checked, run, run_notes, not_checked, board}`, and `catch_up` with `--catch-up`). It writes nothing and prints stage ids, counts and the
 story id only: never ledger, spec, decision, comment or ADO text. It exits `0` whatever the stage and `2` for a usage error.
 
 | Stage | Met when | Needs ADO |
@@ -215,6 +215,20 @@ story id only: never ledger, spec, decision, comment or ADO text. It exits `0` w
 A board stage is never reported as met when ADO could not be read. With `--offline`, with no token, or after one failed request, the remaining board
 stages are not tried: they are listed as `Board not checked` and skipped, so the answer is the first unmet stage that could be read. If everything
 that could be read is met, the stage is `board not checked` and the next command is `ado status <id>` (offline) or `ado doctor` (an error); it is never
-`done`. `board_checked` is false whenever the board was not read, even if the answer is a local stage. An unclosed code fence or comment in the ledger gets `ado dod <id> --refresh` only when it is in section 1 (a refresh splices from section 2); elsewhere the fix is by hand. A file that cannot be read (a symlink, outside the working tree, over 1 MiB, not UTF-8) leaves its stage unmet. `--catch-up` is accepted and ignored
-for now; reading the newest `ado-lifecycle` run is a later task. This is process help, not a security boundary: the ledger, the spec dir and the decisions
+`done`. `board_checked` is false whenever the board was not read, even if the answer is a local stage. An unclosed code fence or comment in the ledger gets `ado dod <id> --refresh` only when it is in section 1 (a refresh splices from section 2); elsewhere the fix is by hand. A file that cannot be read (a symlink, outside the working tree, over 1 MiB, not UTF-8) leaves its stage unmet.
+
+**Runs.** After the stage line, `ado status` reads the newest (by `updated_at`) `ado-lifecycle` run of the story from `.specify/workflows/runs/<run-id>/state.json` and prints a fixed `Run <run-id>: ...` line:
+
+| Run status | Line |
+|---|---|
+| `paused` | at a gate: answer it in a terminal; then `specify workflow resume <run-id>` |
+| `failed` | the failed step and `specify workflow resume <run-id>` (it re-runs that step and everything after it) |
+| `running` | over 1 hour since `updated_at` by the **server's** time: "the run may have been killed: resume refuses a running run", with the documented manual fix (set `status` to `failed` in that `state.json`, then resume; the kit never edits Spec Kit's files). No client, `--offline` or no server time: the age is not judged and the line says so. The local clock is never used |
+| `aborted` | resume refuses it: `ado status <id> --catch-up` |
+| `completed` | `--catch-up` too, when the story is still at a stage before `pr-link` |
+| `created` | "created, not started" |
+
+The state file is untrusted data (the agent can edit it): the read is confined (no symlink, only below `.specify/workflows/runs/`, at most 1 MiB, run id `^[a-zA-Z0-9][a-zA-Z0-9_-]*$`, no path built from file text); only the six Spec Kit statuses and the step ids of the shipped `ado-lifecycle` workflow are accepted (a built-in list pinned by a test against `workflows/ado-lifecycle/workflow.yml`, not the installed copy the agent could edit; a loop step is `<loop>:<step>:<n>` with both ids in the list and `n` digits); `output`, `error`, `execution` and every other field are never read or printed; the commands are fixed templates (story id and run id only). A run file tied to the story with an unknown status, a missing key or an unknown step gives "not readable by this ado version; use specify workflow status"; an oversized, symlinked or unparsable file is ignored and counted in one line (`Run: N run file(s) ignored ...`); with more than 2000 run directories the rest is reported as `older runs not examined`, not as unreadable.
+
+`--catch-up` prints, in the order the workflow runs its steps (implement, decisions, verify, sync, gate, review, PR), the fixed-template commands for the stages that are **not** met. A local stage that is met lists nothing: its file (`plan.md`, a ticked `tasks.md`, the gate and review results) is the evidence, and `speckit.ado.plan` or `speckit.ado.implement` would regenerate it. A board stage that is unmet, or could not be read, lists only its preview and apply (`ado questions`, `ado push`, `ado decisions`: a preview with `--plan-out`, your yes, then the apply with `--expect-plan`); an unread `pr-link` lists nothing, because the PR may exist. Offline (or after a read error) with every local stage met the answer is "local stages are all met; board stages not checked: run `ado status <id>` online". Strict-only steps (`ado strict verify`) appear in strict mode only. The list ends with "run `ado status <id>` again after each step": the plan-questions round that `plan` can raise and the `wait-po-answers` gate are not modelled, so the list is the part of the recovery your story still needs, not a replay of the workflow. This is process help, not a security boundary: the ledger, the spec dir and the decisions
 file come from the branch and can be edited.

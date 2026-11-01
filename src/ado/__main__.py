@@ -497,7 +497,7 @@ def _status(args):
     except ConfigError:
         cfg = None  # the `config` stage says so
     client = None if args.offline or cfg is None else AdoClient(cfg)
-    result = status.evaluate(client, args.id, ".", offline=args.offline)
+    result = status.evaluate(client, args.id, ".", offline=args.offline, with_catch_up=args.catch_up)
     print(json.dumps(result, indent=2) if args.json else status.render(result, args.id))
     return 0
 
@@ -630,7 +630,7 @@ def main(argv=None):
     p.add_argument("id", type=int)
     p.add_argument("--json", action="store_true", help="print the result as JSON")
     p.add_argument("--offline", action="store_true", help="do not read ADO: the board stages are 'not checked', never met")
-    p.add_argument("--catch-up", action="store_true", help="accepted and ignored for now (run awareness arrives in a later task)")
+    p.add_argument("--catch-up", action="store_true", help="also print the ordered commands that bring the story from its first unmet stage to an open PR (after an aborted run)")
     p = sub.add_parser("get", help="Get a work item (with relations)")
     p.add_argument("id", type=int)
     p = sub.add_parser("query", help="Run a WIQL query")

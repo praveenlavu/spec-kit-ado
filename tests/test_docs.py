@@ -2318,10 +2318,33 @@ def test_status_doc_pins():
     for i in ids:
         assert f"`{i}`" in cfg and f"`{i}`" in readme, i
     assert "Story 1001: <stage>. Next: <command>" in readme and "`board not checked`" in cfg and "never `done`" in cfg
-    assert "never reported as met when ADO could not be read" in readme and "`--catch-up` is accepted and ignored" in cfg
+    assert "never reported as met when ADO could not be read" in readme and "## Where a story is" in (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
     assert "ado status <id> [--json] [--offline] [--catch-up]" in agents and "never ADO text" in agents and "`ado status`" in hitl
     assert "ado status <id>" in _flat("commands/status.md")
     for t in (readme, cfg):
         assert "vstfs:///GitHub/PullRequest/<repo guid>%2f<number>" in t and "Azure Boards GitHub app is authorised" in t and "not confirmed" not in t.split("pr-link")[1][:900]
     assert "`### Review`" in readme and "a commit that merely names the story does not count" in readme
     assert "not an authorship check" in cfg and "the live `rule_drift` check is in `ado gate`" in cfg and "git remote set-head origin --auto" in cfg
+
+
+def test_status_run_awareness_doc_pins():
+    cfg, readme, agents, wfr, status_md = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "workflows/ado-lifecycle/README.md", "commands/status.md"))
+    log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert log.index("## 0.3.0 — unreleased") < log.index("`ado status` run awareness and `--catch-up` (P4-5)") < log.index("## 0.2")
+    for t in (cfg, readme):
+        for needle in ("specify workflow resume <run-id>", "`output`", "`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`", "<loop>:<step>:<n>", "**server's**", "never read or printed",
+                       "not readable by this ado version; use specify workflow status", "`--catch-up` prints", "fixed templates"):
+            assert needle in t, needle
+    assert "the local clock is never used" in cfg.lower() or "never the local one" in readme
+    assert "resume refuses a running run" in cfg and "set `status` to `failed`" in cfg and "kit never edits Spec Kit's files" in cfg
+    assert "never step outputs" in wfr and "ado status <id> --catch-up" in wfr and '"status": "failed"' in wfr and "kill -9" in wfr
+    assert "`Run <id>: ...` line" in status_md and "never edit that state file yourself" in status_md and "server's time" in status_md
+    assert "`--catch-up` lists the commands" in agents and "never its `output`" in agents
+    for text in (cfg, readme):
+        for needle in ("`older runs not examined`", "run file(s) ignored", "a built-in list", "not the installed", "local stages are all met; board stages not checked",
+                       "again after each step", "`wait-po-answers`", "not modelled"):
+            assert needle in text, needle
+    assert "a local stage that is met lists nothing" in readme and "A local stage that is met lists nothing" in cfg
+    assert "only stages that are not met" in wfr and "not modelled" in wfr
+    assert "it never lists plan, tasks or implement for work that exists" in status_md and "again after each step" in status_md
+    assert "pinned against the shipped workflow" in log and "older runs not examined" in log

@@ -2,9 +2,13 @@
 
 Every scenario is a real temporary git repository with a ledger, a spec dir and commits (the gate, review and verification record are judged
 against git) and a `Board` that answers the few ADO reads status makes and fails the test on any write."""
+import datetime
 import hashlib
 import json
 import os
+import re
+import shutil
+from pathlib import Path
 
 import pytest
 
@@ -528,7 +532,7 @@ def test_verb_json(env, capsys, main_with):
     assert main_with(Board(cfg), ["--json"]) == 0
     res = json.loads(capsys.readouterr().out)
     assert res["stage"] == "plan" and res["next"] == f"speckit.ado.plan {ID}" and res["board_checked"] is True and res["run"] is None
-    assert set(res) == {"stage", "next", "why", "board_checked", "run", "not_checked", "board"}
+    assert set(res) == {"stage", "next", "why", "board_checked", "run", "run_notes", "not_checked", "board"} and res["run_notes"] == []
 
 
 def test_verb_offline_builds_no_client_and_prints_what_was_not_checked(env, capsys, monkeypatch):
@@ -563,15 +567,6 @@ def test_verb_rejects_a_bad_id(env, capsys, bad):
     assert e.value.code == 2 and "error" in capsys.readouterr().err
 
 
-def test_verb_accepts_catch_up_and_it_changes_nothing_yet(env, capsys, main_with):
-    cfg = world(env, plan=False)
-    assert main_with(Board(cfg), []) == 0
-    plain = capsys.readouterr().out
-    assert main_with(Board(cfg), ["--catch-up"]) == 0
-    assert capsys.readouterr().out == plain
-
-
-
 def test_board_checked_is_false_offline_even_for_a_local_stage(env):
     world(env, ledger=False)
     res = check(env, None, "ledger", offline=True)
@@ -588,3 +583,425 @@ def test_unclosed_fence_next_is_a_refresh_only_when_it_can_repair(env):
     check(env, Board(cfg), "ledger", "section 1", nxt=f"ado dod {ID} --refresh")
     p.write_text(good + "\n```\n")  # opened after section 2: a refresh refuses, so it is by hand
     res = check(env, Board(cfg), "ledger", "by hand", nxt=f"ado status {ID}")
+
+
+# ---- run awareness (P4-5): Spec Kit's run state files are read as untrusted data ----
+BOARD = status.BOARD_NOT_CHECKED
+ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = ROOT / "tests" / "fixtures" / "runs"
+OUTPUT = "ZZ-OUTPUT-TEXT"  # every fixture step holds this in its `output`: it must never be read or printed
+NOW = datetime.datetime(2026, 11, 2, 12, 0, 0, tzinfo=datetime.timezone.utc)
+
+
+class Clocked(Board):
+    """A board that also knows the server's time (the only clock the 'running for over 1 h' rule may use)."""
+
+    def __init__(self, *a, now=NOW, **kw):
+        super().__init__(*a, **kw)
+        self.now = now
+
+    def server_now(self):
+        return self.now
+
+
+def runs_dir(repo):
+    return Path(repo) / ".specify" / "workflows" / "runs"
+
+
+def put_run(repo, fixture, rdir=None, **over):
+    """Copy a sanitized fixture to <repo>/.specify/workflows/runs/<run_id>/state.json, with top-level keys overridden (None deletes one)."""
+    data = json.loads((FIXTURES / f"{fixture}.json").read_text(encoding="utf-8"))
+    rid = rdir or data["run_id"]  # the directory name; the file's own run_id is the fixture's/rid unless overridden
+    data.update({"run_id": rid, **over})
+    for k in [k for k, v in data.items() if v is None and k in over]:
+        del data[k]
+    d = runs_dir(repo) / rid
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "state.json").write_text(json.dumps(data), encoding="utf-8")
+    return d / "state.json"
+
+
+@pytest.fixture
+def wf(env):
+    """A project with no installed workflow: step ids are a constant of the shipped workflow, never read from the (agent-editable) installed file."""
+    return env
+
+
+def ago(**kw):
+    return (NOW - datetime.timedelta(**kw)).isoformat()
+
+
+def test_paused_prints_resume(wf):
+    put_run(wf, "paused-gate")
+    run = status.read_run(str(wf), ID)
+    assert run == {"run_id": "aaaa0006", "status": "paused", "step": "review-spec", "updated_at": "2026-10-31T03:59:16.620745+00:00"}
+    cfg = world(wf, plan=False)
+    res = check(wf, Board(cfg), "plan")
+    assert res["run"] == run
+    text = status.render(res, ID)
+    assert "Run aaaa0006: paused at gate review-spec. Answer it in a terminal: specify workflow resume aaaa0006" in text.splitlines()
+    assert text.splitlines()[0] == f"Story {ID}: plan. Next: speckit.ado.plan {ID}"  # the stage answer is unchanged
+
+
+def test_failed_names_step_and_resume(wf):
+    put_run(wf, "failed-pull-cli")
+    res = check(wf, None, offline=True)
+    assert res["run"]["status"] == "failed" and res["run"]["step"] == "pull"
+    assert ("Run aaaa0002: failed at pull. Resume (it re-runs that step and everything after it): specify workflow resume aaaa0002"
+            in status.render(res, ID).splitlines())
+
+
+@pytest.mark.parametrize("step", ["push-loop:push-preview:1", "push-loop:approve-push:12", "pr-loop:pr-apply:3"])
+def test_nested_loop_step_id_accepted(wf, step):
+    put_run(wf, "failed-after-loop", current_step_id=step)
+    assert status.read_run(str(wf), ID)["step"] == step  # R:33: `<loop>:<step>:<n>` with both ids shipped
+
+
+@pytest.mark.parametrize("step", ["nope", "push-loop:nope:1", "nope:push-preview:1", "push-loop:push-preview:x", "push-loop:push-preview:", "push-loop:push-preview:1:2",
+                                  "push-loop:push-preview:-1", "push-loop:push-preview:1\nrm -rf", "push-loop:push-preview:\u0661", "PULL", "pull; id", "", None, 7, ["pull"]])
+def test_nested_id_with_unknown_part_ignored(wf, step):
+    put_run(wf, "failed-after-loop", current_step_id=step)
+    assert status.read_run(str(wf), ID) is None
+    res = status.evaluate(None, ID, str(wf), offline=True)
+    assert res["run"] is None and res["run_notes"] == [status.RUN_UNREADABLE.format(n=1)]
+
+
+def test_running_over_1h_prints_killed_run_advice(wf):
+    put_run(wf, "paused-gate", status="running", current_step_id="implement", updated_at=ago(hours=2))
+    cfg = world(wf, plan=False)
+    res = check(wf, Clocked(cfg), "plan")
+    lines = status.render(res, ID).splitlines()
+    assert ("Run aaaa0006: running at implement, last update over 1 h ago. The run may have been killed: resume refuses a running run. If it was, set "
+            '"status" to "failed" in .specify/workflows/runs/aaaa0006/state.json by hand, then: specify workflow resume aaaa0006') in lines
+
+
+def test_running_under_1h_is_just_running(wf):
+    put_run(wf, "paused-gate", status="running", current_step_id="implement", updated_at=ago(minutes=59))
+    res = check(wf, Clocked(world(wf, plan=False)), "plan")
+    assert "Run aaaa0006: running at implement." in status.render(res, ID).splitlines() and "killed" not in status.render(res, ID)
+
+
+def test_time_rule_needs_server_time_never_the_local_clock(wf, monkeypatch):
+    put_run(wf, "paused-gate", status="running", current_step_id="implement", updated_at="2020-01-01T00:00:00+00:00")  # years old by the local clock
+    cfg = world(wf, plan=False)
+    for client, kw in ((Board(cfg), {}), (None, {"offline": True}), (Board(cfg), {"offline": True})):  # no server_now / no client / offline
+        res = status.evaluate(client, ID, str(wf), **kw)
+        text = status.render(res, ID)
+        assert "killed" not in text and "Run aaaa0006: running at implement; its age was not checked (no server time)." in text.splitlines()
+    class Broken(Board):
+        def server_now(self):
+            raise AdoError("down", None, "network")
+    class Weird(Board):
+        def server_now(self):
+            raise RuntimeError("boom")
+    for bad in (Broken(cfg), Weird(cfg), Clocked(cfg, now=None), Clocked(cfg, now="2026-11-02")):  # a failed or unusable server time
+        text = status.render(status.evaluate(bad, ID, str(wf)), ID)
+        assert "killed" not in text and "Run aaaa0006: running at implement; its age was not checked (no server time)." in text.splitlines()
+    monkeypatch.setattr("time.time", lambda: pytest.fail("the local clock was read"))
+    status.render(status.evaluate(Board(cfg), ID, str(wf)), ID)
+
+
+def test_server_time_before_the_update_is_not_over_an_hour(wf):
+    put_run(wf, "paused-gate", status="running", current_step_id="implement", updated_at=ago(hours=-5))  # the file claims a future time
+    res = check(wf, Clocked(world(wf, plan=False)), "plan")
+    assert "killed" not in status.render(res, ID)
+
+
+def test_server_time_is_not_asked_unless_a_run_is_running(wf):
+    put_run(wf, "paused-gate")
+    cfg = world(wf, plan=False)
+    board = Clocked(cfg)
+    board.server_now = lambda: pytest.fail("server time asked for a paused run")
+    check(wf, board, "plan")
+
+
+def test_aborted_catch_up_order(wf):
+    put_run(wf, "aborted-review-spec", current_step_id="review-review")
+    cfg = world(wf, mode="strict", plan=False, tasks="open")  # plan.md missing, tasks unticked, no verification record: three unmet stages
+    res = status.evaluate(Board(cfg), ID, str(wf), with_catch_up=True)
+    assert res["run"]["status"] == "aborted"
+    assert "Run aaaa0004: aborted at review-review; resume refuses it. Bring the story up to date with: ado status 1001 --catch-up" in status.render(res, ID).splitlines()
+    # only the unmet stages, in the workflow's order (implement, then verify); met stages (tasks.md, the gate, the review, the PR link) list nothing
+    assert res["catch_up"] == [f"speckit.ado.plan {ID}", f"speckit.ado.implement {ID}", f"ado strict verify {ID}"]
+    out = status.render(res, ID).splitlines()
+    assert out[-5:] == ["Catch-up (in order; after each preview read it and decide before the apply):", f"1. speckit.ado.plan {ID}",
+                        f"2. speckit.ado.implement {ID}", f"3. ado strict verify {ID}", status.CATCH_UP_AGAIN.format(id=ID)]
+    assert out[-1].startswith(f"Run `ado status {ID}` again after each step:") and "`wait-po-answers`" in out[-1] and "not modelled" in out[-1]
+
+
+def test_catch_up_follows_the_workflows_order_and_never_lists_a_generation_command_for_met_stages(wf):
+    """Everything unmet at once: the commands come in the order the shipped workflow runs its steps."""
+    world(wf, mode="strict", ledger=False)
+    res = status.evaluate(Board(Config.load(str(wf))), ID, str(wf), with_catch_up=True)
+    wf_text = (ROOT / "workflows" / "ado-lifecycle" / "workflow.yml").read_text(encoding="utf-8")
+    pos = {k: wf_text.index(f"- id: {k}\n") for k in ("implement", "decisions-loop", "strict-verify", "sync-loop", "gate", "review", "pr-prepare")}
+    assert list(pos.values()) == sorted(pos.values())  # the order the catch-up table assumes
+    cmds = res["catch_up"]
+    order = [f"speckit.ado.implement {ID}", f"ado decisions {ID} --post --if-any --plan-out .ado/plan-decisions.md", f"ado strict verify {ID}",
+             f"ado push {ID} --plan-out .ado/plan-sync.md", f"speckit.ado.gate {ID}", f"speckit.ado.review {ID}"]
+    present = [cmds.index(x) for x in order if x in cmds]
+    assert present == sorted(present) and f"ado strict verify {ID}" in cmds
+
+
+def test_catch_up_lists_only_the_gate_review_and_pr_when_those_are_unmet_and_skips_strict_only_steps_in_advisory(wf):
+    put_run(wf, "aborted-review-spec", current_step_id="review-review")
+    cfg = world(wf, gate=None)
+    res = status.evaluate(Board(cfg, relations=()), ID, str(wf), with_catch_up=True)
+    assert res["stage"] == "gate"
+    assert res["catch_up"] == [f"speckit.ado.gate {ID}", f"speckit.ado.pr {ID}"]  # the review is met; no `ado strict verify` in advisory mode
+
+
+def test_catch_up_when_the_story_is_current_is_empty(wf):
+    cfg = world(wf)
+    res = status.evaluate(Board(cfg), ID, str(wf), with_catch_up=True)
+    assert res["catch_up"] == [] and "Catch-up: nothing to catch up." in status.render(res, ID).splitlines()
+
+
+def test_catch_up_offline_on_a_done_story_lists_no_generation_command(wf):
+    world(wf)  # plan.md, tasks.md ticked, gate, review: everything local is met
+    res = status.evaluate(None, ID, str(wf), offline=True, with_catch_up=True)
+    assert res["stage"] == BOARD and res["catch_up"] == []
+    text = status.render(res, ID)
+    assert f"Catch-up: local stages are all met; board stages not checked: run `ado status {ID}` online." in text.splitlines()
+    assert "speckit.ado" not in text.split("Catch-up")[1]
+
+
+def test_catch_up_online_error_on_a_done_story_is_the_same(wf):
+    cfg = world(wf)
+    res = status.evaluate(Board(cfg, fail=AdoError("down", None, "network")), ID, str(wf), with_catch_up=True)
+    assert res["catch_up"] == [] and "board stages not checked" in status.render(res, ID)
+
+
+def test_catch_up_a_late_unposted_question_lists_only_that_stages_preview_and_apply(wf):
+    cfg = world(wf)  # complete, then the posted questions comment no longer matches section 2
+    res = status.evaluate(Board(cfg, comments=[questions_comment("something else")]), ID, str(wf), with_catch_up=True)
+    assert res["stage"] == "questions-posted"
+    assert res["catch_up"] == [f"ado questions {ID} --post --plan-out .ado/plan-questions.md", f"ado questions {ID} --post --apply --expect-plan .ado/plan-questions.md"]
+
+
+def test_catch_up_an_open_unposted_question_waits_for_the_post_before_plan(wf):
+    cfg = world(wf, questions="open")
+    res = status.evaluate(Board(cfg), ID, str(wf), with_catch_up=True)
+    assert res["catch_up"] == [f"ado questions {ID} --post --plan-out .ado/plan-questions.md", f"ado questions {ID} --post --apply --expect-plan .ado/plan-questions.md"]
+
+
+def test_catch_up_offline_with_a_local_gap_lists_that_stage_and_the_unread_board_previews_but_never_pr(wf):
+    world(wf, plan=False)
+    res = status.evaluate(None, ID, str(wf), offline=True, with_catch_up=True)
+    cmds = res["catch_up"]
+    assert f"speckit.ado.plan {ID}" in cmds and f"ado push {ID} --plan-out .ado/plan-push.md" in cmds
+    assert f"speckit.ado.tasks {ID}" not in cmds and f"speckit.ado.implement {ID}" not in cmds and f"speckit.ado.pr {ID}" not in cmds  # their evidence exists / PR may exist
+
+
+def test_catch_up_items_are_fixed_templates(wf):
+    world(wf, mode="strict", ledger=False)
+    cmds = status.evaluate(Board(Config.load(str(wf))), ID, str(wf), with_catch_up=True)["catch_up"]
+    assert cmds and all(re.fullmatch(r"(speckit\.ado\.[a-z]+|ado [a-z]+)( [a-z]+)? 1001( --[a-z-]+( \.ado/[a-z-]+\.md)?)*", c) for c in cmds), cmds
+
+
+def test_catch_up_without_a_config_is_the_setup_command(wf):
+    res = status.evaluate(None, ID, str(wf), offline=True, with_catch_up=True)
+    assert res["stage"] == "config" and res["catch_up"] == ["ado setup"]
+
+
+def test_catch_up_without_a_ledger_starts_with_pull_and_ends_before_the_pr_when_unread(wf):
+    world(wf, ledger=False)
+    res = status.evaluate(Board(Config.load(str(wf))), ID, str(wf), with_catch_up=True)
+    assert res["stage"] == "ledger" and res["catch_up"][0] == f"speckit.ado.pull {ID}"
+
+
+def test_completed_run_with_an_earlier_stage_points_at_catch_up(wf):
+    put_run(wf, "completed-azure")
+    cfg = world(wf, plan=False)
+    res = check(wf, Board(cfg), "plan")
+    assert f"Run aaaa0003: completed, but the story is at plan, before the PR: ado status {ID} --catch-up" in status.render(res, ID).splitlines()
+
+
+def test_completed_run_with_the_story_at_the_pr_is_just_completed(wf):
+    put_run(wf, "completed-azure")
+    cfg = world(wf)
+    assert "Run aaaa0003: completed." in status.render(check(wf, Board(cfg), "done"), ID).splitlines()
+
+
+def test_unknown_status_not_readable(wf):
+    put_run(wf, "paused-gate", status="exploded")
+    assert status.read_run(str(wf), ID) is None
+    res = status.evaluate(None, ID, str(wf), offline=True)
+    assert res["run"] is None and status.RUN_UNREADABLE.format(n=1) in status.render(res, ID)
+    assert "not readable by this ado version; use specify workflow status" in status.RUN_UNREADABLE
+
+
+@pytest.mark.parametrize("key", ["run_id", "workflow_id", "status", "current_step_id", "inputs", "updated_at"])
+def test_missing_keys_not_readable(wf, key):
+    put_run(wf, "paused-gate", **{key: None})
+    assert status.read_run(str(wf), ID) is None
+
+
+@pytest.mark.parametrize("over", [{"updated_at": "yesterday"}, {"updated_at": "2026-10-31T03:59:16"}, {"updated_at": 5}, {"inputs": {"story_id": True}},
+                                  {"inputs": []}, {"run_id": "bbbb9999"}, {"status": ["paused"]}, {"status": "PAUSED"}])
+def test_malformed_values_not_readable(wf, over):
+    put_run(wf, "paused-gate", **over)
+    assert status.read_run(str(wf), ID) is None
+
+
+def test_only_this_story_and_this_workflow_count(wf):
+    put_run(wf, "paused-gate", rdir="r-other-story", inputs={"story_id": 1002})
+    put_run(wf, "paused-gate", rdir="r-other-flow", workflow_id="speckit")
+    put_run(wf, "paused-gate", rdir="r-str-id", inputs={"story_id": "1001"})
+    assert status.read_run(str(wf), ID) is None
+    assert status.evaluate(None, ID, str(wf), offline=True)["run_notes"] == []  # someone else's run is no finding
+
+
+def test_the_newest_run_by_updated_at_wins(wf):
+    put_run(wf, "paused-gate", rdir="r-old", updated_at="2026-10-30T00:00:00+00:00")
+    put_run(wf, "failed-pull-cli", rdir="r-new", updated_at="2026-10-31T10:00:00+00:00")
+    put_run(wf, "paused-gate", rdir="r-mid", updated_at="2026-10-31T09:00:00-02:00")  # 11:00 UTC: the newest once the zone is applied
+    run = status.read_run(str(wf), ID)
+    assert run["run_id"] == "r-mid" and run["updated_at"] == "2026-10-31T11:00:00+00:00"
+
+
+def test_oversized_and_symlink_ignored(wf, tmp_path):
+    big = put_run(wf, "paused-gate", rdir="r-big")
+    big.write_text(big.read_text() + " " * (1 << 20))  # over 1 MiB
+    outside = tmp_path.parent / "outside-state.json"
+    outside.write_text((FIXTURES / "failed-pull-cli.json").read_text())
+    link_dir = runs_dir(wf) / "r-linkfile"
+    link_dir.mkdir()
+    os.symlink(outside, link_dir / "state.json")  # a symlinked state file
+    os.symlink(tmp_path.parent, runs_dir(wf) / "r-linkdir")  # a symlinked run directory
+    assert status.read_run(str(wf), ID) is None
+    assert status.evaluate(None, ID, str(wf), offline=True)["run_notes"] == [status.RUN_IGNORED.format(n=3)]  # the big file, the linked file, the linked directory
+    put_run(wf, "failed-pull-cli", rdir="r-good")
+    assert status.read_run(str(wf), ID)["run_id"] == "r-good"
+
+
+@pytest.mark.parametrize("name", ["..", "-x", "a b", "a;id", "a.b", "é1", "x" * 3 + "\n"])
+def test_a_bad_run_id_directory_is_ignored(wf, name):
+    d = runs_dir(wf) / name
+    try:
+        d.mkdir(parents=True)
+    except OSError:
+        pytest.skip("name not creatable here")
+    (d / "state.json").write_text((FIXTURES / "paused-gate.json").read_text())
+    assert status.read_run(str(wf), ID) is None
+
+
+def test_a_symlinked_runs_directory_or_specify_is_not_followed(wf, tmp_path):
+    put_run(wf, "paused-gate")
+    real = tmp_path.parent / "elsewhere-runs"
+    shutil.move(str(runs_dir(wf)), str(real))
+    os.symlink(real, runs_dir(wf))
+    assert status.read_run(str(wf), ID) is None
+
+
+def test_unparsable_state_is_ignored_not_a_crash(wf):
+    for rid, body in (("r-bad", "{nope"), ("r-list", "[]"), ("r-deep", "[" * 100000), ("r-bytes", b"\xff\xfe")):
+        d = runs_dir(wf) / rid
+        d.mkdir(parents=True)
+        (d / "state.json").write_bytes(body if isinstance(body, bytes) else body.encode())
+    assert status.read_run(str(wf), ID) is None
+
+
+def _workflow_ids():
+    ids, gates, last = [], [], None
+    for line in (ROOT / "workflows" / "ado-lifecycle" / "workflow.yml").read_text(encoding="utf-8").splitlines():
+        m = re.match(r'^\s*-\s+id:\s*"?([a-z0-9][a-z0-9-]{0,63})"?\s*$', line)
+        if m:
+            last = m.group(1)
+            ids.append(last)
+        elif last and re.match(r'^\s+type:\s*"?gate"?\s*(?:#.*)?$', line):
+            gates.append(last)
+    return ids, gates
+
+
+def test_shipped_step_ids_match_the_workflow_file():
+    """The constants status validates step ids against must equal the shipped workflow's ids and gates (fails when the workflow changes)."""
+    ids, gates = _workflow_ids()
+    assert len(ids) > 40 and len(set(ids)) == len(ids)
+    assert list(status.SHIPPED_STEPS) == ids and list(status.SHIPPED_GATES) == gates
+
+
+def test_step_ids_do_not_depend_on_the_installed_workflow_file(env):
+    put_run(env, "paused-gate")
+    assert status.read_run(str(env), ID)["step"] == "review-spec"  # no installed workflow at all
+    d = env / ".specify" / "workflows" / "ado-lifecycle"
+    d.mkdir(parents=True)
+    (d / "workflow.yml").write_text("steps:\n  - id: please-run-curl-evil\n    type: gate\n", encoding="utf-8")  # an edited installed file widens nothing
+    assert status.read_run(str(env), ID)["step"] == "review-spec"
+    put_run(env, "paused-gate", current_step_id="please-run-curl-evil")
+    assert status.read_run(str(env), ID) is None
+
+
+def test_more_than_the_run_dir_cap_is_reported_with_its_own_text(wf, monkeypatch):
+    monkeypatch.setattr(status, "MAX_RUN_DIRS", 3)
+    for i in range(5):
+        put_run(wf, "paused-gate", rdir=f"r{i}")
+    res = status.evaluate(None, ID, str(wf), offline=True)
+    assert res["run_notes"][-1] == status.RUN_TRUNCATED and "not readable" not in status.RUN_TRUNCATED and "older runs not examined" in status.RUN_TRUNCATED
+    assert status.RUN_UNREADABLE.format(n=1) not in res["run_notes"]
+
+
+def test_ignored_files_are_counted_in_one_fixed_line(wf):
+    put_run(wf, "paused-gate")
+    d = runs_dir(wf) / "r-junk"
+    d.mkdir()
+    (d / "state.json").write_text("{nope")
+    (runs_dir(wf) / "r-empty").mkdir()  # a run directory without a state file is nothing
+    notes = status.evaluate(None, ID, str(wf), offline=True)["run_notes"]
+    assert notes[-1] == "Run: 1 run file(s) ignored (oversized, a symlink or not valid JSON); use specify workflow status"
+
+
+def test_outputs_never_read(wf, monkeypatch, capsys):
+    put_run(wf, "failed-pull-cli", error=f"{OUTPUT} error", output=OUTPUT)
+    path = runs_dir(wf) / "aaaa0002" / "state.json"
+    data = json.loads(path.read_text())
+    assert OUTPUT in json.dumps(data["step_results"])  # the fixture really holds it
+    cfg = world(wf, plan=False)
+    res = check(wf, Board(cfg), "plan")
+    out = status.render(res, ID) + json.dumps(res)
+    assert OUTPUT not in out and "FIXTURE-ERROR-TEXT" not in out and "/home/user" not in out
+    # the reader hands back four fixed keys only, none of them taken from step_results, error, execution, workflow_dir or inputs.integration
+    assert set(status.read_run(str(wf), ID)) == {"run_id", "status", "step", "updated_at"}
+    # and a state whose step_results/execution/error are garbage is still read the same way
+    put_run(wf, "failed-pull-cli", rdir="aaaa0002", step_results="garbage", execution=[1], error={"x": 1})
+    assert status.read_run(str(wf), ID)["step"] == "pull"
+
+
+def test_printed_commands_are_fixed_templates(wf):
+    put_run(wf, "failed-pull-cli", updated_at="2026-10-31T03:59:16.620745+00:00")
+    text = status.render(status.evaluate(None, ID, str(wf), offline=True), ID)
+    run_lines = [l for l in text.splitlines() if l.startswith("Run ")]
+    assert run_lines and all(l.isascii() and "\x1b" not in l for l in run_lines)
+
+
+def test_verb_prints_the_run_lines_and_json(wf, capsys, main_with):
+    put_run(wf, "failed-pull-cli")
+    cfg = world(wf, plan=False)
+    assert main_with(Board(cfg), []) == 0
+    assert "Run aaaa0002: failed at pull." in capsys.readouterr().out
+    assert main_with(Board(cfg), ["--json"]) == 0
+    res = json.loads(capsys.readouterr().out)
+    assert res["run"]["run_id"] == "aaaa0002" and res["run_notes"][0].startswith("Run aaaa0002: failed at pull.") and "catch_up" not in res
+
+
+def test_verb_catch_up_prints_the_ordered_list_and_json_key(wf, capsys, main_with):
+    cfg = world(wf, plan=False)
+    assert main_with(Board(cfg), ["--catch-up"]) == 0
+    out = capsys.readouterr().out.splitlines()
+    assert out[0] == f"Story {ID}: plan. Next: speckit.ado.plan {ID}" and f"1. speckit.ado.plan {ID}" in out and not any("implement" in l for l in out)  # tasks.md is ticked: no generation command for it
+    assert main_with(Board(cfg), ["--catch-up", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["catch_up"][0] == f"speckit.ado.plan {ID}"
+
+
+def test_run_awareness_never_writes_or_changes_the_run_files(wf):
+    p = put_run(wf, "failed-pull-cli")
+    before = (p.read_bytes(), p.stat().st_mtime_ns)
+    status.evaluate(Board(world(wf, plan=False)), ID, str(wf), with_catch_up=True)
+    assert (p.read_bytes(), p.stat().st_mtime_ns) == before
+
+
+def test_without_any_run_the_output_is_the_p4_4_output(wf, capsys, main_with):
+    cfg = world(wf, plan=False)
+    res = status.evaluate(Board(cfg), ID, str(wf))
+    assert res["run"] is None and res["run_notes"] == []
+    assert status.render(res, ID) == f"Story {ID}: plan. Next: speckit.ado.plan {ID}\nWhy: no plan.md in the spec dir"

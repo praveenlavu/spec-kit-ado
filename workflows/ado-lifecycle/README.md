@@ -92,10 +92,21 @@ previews and asks again.
   that already completed are not repeated, and nothing earlier is re-checked.
 - A gate needs a terminal. Without one (a script, CI, an agent shell) the gate **pauses** the run instead of asking;
   run `specify workflow resume <run-id>` in a terminal to answer it.
+- `ado status <id>` reads the newest run of the story (`.specify/workflows/runs/<run-id>/state.json`, which the agent can
+  edit, so it is treated as untrusted and only its status, step id and time are used, never step outputs) and prints
+  whether it is paused, failed, aborted or stuck, with the exact `specify workflow resume <run-id>` when resume applies.
+  After an `aborted` run (or a `completed` one while the story is still before the PR) `ado status <id> --catch-up` prints
+  the commands below that your story still needs (only stages that are not met, in this order), and tells you to run
+  `ado status <id>` again after each step. It is only that part of the recovery: the plan-questions round and the
+  `wait-po-answers` gate are not modelled.
+- A run killed with `kill -9` (or a closed laptop) stays `running` in its `state.json`, and `resume` refuses a `running`
+  run (it takes only `paused` or `failed`). `ado status` says so when the last update is over 1 hour old by the server's
+  clock. The documented manual fix: set `"status": "failed"` in that `state.json` by hand (the kit never edits Spec Kit's
+  files), then `specify workflow resume <run-id>`; it re-runs the step that was running.
 - A run that stops at `implement` with `INCOMPLETE: T…` leaves later work undone. If you reject a gate the run is
   `aborted`, and `resume` refuses it (it takes only `paused` or `failed` runs); `review-review` is the gate you reject for
-  `INCOMPLETE`. Fix the work (finish the tasks, address the review), then bring the later steps up to date by hand, in
-  this order:
+  `INCOMPLETE`. Fix the work (finish the tasks, address the review), then bring the later steps up to date, in
+  this order (`ado status <id> --catch-up` prints the part of it that your story still needs):
   1. `ado decisions <id> --post --if-any --plan-out .ado/plan-decisions.md` (preview), and after a yes
      `ado decisions <id> --post --if-any --apply --expect-plan .ado/plan-decisions.md`: decisions recorded after
      `decisions-loop` are not posted by a resume.
