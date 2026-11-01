@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 
 from . import __version__, comments, decisions, dod, stack, workitems
+from .auth import AuthError
 from .client import AdoError
 
 BULLETS = "•·▪◦○●■□►▸➢➤✓✔§-*–—"  # fixed set; `o` only when alone, list numbers `1.`/`1)`; nothing else is stripped (`€5 off` stays)
@@ -386,6 +387,14 @@ def _problem_line(p, wid):
     return f"- {p['level']} {rid or 'section'}: {p['issue']} \u2014 {ISSUES[p['issue']]}"
 
 
+def _problem_lines(parsed, wid):
+    plines = [_problem_line(p, wid) for p in parsed["problems"]]
+    for r in parsed.get("duplicates", ()):
+        _check(r, wid)
+        plines.append(f"- copy of {r['id']} \u00b7 {r['hash']}: " + _one(" / ".join(r["body"])))
+    return plines
+
+
 def render_file(work_item, parsed, organization, project, pulled, version):
     """The whole file (R§5): header, `## Rules` ordered by number, `## Problems` (problem keys and rule ids; the copies of a duplicated
     number are listed there, escaped, and are not rules). Deterministic."""
@@ -404,10 +413,7 @@ def render_file(work_item, parsed, organization, project, pulled, version):
             _bad("rule id")
     rs = sorted(parsed["rules"], key=lambda r: r["n"])
     out += [x for r in rs for x in (render_rule(r).rstrip("\n"), "")] or [_NONE, ""]
-    plines = [_problem_line(p, wid) for p in parsed["problems"]]
-    for r in parsed.get("duplicates", ()):
-        _check(r, wid)
-        plines.append(f"- copy of {r['id']} \u00b7 {r['hash']}: " + _one(" / ".join(r["body"])))
+    plines = _problem_lines(parsed, wid)
     return "\n".join(out + ["## Problems", ""] + (plines or [_NONE]) + [""])
 
 
@@ -777,6 +783,60 @@ def coverage(ledger_md, sources, files, rules_from, reviewed, decisions_parsed, 
             "uncovered": [r for r in sc["in_scope"] if r not in cited], "unknown": unknown, "changed": changed,
             "problems": [p for w in sorted(good) for p in _file_problems(w, good[w]["problems"])],
             "missing": sorted(missing), "format": sorted(fmt), "header": header}
+
+
+# ---- live drift (P3-9): the committed rules files against the rules live in ADO; GETs only, ids and fixed words out ----
+
+DRIFT_UNREACHABLE = "ADO could not be read, or the gate's token cannot read the Epic/Feature — rule drift not checked"
+DRIFT_OFFLINE_NOTE = "rule drift not checked (offline, or the live check was not run)"
+DRIFT_OFFLINE = {"evaluated": False, "drift": [], "unreachable": False, "note": DRIFT_OFFLINE_NOTE}  # what `--offline` passes on; never mutated
+_STRUCTURE = (AdoError, AuthError, AttributeError, TypeError, KeyError, ValueError)  # ADO unreachable, or an answer that is not a work item
+
+
+def _error_lines(lines):
+    return [x for x in lines if not x.startswith("- warning ")]  # a warning is not a finding, so editing one is not drift
+
+
+def drift(client, story_id, cfg, ledger_md, files, decisions_parsed):
+    """`{"evaluated", "drift", "unreachable", "note"}`: what differs between the committed files and the rules LIVE in ADO. Every GET is made
+    here by `rules.walk` from `story_id` only (the id given on the command line; the ledger and the files never name an id to fetch), and a
+    caller in `__main__` passes the result to the pure `run_gate`. `drift` lists, sorted by (work item, number), the rule ids in the LIVE scope
+    (approved in ADO now, minus the counted exclusions) whose file section is missing or differs line for line from `render_rule(live)` (a matching section pins the hash and the body, so `body_hash` is not consulted); then `"chain"` when the live walk differs from `Rules from:`; then `"problems"` when the live error
+    problems differ from the file's `## Problems` lines. Draft, retired and excluded rules are ignored; a file with another rules-format is
+    left to coverage (`format`); a file that is absent, invalid or without a readable rules-format (the `Last pulled` line deleted or mangled) counts as empty. Lines are compared as `splitlines()`, so CRLF is no
+    drift. Any ADO or token error (401/403/404, network) or an answer that is not a work item: `unreachable`, nothing is partial."""
+    try:
+        found = walk(client, story_id, cfg.rules["types"])
+    except _STRUCTURE:
+        return {"evaluated": False, "drift": [], "unreachable": True, "note": DRIFT_UNREACHABLE}
+    live_from = [a["id"] for a in found]
+    live_rule = {r["id"]: r for a in found for r in a["parsed"]["rules"]}
+    fake = {a["id"]: {"invalid": False, "rules": {r["id"]: {"status": r["status"], "hash": r["hash"], "body_hash": r["hash"]} for r in a["parsed"]["rules"]}}
+            for a in found}
+    in_scope = scope(fake, live_from, decisions_parsed, "pr")["in_scope"]  # the live rules, not the file's
+    ids, problems = set(), False
+    for a in found:
+        f = files.get(a["id"])
+        ok = isinstance(f, dict) and not f.get("invalid") and f.get("format") is not None  # no readable format (`Last pulled` deleted or mangled): an empty file
+        if ok and f["format"] != FORMAT:
+            continue
+        have, lines = (f["rules"], f["problems"]) if ok else ({}, [])
+        for rid in in_scope:
+            if _key(rid)[0] != a["id"]:
+                continue
+            fr, lr = have.get(rid), live_rule[rid]
+            try:
+                want = render_rule(lr).splitlines()
+            except ValueError:
+                want = None
+            if fr is None or want is None or fr["section"].splitlines() != want:
+                ids.add(rid)
+        try:
+            problems = problems or _error_lines(_problem_lines(a["parsed"], a["id"])) != _error_lines(lines)
+        except ValueError:
+            problems = True
+    out = sorted(ids, key=_key) + (["chain"] if live_from != dod.ledger_rules_from(ledger_md)["ids"] else []) + (["problems"] if problems else [])
+    return {"evaluated": True, "drift": out, "unreachable": False, "note": None}
 
 
 # ---- `ado rules <id> --confirm` (P3-7): the rule hashes a human reviewed go into the ledger header; local only, no network ----

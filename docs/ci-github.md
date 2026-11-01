@@ -119,7 +119,7 @@ Secrets: `ADO_TOKEN` (required), `TOOLKIT_READ_TOKEN` (optional; falls back to
 
 - To make the gate block a PR, list checks in `gate.block` in `ado.config.json` and mark
   the `gate` job as a required status check. Without `gate.block` it only comments. Valid names are listed in
-  [configuration.md](configuration.md); the comment gains an `Open decisions` line when `Decisions_<id>.md` has `D<n>` decision lines, and a `Business rules` line when `rules.enabled` is true and the `rule_coverage` check has findings (rule ids, work item ids and counts only; local, so it needs no extra token scope). With `--base` the target branch's strict config decides whether rules are enabled, so a PR cannot switch the check off.
+  [configuration.md](configuration.md); the comment gains an `Open decisions` line when `Decisions_<id>.md` has `D<n>` decision lines, and a `Business rules` line when `rules.enabled` is true and the `rule_coverage` check has findings (rule ids, work item ids and counts only; local, so it needs no extra token scope), and a `Rule drift` line when the online `rule_drift` check has findings (see below). With `--base` the target branch's strict config decides whether rules are enabled, so a PR cannot switch the check off.
 - PR titles, bodies and branch names reach the scripts only through environment
   variables, never interpolated into the script text.
 - The PR comment is the markdown that `ado gate --summary-out gate.md` writes: blocking
@@ -157,3 +157,7 @@ Secrets: `ADO_TOKEN` (required), `TOOLKIT_READ_TOKEN` (optional; falls back to
 - **Isolated helpers.** CI helpers run isolated (`python3 -I`) and write only to the runner temp directory, never into the checked-out PR.
 - **Bash.** The scripts need bash 4.4 or later (`ubuntu-latest` has it). They are
   exercised only in CI, not by this repo's tests.
+
+## Business rules: the online drift check
+
+With `rules.enabled`, the `gate` job also runs `rule_drift`: it compares the committed `Rules_<id>.md` files with the Epic and Feature in ADO (GET requests only, starting from the story id of the PR). **Both CI jobs are required for this check**: make the `gate` job (it holds `ADO_TOKEN`) and the strict re-run job (`ado-strict-verify.yml`) required status checks, otherwise a PR can merge without either being run. `ADO_TOKEN` needs **Work Items: Read** on the project of every Epic and Feature in the chain; when it cannot read one, strict mode reports `rules-unreachable` (a blocking `?`) and advisory mode a note. See [business-rules.md](business-rules.md#drift).

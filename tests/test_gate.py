@@ -1144,7 +1144,7 @@ def test_rules_key_and_findings_only_with_a_rules_ctx():
     off = run_gate(led, SOURCES, {}, None)
     assert set(off) == V02_KEYS and "rules" not in off
     on = _rg(led)
-    assert set(on) == V02_KEYS | {"rules"} and on["rules"] == _cov(led) and on["blocking"] is False  # advisory: reported, not blocking
+    assert set(on) == V02_KEYS | {"rules"} and {k: on["rules"][k] for k in _cov(led)} == _cov(led) and on["blocking"] is False  # advisory: reported, not blocking
     assert on["rules"]["covered"] == ["BR-1201-1", "BR-1201-2"]
 
 
@@ -1157,10 +1157,10 @@ def test_disabled_gate_json_key_set_equals_baseline():
             asked.append(key)
             return False
     off = run_gate(led, SOURCES, {}, None, block=_Block())
-    assert set(off) == V02_KEYS and "rule_coverage" not in asked and "rules" not in off
+    assert set(off) == V02_KEYS and "rule_coverage" not in asked and "rule_drift" not in asked and "rules" not in off
     assert "Business rules" not in render_summary(off) and "rule" not in render_summary(off).lower().replace("traceability", "")
     run_gate(led, SOURCES, {}, None, block=_Block(), rules_ctx={"files": {}})
-    assert "rule_coverage" in asked
+    assert "rule_coverage" in asked and "rule_drift" in asked
 
 
 def test_findings_list_blocks_only_when_named_and_marks_each_class_with_a_question_mark():

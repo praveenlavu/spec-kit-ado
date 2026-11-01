@@ -1877,12 +1877,30 @@ def test_gate_rule_coverage_doc_pins():
                  "never rule text, never the text of a tag or a problem line", "its own line (not the AC drift line)", "`rule_drift`", "later tasks",
                  "a local `ado gate` reads your working tree (uncommitted edits included), and the CI gate reads what its checkout holds",
                  "(offline limits)", "edits a rule's text in its file, the heading hash and the recorded `Rules reviewed:` hash together passes this check",
-                 "trimming `Rules from:` and dropping the tags passes too (also P3-9)", "recorded ids whose work item has left `Rules from:` are not judged"):
+                 "trimming `Rules from:` and dropping the tags passes too (also `rule_drift`)", "recorded ids whose work item has left `Rules from:` are not judged"):
         assert word in text, word
     cfg = _flat("docs/configuration.md")
-    for word in ("`rule_coverage` — business rules (`rules.enabled`)", "part of the floor", "in advisory mode it blocks only when listed here", "`open_decisions`, `rule_coverage`)"):
+    for word in ("`rule_coverage` — business rules (`rules.enabled`)", "part of the floor", "in advisory mode it blocks only when listed here", "`open_decisions`, `rule_coverage`, `rule_drift`)"):
         assert word in cfg, word
     for f in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
         assert "`Business rules` line" in _flat(f) and "`rule_coverage`" in _flat(f), f
     assert "`rule_coverage`" in _flat("README.md") and "`rules` (only when `rules.enabled`" in _flat("AGENTS.md")
     assert "Gate check `rule_coverage` (P3-8)" in _flat("CHANGELOG.md")
+
+
+def test_gate_rule_drift_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("## Drift", "`rule_drift` check", "GET requests only", "starts only at the story id given on the command line", "never fetched",
+                 "Both CI jobs must be required checks", "(approved in ADO now, minus the rules a counted exclusion lifts", "`chain`", "`problems`",
+                 "differs from the live rule line for line", "a rule line, a heading status or a hash edited in the file", "An edit to a draft or retired rule", "CRLF",
+                 "no per-rule drift judgement", "`rules.unreachable` is `true`", "`rules-unreachable`", "shown as `?`", "the gate's token needs Work Items: Read on the Epic/Feature's project",
+                 "With `--offline` the check is not run (no request)", "Limit job authorization scope to current project", "an error (often 404)", "does not use the body hash", "`rule_coverage` still reports it as `changed`", "has no readable `rules-format`", "counts as an empty file", "`- Rule drift: ...`", "never an ADO error text",
+                 "Process enforcement, not a security boundary", "posted exclusion marker by hand", "`+ ~~~`"):
+        assert word in text, word
+    assert "`rule_drift` — business rules (`rules.enabled`), online" in _flat("docs/configuration.md") and "`rule_drift`" in _flat("README.md")
+    for f in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        assert "Both CI jobs are required for this check" in _flat(f) and "Work Items: Read" in _flat(f) and "`rules-unreachable`" in _flat(f), f
+    az = _flat("docs/ci-azure-pipelines.md")
+    assert "**View work items in this node**" in az and "Keep **Limit job authorization scope to current project** on" in az and "an error (often 404)" in az
+    assert 'PAT scope "Work Items: Read"' in az and "turn the setting off" not in az and "answer 404" not in az
+    assert "online `rule_drift` check" in _flat("AGENTS.md") and "Gate check `rule_drift` and `rules-unreachable` (P3-9)" in _flat("CHANGELOG.md")

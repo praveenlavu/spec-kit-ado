@@ -326,6 +326,9 @@ def dispatch(client, args):
             except (AdoError, AuthError):
                 pass  # missing info (no story, no token) never blocks: drift is simply not checked
         rules_ctx = _gate_rules_ctx(client.config, ledger_md, args.src)
+        if rules_ctx is not None:  # the live check: GETs only, from the story id given here (never an id read from the ledger or a file)
+            rules_ctx["drift"] = rules.DRIFT_OFFLINE if getattr(args, "offline", False) else rules.drift(
+                client, args.id, client.config, ledger_md, rules_ctx["files"], decisions.parse_decisions(decisions_md or ""))
         skipped = set()
         sources = gate.discover_tests(args.src, tests, skipped)
         changed = {f: t for f in (args.changed or []) if (t := gate._read(f, args.src, skipped)) is not None}

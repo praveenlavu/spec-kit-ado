@@ -323,7 +323,7 @@ LEDGER_UNCLOSED_NOTE = "the ledger has an unclosed code fence or comment — sec
 
 # Every check run_gate can report. config.py rejects gate.block names outside this set, and
 # tests/test_config.py pins it to run_gate's output keys, so a new check must be added here too.
-GATE_CHECKS = ("ac_traceability", "assertion", "ac_drift", "open_questions", "commits_without_story", "open_decisions", "rule_coverage")
+GATE_CHECKS = ("ac_traceability", "assertion", "ac_drift", "open_questions", "commits_without_story", "open_decisions", "rule_coverage", "rule_drift")
 
 
 def rule_findings(cov):
@@ -332,13 +332,20 @@ def rule_findings(cov):
     return [*cov["uncovered"], *cov["unknown"], *cov["changed"], *("?" for k in ("problems", "missing", "format", "header") if cov[k])]
 
 
+def drift_findings(rl):
+    """What `rule_drift` reports for a `rules` result: the drifted rule ids, `chain` / `problems`, and one `?` when the live rules were not read
+    (ADO unreachable, or `--offline`). Empty is a pass."""
+    return [*rl.get("drift", []), *(["?"] if "drift_note" in rl else [])]
+
+
 def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, reason=UNREACHABLE, commits=None,
              skipped=0, decisions_md=None, decisions_unreadable=False, rules_ctx=None):
     """`decisions_md`: text of Decisions_<id>.md, or None when there is no such file; `decisions_unreadable`: the file
     exists but could not be read (symlink, outside --src, oversize, not UTF-8): counted as unresolved, never skipped.
     `rules_ctx`: None when business rules are off (no `rules` key, no `rule_coverage` question: the v0.2 output exactly); else
-    `{"files": {work item id: rules.parse_file result}}` for the files `Rules from:` names that could be read, and the result gains
-    `rules` = `rules.coverage(...)` at phase `pr`."""
+    `{"files": {work item id: rules.parse_file result}, "drift": rules.drift(...) result}` for the files `Rules from:` names that could be read
+    (the GETs of the drift check are made by the caller; a context without `drift` counts as not checked), and the result gains
+    `rules` = `rules.coverage(...)` at phase `pr` plus `drift`, `unreachable` and, when the live rules were not read, `drift_note`."""
     rows = parse_section3(ledger_md)
     trace = check_traceability(rows, sources, len(ac_lines(ledger_md)))
     gaps = scan_assertions(changed, DEFAULT_TESTS if tests is None else tests)
@@ -361,6 +368,11 @@ def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, 
         from . import rules  # lazy: rules imports this module
         cov = rules.coverage(ledger_md, sources, rules_ctx["files"], ledger_rules_from(ledger_md), ledger_rules_reviewed(ledger_md), ds, "pr", trace)
         found["rule_coverage"] = rule_findings(cov)
+        d = rules_ctx.get("drift") or rules.DRIFT_OFFLINE
+        cov["drift"], cov["unreachable"] = list(d["drift"]), bool(d["unreachable"])
+        if not d["evaluated"]:  # a fixed text, whatever the caller passed
+            cov["drift_note"] = rules.DRIFT_UNREACHABLE if cov["unreachable"] else rules.DRIFT_OFFLINE_NOTE
+        found["rule_drift"] = drift_findings(cov)
     blocked_by = [k for k in found if k in block and found[k]]
     return {"traceability": trace, "assertion_gaps": gaps, "assertion_notes": notes, "drift": drift,
             "missing_evidence": missing_evidence(rows), "open_questions": open_q,
@@ -409,6 +421,18 @@ def _rules_line(rl):
     return "- Business rules: " + "; ".join(f(v) for v, f in parts if v)
 
 
+def _drift_line(rl):
+    """The one summary line for a `rule_drift` result: rule ids and fixed words (never rule text)."""
+    ids = [x for x in rl["drift"] if x not in ("chain", "problems")]
+    parts = [(ids, lambda v: "the committed rules differ from the rules live in ADO: " + _ids(v) + " (re-pull with `ado rules <story id>`)"),
+             (["chain"] if "chain" in rl["drift"] else [], lambda v: "`Rules from:` is not the Epic/Feature chain in ADO (`ado dod <story id> --refresh`)"),
+             (["problems"] if "problems" in rl["drift"] else [], lambda v: "the Problems lines of a rules file differ from ADO (re-pull with `ado rules <story id>`)"),
+             (["x"] if rl.get("unreachable") else [], lambda v: "rules-unreachable: the rules in ADO could not be read, so drift is not checked "
+                                                              "(the gate's token needs Work Items: Read on the Epic/Feature's project)"),
+             (["x"] if "drift_note" in rl and not rl.get("unreachable") else [], lambda v: "drift not checked (offline, or the live check was not run)")]
+    return "- Rule drift: " + "; ".join(f(v) for v, f in parts if v)
+
+
 def render_summary(result):
     """Markdown PR comment for a gate result (what `--summary-out` writes)."""
     head = "### ADO gate\n\n"
@@ -435,6 +459,8 @@ def render_summary(result):
                                           + ", ".join([*map(_code, cs[:20]), *more]))
     if isinstance(result.get("rules"), dict) and rule_findings(result["rules"]):
         found["rule_coverage"] = _rules_line(result["rules"])
+    if isinstance(result.get("rules"), dict) and drift_findings(result["rules"]):
+        found["rule_drift"] = _drift_line(result["rules"])
     if note := result.get("ledger_unclosed"):  # stands in for the open-questions line when that list is empty
         found["open_questions" if "open_questions" not in found else "ledger_unclosed"] = f"- {_code(note)}"
     if not trace["evaluated"]:

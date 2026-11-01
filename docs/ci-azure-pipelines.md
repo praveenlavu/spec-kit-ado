@@ -110,7 +110,7 @@ Any non-zero exit fails the build; the log shows the rule ids (at most 20, `[A-Z
 ## The PR comment
 
 The thread body is the markdown that `ado gate --summary-out` writes: blocking findings,
-advisory findings (including `Open decisions` when `Decisions_<id>.md` has `D<n>` decision lines, and a `Business rules` line when `rules.enabled` is true and `rule_coverage` has findings: rule ids, work item ids and counts only, from the checkout's files, with no extra token scope) and AC drift, or "The gate could not run: <reason>" (the token value
+advisory findings (including `Open decisions` when `Decisions_<id>.md` has `D<n>` decision lines, and a `Business rules` line when `rules.enabled` is true and `rule_coverage` has findings: rule ids, work item ids and counts only, from the checkout's files, with no extra token scope, and a `Rule drift` line from the online `rule_drift` check, see below) and AC drift, or "The gate could not run: <reason>" (the token value
 redacted). `ado pr comment` adds a new thread on every run; earlier threads are not edited,
 so a PR that is rebuilt several times collects one thread per run.
 
@@ -163,3 +163,7 @@ step also logs the warning `spec-kit-ado gate could not run (see the PR comment 
 ## Breaking in 0.2
 
 The branch guard and the gate no longer read "any digit run" in the branch name as a story id, so `feature/1001-thing` and Spec Kit's `001-x` are no longer story 1001 or 1. A branch is tied to a story only as `<branch_prefix>ab<id>-<slug>` (e.g. `feature/ab1001-thing`, the name `ado branch <id>` creates) or by `AB#<id>` anywhere in it. There is no `branch-prefix` input: the prefix is `branch_prefix` in `ado.config.json`, the same value the CLI uses. `AB#` in a PR title, body or merge commit must now be a whole token (`AB#1001`, not `fooAB#1001`) and is case-sensitive. Users of `@v0` should rename branches or add `AB#<id>` to the branch name.
+
+## Business rules: the online drift check
+
+With `rules.enabled`, the gate job also runs `rule_drift`: it compares the committed `Rules_<id>.md` files with the Epic and Feature in ADO (GET requests only, starting from the story id of the branch). **Both CI jobs are required for this check**: make the gate build and the strict verify build (`ado-strict-verify.yml`) required build validations, otherwise a PR can merge without either being run. The build identity behind `$(System.AccessToken)` needs the permission **View work items in this node** on the area path of every Epic and Feature in the chain (that permission is what the build token needs; the PAT scope "Work Items: Read" is for a PAT such as the GitHub `ADO_TOKEN`). Keep **Limit job authorization scope to current project** on (Microsoft recommends it): with it on, the project-scoped build identity may be unable to read an Epic or Feature in another project, which fails with an error (often 404) and is `rules-unreachable` (a blocking `?` in strict mode, a note in advisory mode). Give that identity (`<project> Build Service (<org>)`) read access in the Epic's project, or keep the Epics and Features in the pipeline's project. See [business-rules.md](business-rules.md#drift).
