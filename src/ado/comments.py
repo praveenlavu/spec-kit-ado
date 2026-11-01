@@ -1,6 +1,7 @@
 import re
 import subprocess
 import sys
+import unicodedata
 import urllib.parse
 from pathlib import Path
 
@@ -268,6 +269,17 @@ def warn_unless_ignored(path):
 MAX_KIT_TEXT = 1 << 18
 _TAGS = re.compile(r"<(?!br\s*/?>)", re.I)  # anything but `<br>`: the kit's own comment holds nothing else (`html.escape` does the rest)
 _BR = re.compile(r"<br\s*/?>", re.I)
+
+
+_BLANKS = frozenset("\u2800\u115f\u1160\u3164\uffa0")  # drawn as blanks but neither whitespace nor format characters (braille blank, Hangul fillers)
+
+
+def marked(text, marker):
+    """Does a comment's text look like a kit comment with this `marker`, or try to? The marker among the first 64 characters once whitespace and invisible
+    format characters (zero-width space and joiners, bidi marks) and the blank-looking U+2800 and Hangul fillers are removed: a comment that starts with one is a kit comment that is not plain (invalid,
+    never ignored). The one detector for strict's done-time check and the wait gates."""
+    clean = "".join(ch for ch in str(text or "") if not ch.isspace() and ch not in _BLANKS and unicodedata.category(ch) != "Cf")
+    return marker in clean[:64]
 
 
 def kit_lines(raw, marker):

@@ -201,6 +201,7 @@ _HEAD = "Decisions and assumptions made during development; please validate or r
 MAX_COMMENT_LINE = 500
 _AT = comments._AT  # a typed `@name`
 _CTRL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+POSTED_LINE = re.compile(r"D([0-9]{1,9}) \((?:decision|assumption|override)\): ")  # a decision line of a posted comment: the id, digits only
 _MARK = re.compile(r"\s*·\s*posted\s*:\s*\d+:[0-9a-f]{8}(?=\s*(?:·|$))")
 
 

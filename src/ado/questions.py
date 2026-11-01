@@ -180,7 +180,76 @@ def check_ledger(md):
     return parsed
 
 
-def ages(client, story_id, open_questions, rows):
+def _fail(why):
+    return ValueError(f"{E_AGE} ({why}); nothing written")
+
+
+def own_comment(client, rows):
+    """The NEWEST `[spec-kit-ado:questions]` comment of the token identity in `rows` (`comments.fetch(..., with_meta=True)`), or None when there is none.
+    ValueError (E_AGE + a fixed reason key) when the token identity is unknown (`no-identity`), a creation time is unreadable (`date-shape`) or that comment
+    was edited by another identity (`edited-by-other`)."""
+    from . import approvals
+    try:
+        me = approvals._guid(_me(client))
+    except ValueError:  # `_me` puts the client's error text into its message
+        raise _fail("no-identity") from None
+    if me is None:
+        raise _fail("no-identity")
+    mine = [(approvals._order(c), c) for c in rows if c.get("author") == me and str(c.get("text") or "").startswith(MARKER)]
+    if not mine:
+        return None
+    if any(k is None for k, _ in mine):
+        raise _fail("date-shape")
+    comment = max(mine, key=lambda t: t[0])[1]
+    if comment.get("modified_by") != comment.get("author"):
+        raise _fail("edited-by-other")
+    return comment
+
+
+def posted_open(raw):
+    """[{"id", "question"}] shown as OPEN in one version of the kit's questions comment, in comment order, or None (unreadable, never an empty list). The
+    text must be the exact `ANSWERED` text, or the marker line followed by the open-questions heading or by the assumed-by-the-team heading. In the open part
+    (up to the assumed heading) every non-empty line must be `Q<n>: text` with no repeated id; EVERYTHING after the assumed heading is ignored (it is
+    not an open question, and a question hidden there is in no earlier version either: the history rule keeps it open). A bare marker, any markup but
+    `<br>`, a huge text or a line that breaks into two is None."""
+    if not isinstance(raw, str) or len(raw) > comments.MAX_KIT_TEXT or comments._TAGS.search(raw):
+        return None
+    parts = [_text(x).strip() for x in comments._BR.split(raw)]
+    if parts == [_text(x).strip() for x in comments._BR.split(ANSWERED)]:
+        return []
+    if len(parts) < 2 or parts[0] != MARKER or parts[1] not in (_HEAD, _ASSUMED_HEAD):
+        return None
+    out, on = [], False
+    for p in parts[1:]:
+        if p == _HEAD:
+            on = True
+        elif p == _ASSUMED_HEAD:
+            break
+        elif on and p:
+            m = re.fullmatch(r"(Q[1-9][0-9]{0,8}): (.+)", p)
+            if not m or "\n" in p:
+                return None
+            out.append({"id": m.group(1), "question": m.group(2)})
+    return out if len({q["id"] for q in out}) == len(out) else None
+
+
+def versions_of(client, story_id, comment):
+    """Every version of the kit's own comment `comment` (`comments.versions`), checked to be exactly versions 1..n and n = the comment's own version; ValueError
+    (E_AGE + `versions-unavailable` for a 404 or `versions-shape`) otherwise. Any other HTTP error propagates."""
+    try:
+        vs = comments.versions(client, story_id, comment["id"])
+    except AdoError as e:
+        if e.status == 404:
+            raise _fail("versions-unavailable") from None
+        raise
+    except ValueError:
+        raise _fail("versions-shape") from None
+    if not 1 <= len(vs) <= MAX_VERSIONS or [v["version"] for v in vs] != list(range(1, len(vs) + 1)) or comment.get("version") != len(vs):
+        raise _fail("versions-shape")
+    return vs
+
+
+def ages(client, story_id, open_questions, rows, vs=None):
     """{Q<n>: datetime (UTC)}: for each open question, the server time at which its CURRENT rendered line (`_line`, HTML-unescaped, the whole line) started
     to be shown in the kit's questions comment, read ONLY from that comment's versions endpoint (`comments.versions`, preview.1: each version's `modifiedDate`
     is the server's, when it was written). The comment is the NEWEST `[spec-kit-ado:questions]` comment of the token identity in `rows`
@@ -190,7 +259,7 @@ def ages(client, story_id, open_questions, rows):
     ValueError (E_AGE + a fixed reason key; assume-and-flag refuses) when the token identity is unknown (`no-identity`), there is no such comment
     (`no-comment`), it was edited by another identity (`edited-by-other`), the versions endpoint is missing (404: `versions-unavailable`) or answers
     something that is not versions 1..n matching the comment (`versions-shape`), or a date is unreadable (`date-shape`). There is no fallback to a stored timestamp.
-    Any other HTTP error propagates (AdoError). No request is made when nothing needs an age. `rows` and `open_questions` must come from the same
+    Any other HTTP error propagates (AdoError). No request is made when nothing needs an age. `vs` (the result of `versions_of` for that comment) saves the request. `rows` and `open_questions` must come from the same
     ledger text the sync uses."""
     from . import approvals
     want = {}
@@ -200,31 +269,11 @@ def ages(client, story_id, open_questions, rows):
             want[q["id"]] = _text(html.escape(text)).strip()
     if not want:
         return {}
-    fail = lambda why: ValueError(f"{E_AGE} ({why}); nothing written")  # noqa: E731
-    try:
-        me = approvals._guid(_me(client))
-    except ValueError:  # `_me` puts the client's error text into its message
-        raise fail("no-identity") from None
-    if me is None:
-        raise fail("no-identity")
-    mine = [(approvals._order(c), c) for c in rows if c.get("author") == me and str(c.get("text") or "").startswith(MARKER)]
-    if not mine:
+    fail = _fail
+    comment = own_comment(client, rows)
+    if comment is None:
         raise fail("no-comment")
-    if any(k is None for k, _ in mine):
-        raise fail("date-shape")
-    comment = max(mine, key=lambda t: t[0])[1]
-    if comment.get("modified_by") != comment.get("author"):
-        raise fail("edited-by-other")
-    try:
-        vs = comments.versions(client, story_id, comment["id"])
-    except AdoError as e:
-        if e.status == 404:
-            raise fail("versions-unavailable") from None
-        raise
-    except ValueError:
-        raise fail("versions-shape") from None
-    if not 1 <= len(vs) <= MAX_VERSIONS or [v["version"] for v in vs] != list(range(1, len(vs) + 1)) or comment.get("version") != len(vs):
-        raise fail("versions-shape")
+    vs = versions_of(client, story_id, comment) if vs is None else vs
     held = [comments.kit_lines(v["text"], MARKER) for v in vs]
     out = {}
     for qid, line in want.items():

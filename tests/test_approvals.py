@@ -700,3 +700,456 @@ def test_the_verbs_gates_are_one_target_for_this_plan(cfg):
     assert _require(cfg, [_cmd(12, "/reject approve-sync", D1), _cmd(13, "/reject (x)", D1), _ok(cid=14, date=D2)]) is not None
     # a request that is OLDER than the approval is fine for every gate
     assert _require(cfg, [_req("approve-sync"), _req("approve-push", cid=6), _ok(date=D1)]) is not None
+
+
+# ---- P4-12b: `ado approvals check` ----------------------------------------------------------------------------------------------------------------
+import datetime  # noqa: E402
+import json  # noqa: E402
+import os  # noqa: E402
+
+from ado import __main__ as _main  # noqa: E402
+from ado import dod, questions as qmod, status  # noqa: E402
+from ado.config import Config  # noqa: E402
+from tests.conftest import commit, git, ledger_md, review_md  # noqa: E402
+
+T0, T1, T2, T3 = (f"2026-10-01T{h}:00:00Z" for h in (10, 11, 12, 13))
+GATE12 = ("review-spec", "approve-questions", "approve-plan-questions", "wait-po-answers", "approve-answers-questions", "review-plan", "approve-push",
+          "approve-decisions", "approve-sync", "review-review", "approve-pr", "wait-po-validation")
+REVIEW3, WAIT2 = ("review-spec", "review-plan", "review-review"), ("wait-po-answers", "wait-po-validation")
+FID = "### AC fidelity — 2026-10-28 @ abc1234\n\n- AC-1: asserts — it checks the total\n\n"
+
+
+def test_gates_are_the_twelve_of_the_workflow():
+    assert approvals.GATES == GATE12 == status.SHIPPED_GATES and approvals.REVIEW_GATES == REVIEW3 and approvals.WAIT_GATES == WAIT2
+
+
+# -- the review gates: a hash over the listed artifacts --
+@pytest.fixture
+def repo(tmp_path, git_env):
+    git(tmp_path, "init", "-q")
+    commit(tmp_path, "init", {"README": "x"})
+    return tmp_path
+
+
+def _tree(root, spec="# Spec\nA\n", plan="# Plan\nB\n", blocks=None, spec_dir="specs/001-x", mode="advisory"):
+    """Write the artifacts (no commit: HEAD stays) and return the config that finds the ledger."""
+    blocks = [review_md("abc1234")] if blocks is None else blocks
+    for rel, text in {"dod/DoD_1001.md": ledger_md(*blocks, spec_dir=spec_dir), f"{spec_dir}/spec.md": spec, f"{spec_dir}/plan.md": plan}.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    return Config(organization="contoso", project="Fabrikam", dod_path=str(root / "dod"), mode=mode)
+
+
+def _art(gate, root, cfg):
+    return approvals.artifacts(gate, 1001, cfg, str(root))
+
+
+def test_review_gate_hash_covers_listed_artifacts(repo, tmp_path_factory):
+    cfg = _tree(repo)
+    got = {g: _art(g, repo, cfg) for g in REVIEW3}
+    assert len(set(got.values())) == 3 and all(isinstance(b, bytes) for b in got.values())
+
+    def changed(gate, **kw):
+        return _art(gate, repo, _tree(repo, **kw)) != got[gate]
+    assert not changed("review-spec") and not changed("review-plan") and not changed("review-review")  # same content, same bytes
+    assert changed("review-spec", spec="# Spec\nA2\n") and changed("review-plan", spec="# Spec\nA2\n") and not changed("review-review", spec="# Spec\nA2\n")
+    assert changed("review-plan", plan="# Plan\nB2\n") and not changed("review-spec", plan="# Plan\nB2\n")  # plan.md: the plan gate only
+    assert not changed("review-review", plan="# Plan\nB2\n")
+    # independent of the checkout path and of file times: another directory, same content, same HEAD message-free bytes for the spec/plan gates
+    other = tmp_path_factory.mktemp("elsewhere")
+    cfg2 = _tree(other)
+    os.utime(other / "specs/001-x/spec.md", (1, 1))
+    assert _art("review-spec", other, cfg2) == got["review-spec"] and _art("review-plan", other, cfg2) == got["review-plan"]
+
+
+def test_review_hash_ledger_sections(repo):
+    def ledger(sec2="- [ ] Q1: a → _(open)_\n", sec3="", blocks=(review_md("abc1234"),), tail=""):
+        _tree(repo)
+        (repo / "dod/DoD_1001.md").write_text(f"# DoD\n- **Spec dir:** specs/001-x\n\n{dod.SECTION2}\n{sec2}\n## 3. AC\n{sec3}\n"
+                                              f"## 4. Gate & review log\n\n{''.join(blocks)}## 5. Checklist\n- [ ] x{tail}\n")
+        return Config(organization="contoso", project="Fabrikam", dod_path=str(repo / "dod"))
+    spec, plan, rev = (_art(g, repo, ledger()) for g in REVIEW3)
+    cfg = ledger(sec3="AC row changed", tail=" changed")  # sections 3 and 5 are not shown at these gates
+    assert (spec, plan, rev) == tuple(_art(g, repo, cfg) for g in REVIEW3)
+    cfg = ledger(sec2="- [x] Q1: a → yes · owner: PO\n")  # section 2: the spec and plan gates
+    assert _art("review-spec", repo, cfg) != spec and _art("review-plan", repo, cfg) != plan and _art("review-review", repo, cfg) == rev
+    cfg = ledger(blocks=(review_md("abc1234", blocker=1),))  # the review gate: its newest live block
+    assert _art("review-review", repo, cfg) != rev and _art("review-spec", repo, cfg) == spec
+    assert _art("review-review", repo, ledger(blocks=(review_md("abc1234", blocker=2, superseded=True), review_md("abc1234")))) == rev  # a superseded block is not shown
+    assert _art("review-review", repo, ledger(blocks=("```\n### Review — fenced\n```\n", review_md("abc1234")))) == rev  # a fenced heading is no block
+    assert _art("review-review", repo, ledger(blocks=(review_md("abc1234"), review_md("abc1234", blocker=2, superseded=True)))) == rev  # the newest block is superseded: the live one before it
+
+
+def test_framing_moves_with_the_boundary_and_line_endings_count(repo):
+    """The parts are length-framed: the same bytes split differently between plan.md and spec.md hash differently; the checkout's line endings are part of the bytes."""
+    a = _art("review-plan", repo, _tree(repo, plan="P1\n", spec="S1\n"))
+    assert _art("review-plan", repo, _tree(repo, plan="P1\nS", spec="1\n")) != a  # plan + spec is "P1\nS1\n" both times
+    assert b"plan.md 3\nP1\n\nspec.md 3\nS1\n\nledger-2 " in a  # the frame format is pinned
+    assert _art("review-spec", repo, _tree(repo, spec="S1\r\n")) != _art("review-spec", repo, _tree(repo, spec="S1\n"))  # CRLF is not LF
+
+
+def test_review_review_covers_head_and_strict_fidelity(repo):
+    cfg = _tree(repo)
+    before = _art("review-review", repo, cfg)
+    commit(repo, "y", {"other.txt": "z"})  # HEAD moves
+    assert _art("review-review", repo, cfg) != before
+    advisory = _art("review-review", repo, _tree(repo, blocks=[review_md("abc1234"), FID]))
+    assert b"AC-1" not in advisory  # the fidelity block is shown in strict mode only
+    s1 = _art("review-review", repo, _tree(repo, blocks=[review_md("abc1234"), FID], mode="strict"))
+    assert b"AC-1" in s1 and s1 != advisory
+    assert _art("review-review", repo, _tree(repo, blocks=[review_md("abc1234"), FID.replace("total", "sum")], mode="strict")) != s1
+    assert _art("review-review", repo, _tree(repo, mode="strict"))  # strict and no fidelity block: an empty frame, not a refusal
+    assert _art("review-review", repo, _tree(repo, mode="strict")) != _art("review-review", repo, _tree(repo))  # a mode flip in the working tree always changes the bytes: stale, never a pass
+
+
+def test_artifacts_refuse_what_they_cannot_read(repo, tmp_path_factory):
+    cfg = _tree(repo)
+    for gate in ("approve-push", "wait-po-answers", "nope"):
+        with pytest.raises(ValueError):
+            _art(gate, repo, cfg)
+    outside = tmp_path_factory.mktemp("outside")
+    (outside / "spec.md").write_text("secret")
+    (repo / "specs/001-x/spec.md").unlink()
+    (repo / "specs/001-x/spec.md").symlink_to(outside / "spec.md")  # a symlink: never read
+    with pytest.raises(ValueError) as e:
+        _art("review-spec", repo, cfg)
+    assert str(e.value) == approvals.E_ARTIFACT
+    for spec_dir in ("../" + outside.name, str(outside), "specs/missing"):  # outside the tree, absolute, absent
+        (outside / "plan.md").write_text("x")
+        _tree(repo)
+        (repo / "dod/DoD_1001.md").write_text(ledger_md(review_md("abc1234"), spec_dir=spec_dir))
+        with pytest.raises(ValueError):
+            _art("review-spec", repo, cfg)
+    (repo / "dod/DoD_1001.md").write_text("# DoD\nno sections\n")
+    for gate in REVIEW3:
+        with pytest.raises(ValueError):
+            _art(gate, repo, cfg)
+    _tree(repo, blocks=[])  # no review block yet
+    with pytest.raises(ValueError):
+        _art("review-review", repo, cfg)
+    _tree(repo)
+    (repo / "dod/DoD_1001.md").write_text(ledger_md(review_md("abc1234")).replace("## 5.", "```\n## 5."))  # an unclosed fence
+    with pytest.raises(ValueError):
+        _art("review-spec", repo, cfg)
+
+
+def _rc(cfg, raws, **kw):
+    return RouteClient(cfg, raws, me=ME, **kw)
+
+
+def _appr(gate, art, cid=11, date=T1, h=None, **kw):
+    return _cmd(cid, f"/approve {gate} {h or approvals.gate_hash(gate, 1001, art)}", date, **kw)
+
+
+def test_review_gates_met_only_by_the_matching_hash(repo, cfg):
+    conf = _tree(repo)
+    for gate in REVIEW3:
+        art = _art(gate, repo, conf)
+        other = _art(next(g for g in REVIEW3 if g != gate), repo, conf)
+        assert approvals.check(_rc(cfg, [_appr(gate, art)]), T12, 1001, gate, conf, str(repo)) == {"gate": gate, "mode": "comment", "met": True}
+        h = approvals.gate_hash(gate, 1001, art)
+        # another gate's artifacts, no comment, the agent or a stranger, a newer reject, another hash, an edited comment, an approval older than the request
+        for raws in ([_appr(gate, other)], [], [_appr(gate, art, author=ME)], [_appr(gate, art, author=ANON)], [_appr(gate, art, version=2)],
+                     [_appr(gate, art), _cmd(12, f"/reject {gate} {h}", T2)], [_appr(gate, art), _appr(gate, other, cid=12, date=T2)],
+                     [_appr(gate, art), raw_comment(5, f"[spec-kit-ado:approval-request] {gate} {h}", T2, author=KIT)]):
+            with pytest.raises(approvals.ApprovalMissing) as e:
+                approvals.check(_rc(cfg, raws, responses=[versions_response((1, "/approve", T1))]), T12, 1001, gate, conf, str(repo))
+            assert str(e.value) == approvals.E_REVIEW.format(gate=gate, story=1001, hash=h, bad="")
+        assert approvals.check(_rc(cfg, [_cmd(12, f"/reject {gate} {h}", T0), _appr(gate, art)]), T12, 1001, gate, conf, str(repo))["met"]  # reject first, approve later
+    art = _art("review-spec", repo, conf)  # the spec changed after the approval: stale
+    conf = _tree(repo, spec="# Spec\nchanged after approval\n")
+    with pytest.raises(approvals.ApprovalMissing):
+        approvals.check(_rc(cfg, [_appr("review-spec", art)]), T12, 1001, "review-spec", conf, str(repo))
+
+
+def test_review_check_surfaces_bad_newer_and_refuses_bypass_and_unreadable(repo, cfg):
+    conf = _tree(repo)
+    ok = _appr("review-spec", _art("review-spec", repo, conf))
+    with pytest.raises(approvals.ApprovalMissing) as e:
+        approvals.check(_rc(cfg, [ok, _cmd(12, "/reject (review-spec)", T2, author=HUMAN)]), T12, 1001, "review-spec", conf, str(repo))
+    assert "1 newer malformed" in str(e.value) and "(review-spec)" not in str(e.value)
+    for bypass in (True, AdoError("HTTP 403", status=403)):
+        client = _rc(cfg, [ok], bypass=bypass)
+        with pytest.raises(approvals.ApprovalRefused) as e:
+            approvals.check(client, T12, 1001, "review-spec", conf, str(repo))
+        assert str(e.value) == approvals.BYPASS_REFUSAL and not any("/comments" in c["path"] for c in client.calls)
+    cut = {"comments": [raw_comment(1, "x", D1)], "continuationToken": "same"}
+    client, pages = _rc(cfg, []), iter([cut, cut])
+    client.request = lambda method, path, body=None, **k: next(pages) if "/comments?" in path else RouteClient.request(client, method, path, body, **k)
+    with pytest.raises(approvals.ApprovalMissing) as e:
+        approvals.check(client, T12, 1001, "review-spec", conf, str(repo))
+    assert str(e.value) == approvals.E_UNREADABLE
+    with pytest.raises(approvals.ApprovalMissing):
+        approvals.check(_rc(cfg, [ok]), Trust([], "comment", {}), 1001, "review-spec", conf, str(repo))
+
+
+def test_terminal_mode_noop_check(cfg):
+    for trust in (Trust([HUMAN], "terminal", {}), Trust([], "terminal", {})):
+        for gate in GATE12:
+            client = RouteClient(cfg, [], bypass=True)
+            assert approvals.check(client, trust, 1001, gate, cfg) == {"gate": gate, "mode": "terminal", "met": True} and client.calls == []
+
+
+def test_unknown_gate_refused_and_apply_gates_not_checked_here(cfg):
+    for gate in set(GATE12) - set(REVIEW3) - set(WAIT2):  # the seven apply gates are checked by their own --apply
+        client = _rc(cfg, [_ok(gate)])
+        with pytest.raises(approvals.ApprovalRefused) as e:
+            approvals.check(client, T12, 1001, gate, cfg)
+        assert str(e.value) == approvals.E_APPLY_GATE.format(gate=gate) and client.calls == []
+    for bad in ("nope", "", "review-spec ", "REVIEW-SPEC", "../x", "review-spec;rm", None, 3):
+        for trust in (T12, Trust([], "terminal", {})):
+            client = RouteClient(cfg, [])
+            with pytest.raises(approvals.ApprovalRefused) as e:
+                approvals.check(client, trust, 1001, bad, cfg)
+            assert str(e.value) == approvals.E_GATE and client.calls == []
+    for gate, text in (("review-spec", approvals.E_NOT_WAIT.format(gate="review-spec")), ("approve-push", approvals.E_NOT_WAIT.format(gate="approve-push")), ("nope", approvals.E_GATE)):
+        with pytest.raises(approvals.ApprovalRefused) as e:
+            approvals.wait_state(RouteClient(cfg, []), 1001, gate, T12)
+        assert str(e.value) == text
+
+
+# -- the wait gates: ADO state only --
+QA, QB = ({"id": f"Q{n}", "question": q} for n, q in ((1, "Are contractors included?"), (2, "Which locale do we ship?")))
+TW = Trust([HUMAN], "comment", {"assume_after_hours": 24})
+NOT_Q = approvals.E_QUESTIONS, approvals.E_AGE_UNKNOWN
+
+
+def _own(qs, cid=10, date=T0, assumed=(), **kw):
+    html = qmod.comment_html(qs, assumed)
+    return html, raw_comment(cid, html, date, author=ME, **kw)
+
+
+def _wait(cfg, raws, vers=None, trust=T12, gate="wait-po-answers", now=None, **kw):
+    client = RouteClient(cfg, raws, me=ME, responses=[vers] if vers is not None else [], **kw)
+    client.now = now
+    return approvals.wait_state(client, 1001, gate, trust), client
+
+
+def _cli_env(tmp_path, monkeypatch, raws, **kw):
+    (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam"}))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ADO_TOKEN", "t")
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    monkeypatch.setattr(_main, "trusted", lambda repo=".", base=None: T12)
+    monkeypatch.setattr(_main, "AdoClient", lambda c: RouteClient(c, raws, me=ME, **kw))
+
+
+def test_wait_answers_from_ado_not_ledger(cfg, tmp_path, monkeypatch, capsys):
+    html, own = _own([QA, QB])
+    vers = versions_response((1, html, T0))
+    (tmp_path / "dod").mkdir()  # the ledger says both are answered; ADO has an approver's /answer for Q1 only
+    (tmp_path / "dod/DoD_1001.md").write_text(ledger_md().replace("## 3.", "- [x] Q1: a → yes · owner: PO\n- [x] Q2: b → no · owner: PO\n## 3."))
+    q1 = _cmd(11, "/answer Q1: SEKRET dana@contoso.example", T1)
+    st, client = _wait(cfg, [own, q1], vers)
+    assert st == {"met": False, "open": ["Q2"], "bad_newer": 0} and all(c["method"] == "GET" for c in client.calls)
+    assert _wait(cfg, [own, q1, _cmd(12, "/answer Q2: no", T2)], vers)[0] == {"met": True, "open": [], "bad_newer": 0}
+    # every answer passes the guards: the agent, the kit, a stranger, a forged author, a quote, a time not after the posting
+    for bad in (_cmd(11, "/answer Q1: y", T1, author=ME), _cmd(11, "/answer Q1: y", T1, author=KIT), _cmd(11, "/answer Q1: y", T1, author=ANON),
+                _cmd(11, "/answer Q1: y", T1, on_behalf=HUMAN), _cmd(11, "<blockquote>/answer Q1: y</blockquote>", T1),
+                _cmd(11, "/answer Q1: y", "2026-10-01T09:00:00Z"), _cmd(5, "/answer Q1: y", T0)):
+        assert _wait(cfg, [own, bad], vers)[0]["open"] == ["Q1", "Q2"]
+    st = _wait(cfg, [own, q1, _cmd(12, "/answer Q2: no", T2), _cmd(13, "/answer (Q2)", T3)], vers)[0]  # a newer malformed line could retract either answer: counted, never ignored
+    assert st == {"met": False, "open": ["Q1", "Q2"], "bad_newer": 2}
+    assert _wait(cfg, [own, q1, _cmd(12, "/answer Q2: no", T2), _cmd(13, "/answer Q9", T3)], vers)[0]["met"] is True  # a malformed line about another well-formed target
+    monkeypatch.chdir(tmp_path)  # via the CLI: the text names the gate, a count and ids; nothing from a comment
+    _cli_env(tmp_path, monkeypatch, [own, q1], responses=[vers])
+    assert _main.main(["approvals", "check", "1001", "--gate", "wait-po-answers"]) == 2
+    err = capsys.readouterr().err
+    assert err.strip() == "error: " + approvals.E_WAIT.format(gate="wait-po-answers", story=1001, n=1, ids="Q2", bad="") and "SEKRET" not in err and "contoso" not in err
+
+
+def _refuses(cfg, raws, vers=None, text=approvals.E_QUESTIONS, **kw):
+    with pytest.raises(approvals.ApprovalMissing) as e:
+        _wait(cfg, raws, vers, **kw)
+    assert str(e.value) == text
+
+
+def test_wait_answers_nothing_to_wait_for_and_unreadable(cfg):
+    assert _wait(cfg, [_cmd(1, "hi", T0)])[0] == {"met": True, "open": [], "bad_newer": 0}  # no questions comment: nothing is waited for (a documented residual)
+    done = raw_comment(10, qmod.ANSWERED, T0, author=ME)
+    assert _wait(cfg, [done], versions_response((1, qmod.ANSWERED, T0)))[0]["met"] is True
+    html, own = _own([QA], assumed=[{"id": "Q9", "question": "Old?", "answer": "assumed: yes"}])
+    assert _wait(cfg, [own], versions_response((1, html, T0)))[0]["open"] == ["Q1"]  # the part the team assumed is not a question
+    html, own = _own([QA])
+    ok = versions_response((1, html, T0))
+    _refuses(cfg, [_own([QA], modified_by=HUMAN)[1]], ok)  # edited by another identity
+    _refuses(cfg, [raw_comment(10, "[spec-kit-ado:questions]<br><span>x</span>", T0, author=ME)], versions_response((1, "[spec-kit-ado:questions]<br><span>x</span>", T0)))
+    for bad in ("[spec-kit-ado:questions]<br>Open questions for the product owner:<br>Q1: a<br>Q1: b", "[spec-kit-ado:questions]<br>Open questions for the product owner:<br>not a question"):
+        _refuses(cfg, [raw_comment(10, bad, T0, author=ME)], versions_response((1, bad, T0)))
+    _refuses(cfg, [own], AdoError("HTTP 404", status=404), text=approvals.E_AGE_UNKNOWN)  # no versions endpoint: the age cannot be established
+    _refuses(cfg, [own], versions_response((1, html + "x", T0)))  # the versions do not show the comment as it is
+    assert _wait(cfg, [own, _cmd(11, "/answer Q1: y", T1)], versions_response((1, html, T0)))[0]["met"] is True
+    _refuses(cfg, [own], ok, trust=Trust([], "comment", {}), text=approvals.E_NO_APPROVERS)
+    with pytest.raises(approvals.ApprovalRefused):
+        _wait(cfg, [own], ok, bypass=True)
+
+
+def test_agent_cannot_meet_wait_answers_with_its_own_comments(cfg):
+    """P4-12b fix 1: the token identity (the agent) posts a bare marker or the ANSWERED text, or edits its comment to say so; the open questions stay open."""
+    html, own = _own([QA, QB])
+    v1 = versions_response((1, html, T0))
+    bare = "[spec-kit-ado:questions]"
+    _refuses(cfg, [own, raw_comment(11, bare, T1, author=ME)], v1)  # (b) a second marker comment, bare
+    _refuses(cfg, [own, raw_comment(11, qmod.ANSWERED, T1, author=ME)], v1)  # ... or with the ANSWERED text
+    _refuses(cfg, [raw_comment(11, bare, T1, author=ME)], versions_response((1, bare, T1)))  # (a) a bare marker alone is unreadable, not "no open lines"
+    _refuses(cfg, [raw_comment(11, "[spec-kit-ado:questions]<br>All good", T1, author=ME)], versions_response((1, "[spec-kit-ado:questions]<br>All good", T1)))
+    for hidden in ("\u200b" + bare, "\u2060\u200d  " + bare + " all answered", "<p>" + bare + "</p>"):  # (b) disguised markers by anyone count as marker comments
+        for who in (ME, HUMAN):
+            _refuses(cfg, [own, raw_comment(11, hidden, T1, author=who)], v1)
+    _refuses(cfg, [own, raw_comment(11, "x [spec-kit-ado:questions]", T1, author=KIT)], v1)  # another identity's marker comment
+    # (c) the agent EDITS its own comment: bare marker -> unreadable; ANSWERED -> both questions stay open; the old lines gone from the text
+    edited = raw_comment(10, bare, T0, author=ME, version=2)
+    _refuses(cfg, [edited], versions_response((1, html, T0), (2, bare, T1)))
+    gone = raw_comment(10, qmod.ANSWERED, T0, author=ME, version=2)
+    two = versions_response((1, html, T0), (2, qmod.ANSWERED, T1))
+    assert _wait(cfg, [gone], two)[0] == {"met": False, "open": ["Q1", "Q2"], "bad_newer": 0}
+    assert _wait(cfg, [gone, _cmd(11, "/answer Q1: y", T2)], two)[0]["open"] == ["Q2"]  # a guarded approver /answer closes it
+    assert _wait(cfg, [gone, _cmd(11, "/answer Q1: y", T0), _cmd(12, "/answer Q2: y", T0, author=ME)], two)[0]["open"] == ["Q1", "Q2"]  # not before it was shown; not the agent's
+    assert _wait(cfg, [gone], two, trust=TW, now=datetime.datetime(2026, 10, 2, 10, tzinfo=datetime.timezone.utc))[0]["met"] is True  # due, counted from the first version
+    assert _wait(cfg, [gone], two, trust=TW, now=datetime.datetime(2026, 10, 1, 12, tzinfo=datetime.timezone.utc))[0]["open"] == ["Q1", "Q2"]
+    # a question that goes away in a later edit of the same comment, an earlier version unreadable: refused
+    junk = versions_response((1, bare, T0), (2, html, T1))
+    _refuses(cfg, [raw_comment(10, html, T0, author=ME, version=2)], junk)
+
+
+def test_wait_gates_refuse_when_the_marker_comments_are_not_the_token_identitys(cfg):
+    """P4-12b fix 2: a poller or CI identity that is not the one that posted must not make everything look met."""
+    html, _ = _own([QA])
+    other = raw_comment(10, html, T0, author=KIT)
+    _refuses(cfg, [other], versions_response((1, html, T0)))
+    post = _posts("D1 (decision): x", author=KIT)
+    _refuses(cfg, [post], text=approvals.E_DECISIONS, gate="wait-po-validation")
+    assert _wv(cfg, [_posts("D1 (decision): x", cid=21), post])["open"] == ["D1"]  # the token identity's own posting is there: others are read too
+
+
+def test_wait_validation_is_as_strict_as_the_done_time_check(cfg):
+    """P4-12b fix 3: an edited, disguised, cut, markup or unparsable kit decisions posting refuses (strict.xcheck reads them as `-marker`)."""
+    head = "Decisions and assumptions made during development; please validate or reject:"
+    old = f"[spec-kit-ado:decisions]<br>{head}<br>D1 (decision): use a queue<br>D2 (assumption): UTC"
+
+    def refuses(raws, vers=None):
+        with pytest.raises(approvals.ApprovalMissing) as e:
+            _wv(cfg, raws, vers)
+        assert str(e.value) == approvals.E_DECISIONS
+    for new in (f"[spec-kit-ado:decisions]<br>{head}", f"[spec-kit-ado:decisions]<br>{head}<br>D1 (decision): use a queue"):  # an edit removing every D line / dropping D2
+        refuses([raw_comment(20, new, T0, author=ME, version=2)], versions_response((1, old, T0), (2, new, T1)))
+    refuses([raw_comment(20, "\u200b" + old, T0, author=ME)])  # a zero-width prefix: disguised, never skipped
+    refuses([raw_comment(20, "\u2060 \u200d" + old, T0, author=ME)])
+    refuses([_posts("D1 (decision): x"), raw_comment(21, "\u200b[spec-kit-ado:decisions]", T0, author=HUMAN)])
+    refuses([raw_comment(20, f"[spec-kit-ado:decisions]<br><span>{head}</span><br>D1 (decision): x", T0, author=ME)])  # hidden in markup
+    refuses([raw_comment(20, "\u2800" * 64 + old, T0, author=ME)])  # 64 braille blanks / Hangul fillers in front: disguised
+    refuses([raw_comment(20, "\u3164" * 70 + "\u2800" * 3 + old, T0, author=ME)])
+    refuses([raw_comment(20, f"[spec-kit-ado:decisions]<br>{head}<br>some other line", T0, author=ME)])  # an unparsable line
+    refuses([raw_comment(20, f"[spec-kit-ado:decisions]<br>D1 (decision): no heading", T0, author=ME)])
+    refuses([_posts("D1 (decision): x", cid=21, date="not a date")])
+    same = raw_comment(20, old, T0, author=ME, version=2)  # a no-op save is not an edit
+    assert _wv(cfg, [same], versions_response((1, old, T0), (2, old, T1)))["open"] == ["D1", "D2"]
+
+
+def test_wait_due_counts_with_server_time(cfg, monkeypatch):
+    html, own = _own([QA, QB])
+    vers = versions_response((1, html, T0))
+    at = lambda **kw: datetime.datetime(2026, 10, 1, 10, tzinfo=datetime.timezone.utc) + datetime.timedelta(**kw)  # noqa: E731
+    assert _wait(cfg, [own], vers, trust=TW, now=at(hours=23, minutes=59))[0]["open"] == ["Q1", "Q2"]
+    assert _wait(cfg, [own], vers, trust=TW, now=at(hours=24))[0] == {"met": True, "open": [], "bad_newer": 0}  # due: 24 h on the server's clock
+    st = _wait(cfg, [own, _cmd(11, "/answer Q1: yes", T1)], vers, trust=TW, now=at(hours=23))[0]
+    assert st["open"] == ["Q2"]  # answered or due, per question
+    assert _wait(cfg, [own], vers, trust=T12, now=at(days=30))[0]["open"] == ["Q1", "Q2"]  # no assume_after_hours: nothing is ever due
+    for bad in (True, 0, 721, "24", 1.5):
+        assert _wait(cfg, [own], vers, trust=Trust([HUMAN], "comment", {"assume_after_hours": bad}), now=at(days=30))[0]["open"] == ["Q1", "Q2"]
+    with pytest.raises(approvals.ApprovalMissing) as e:  # no server time: refused, never due
+        _wait(cfg, [own], vers, trust=TW, now=None)
+    assert str(e.value) == approvals.E_NO_TIME
+    # the local clock is never read: a wall clock far in the future changes nothing
+    import time
+    monkeypatch.setattr(time, "time", lambda: datetime.datetime(2040, 1, 1).timestamp())
+    assert _wait(cfg, [own], vers, trust=TW, now=at(hours=1))[0]["open"] == ["Q1", "Q2"]
+
+
+# wait-po-validation
+def _posts(*lines, cid=20, date=T0, author=ME, **kw):
+    return raw_comment(cid, "<br>".join(["[spec-kit-ado:decisions]", "Decisions and assumptions made during development; please validate or reject:", *lines]),
+                       date, author=author, **kw)
+
+
+def _wv(cfg, raws, vers=None, **kw):
+    return _wait(cfg, raws, vers, gate="wait-po-validation", **kw)[0]
+
+
+def test_wait_validation_from_ado_not_decisions_file(cfg, tmp_path, monkeypatch, capsys):
+    post = _posts("D1 (decision): use a queue", "D2 (assumption): UTC")
+    (tmp_path / "dod").mkdir()  # the decisions file says both are validated: it is never read
+    (tmp_path / "dod/Decisions_1001.md").write_text("- [x] D1 (decision): use a queue → validated · by: PO\n- [x] D2 (assumption): UTC → validated · by: PO\n")
+    monkeypatch.chdir(tmp_path)
+    a1 = _cmd(21, "/approve D1: SEKRET dana@contoso.example", T1)
+    assert _wv(cfg, [post, a1]) == {"met": False, "open": ["D2"], "bad_newer": 0}
+    assert _wv(cfg, [post, a1, _cmd(22, "/reject D2: no", T2)]) == {"met": True, "open": [], "bad_newer": 0}
+    for bad in (_cmd(21, "/approve D1", T1, author=ME), _cmd(21, "/approve D1", T1, author=KIT), _cmd(21, "/approve D1", T1, author=ANON),
+                _cmd(21, "/approve D1", T1, on_behalf=HUMAN), _cmd(21, "> /approve D1", T1), _cmd(21, "<blockquote>/approve D1</blockquote>", T1),
+                _cmd(21, "/approve D1", "2026-10-01T09:00:00Z"), _cmd(21, "/approve D2", T1), _cmd(21, "/answer Q1: x", T1)):
+        assert "D1" in _wv(cfg, [post, bad])["open"]
+    # a re-post of a changed D1 needs a fresh verdict, newer than the NEWEST posting
+    again = _posts("D1 (decision): use a stream", cid=23, date=T2)
+    both = [post, a1, _cmd(22, "/approve D2", T1)]
+    assert _wv(cfg, both + [again])["open"] == ["D1"]
+    assert _wv(cfg, both + [again, _cmd(24, "/approve D1", T3)])["met"] is True
+    assert _wv(cfg, both + [_cmd(24, "/reject D1: x", T2)])["met"] is True  # newest wins; a reject is a verdict too
+    assert _wv(cfg, both + [_cmd(24, "/reject (D1)", T2)]) == {"met": False, "open": ["D1", "D2"], "bad_newer": 2}  # a newer malformed line could be about either: counted on both
+    assert _wv(cfg, both + [_cmd(24, "/reject approve-pr", T2)])["met"] is True  # a different well-formed target is no retraction here
+    assert _wv(cfg, [_cmd(1, "hello", T0)])["met"] is True  # no decisions comment: nothing to wait for
+    _cli_env(tmp_path, monkeypatch, [post, a1])
+    assert _main.main(["approvals", "check", "1001", "--gate", "wait-po-validation"]) == 2
+    err = capsys.readouterr().err
+    assert err.strip() == "error: " + approvals.E_WAIT.format(gate="wait-po-validation", story=1001, n=1, ids="D2", bad="") and "SEKRET" not in err
+
+
+# CLI
+def test_cli_terminal_mode_needs_no_token_and_unknown_gate_is_usage(tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(_main, "AdoClient", lambda c: pytest.fail("terminal mode reads nothing from ADO"))
+    monkeypatch.setattr(_main, "_config", lambda a: pytest.fail("no config is read in terminal mode"))
+    monkeypatch.setattr(_main, "trusted", lambda repo=".", base=None: Trust([], "terminal", {}))
+    for gate in GATE12:
+        assert _main.main(["approvals", "check", "1001", "--gate", gate]) == 0
+        assert json.loads(capsys.readouterr().out) == {"gate": gate, "mode": "terminal", "met": True}
+    monkeypatch.setattr(_main, "trusted", lambda repo=".", base=None: pytest.fail("an unknown gate is refused before any trust read"))
+    for bad in ("nope", "review-spec;rm -rf", "Review-Spec"):
+        assert _main.main(["approvals", "check", "1001", "--gate", bad]) == 2
+        out = capsys.readouterr()
+        assert out.err.strip() == f"error: {approvals.E_GATE}" and out.out == ""
+    for argv in (["approvals", "check", "1001"], ["approvals", "check", "0", "--gate", "review-spec"], ["approvals"]):
+        with pytest.raises(SystemExit) as e:
+            _main.main(argv)
+        assert e.value.code == 2
+    capsys.readouterr()
+
+
+def test_cli_comment_mode_apply_gate_and_met_review_gate(repo, monkeypatch, capsys):
+    _tree(repo)
+    raws = []
+    _cli_env(repo, monkeypatch, raws)
+    (repo / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam", "dod_path": "dod"}))
+    art = approvals.artifacts("review-spec", 1001, Config.load(), ".")
+    assert _main.main(["approvals", "check", "1001", "--gate", "approve-push"]) == 2
+    assert capsys.readouterr().err.strip() == "error: " + approvals.E_APPLY_GATE.format(gate="approve-push")
+    assert _main.main(["approvals", "check", "1001", "--gate", "review-spec"]) == 2
+    assert approvals.gate_hash("review-spec", 1001, art) in capsys.readouterr().err
+    raws.append(_appr("review-spec", art))
+    assert _main.main(["approvals", "check", "1001", "--gate", "review-spec"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"gate": "review-spec", "mode": "comment", "met": True}
+
+
+def test_a_decision_the_kit_cut_stays_open_until_a_short_repost_is_approved(cfg):
+    """P4-12b fix round 2: the kit's own cut line (500 characters ending in …) must not brick the gate: that D is open while its NEWEST posting shows it cut."""
+    head = "Decisions and assumptions made during development; please validate or reject:"
+    cut = raw_comment(20, f"[spec-kit-ado:decisions]<br>{head}<br>D1 (decision): " + "x" * 484 + "…<br>D2 (decision): short", T0, author=ME)
+    assert len(("D1 (decision): " + "x" * 484 + "…")) == 500
+    approve = [_cmd(21, "/approve D1", T1), _cmd(22, "/approve D2", T1)]
+    assert _wv(cfg, [cut]) == {"met": False, "open": ["D1", "D2"], "bad_newer": 0}  # the cut posting alone: open, the gate does not refuse
+    assert _wv(cfg, [cut] + approve) == {"met": False, "open": ["D1"], "bad_newer": 0}  # D2 is fine; an approval of a line the approver could not see in full is no approval
+    again = _posts("D1 (decision): short now", cid=23, date=T2)
+    assert _wv(cfg, [cut] + approve + [again])["open"] == ["D1"]  # reposted short: needs a verdict newer than the repost
+    assert _wv(cfg, [cut] + approve + [again, _cmd(24, "/approve D1", T3)]) == {"met": True, "open": [], "bad_newer": 0}
+    assert _wv(cfg, [cut, again, _cmd(24, "/reject D1: no", T3), approve[1]])["met"] is True
+    again_cut = raw_comment(25, f"[spec-kit-ado:decisions]<br>{head}<br>D1 (decision): " + "y" * 484 + "…", T3, author=ME)
+    assert _wv(cfg, [cut, again, again_cut] + approve + [_cmd(26, "/approve D1", T3)])["open"] == ["D1"]  # the newest posting is cut again

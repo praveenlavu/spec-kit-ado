@@ -1027,15 +1027,13 @@ def _decisions_done(c):
 
 
 # ---- done-time cross-check (D§4.4, P4-11): with approvers configured, every verdict of the PR-controlled decisions file must be what `--sync` would write now ----
-_XC_LINE = re.compile(r"D([0-9]{1,9}) \((?:decision|assumption|override)\): ")  # a decision line of a posted comment: the id, digits only
+_XC_LINE = decisions.POSTED_LINE
 _XC_ORDER = ("marker", "dropped", "verdict")
 
 
 def _xc_is_posting(text):
-    """Does a comment look like a decisions posting, or try to? The marker among the first 64 characters once whitespace and invisible format
-    characters (zero-width space and joiners, bidi marks) are removed: a posting that starts with one is invalid (`-marker`), never ignored."""
-    clean = "".join(ch for ch in str(text or "") if not ch.isspace() and unicodedata.category(ch) != "Cf")
-    return decisions.MARKER in clean[:64]
+    """Does a comment look like a decisions posting, or try to? (`comments.marked`: a posting that starts with an invisible character is invalid (`-marker`), never ignored.)"""
+    return comments.marked(text, decisions.MARKER)
 
 
 def _xc_text(sid):

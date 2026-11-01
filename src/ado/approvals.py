@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import os
 import re
 import unicodedata
 import urllib.parse
@@ -395,29 +396,14 @@ def _requests(found, hashes):
     return [_order(c) for c in found if (m := _REQUEST.match(c.get("text") or "")) and hashes.get(m.group(1)) == m.group(2)]
 
 
-def require(client, trust_cfg, story_id, verb, plan_bytes, ci_identity=None):
-    """The gate in front of an ADO write in `approval: "comment"` mode (a no-op otherwise); called after the `--expect-plan` check. The verb's gates
-    (`VERB_GATES[verb]`) are ONE target for this plan: the newest valid command over all of them (each gate's hash is `gate_hash(g, story_id,
-    plan_bytes)`; a command with any other hash still counts as a command, so a later reject or another plan's approval cancels) must be an
-    `/approve` with that gate's hash, newer than every approval request for the set, with no newer malformed approver line (`newest()["bad_newer"]`)
-    on any gate of the set: fail closed, and the count is shown. Anything else raises (`ApprovalRefused`: bypass bit; `ApprovalMissing`: the
-    rest), with a fixed text. Reads only; an HTTP error propagates."""
-    if trust_cfg.approval != "comment":
-        return
-    hashes = {g: gate_hash(g, story_id, plan_bytes) for g in sorted(VERB_GATES[verb])}
+def _approve_for(client, trust_cfg, story_id, make_hashes, message, ci_identity=None):
+    """The core of `require` and of `check`: `make_hashes()` gives {gate: hash}, called after `comment_mode_allowed`. These gates are ONE target: the newest
+    valid command over all of them (a command with any other hash still counts as a command, so a later reject or another plan's approval cancels) must be
+    an `/approve` with that gate's hash, newer than every approval request for the set, with no newer malformed approver line (`newest()["bad_newer"]`) on
+    any gate of the set. Anything else raises ApprovalMissing(`message(hashes, bad)`); the bypass refusal is ApprovalRefused. Reads only."""
     comment_mode_allowed(client)
-    if not trust_cfg.approvers:
-        raise ApprovalMissing(E_NO_APPROVERS)
-    try:
-        found, truncated = comments.fetch(client, story_id, with_meta=True)
-    except comments.CommentsUnreadable:
-        raise ApprovalMissing(E_UNREADABLE) from None
-    if truncated:
-        raise ApprovalMissing(E_UNREADABLE)
-    try:
-        skip = excluded(client, found, ci_identity)
-    except ValueError:  # `questions._me` puts the client's error text into its message
-        raise ApprovalMissing(E_IDENTITY) from None
+    hashes = make_hashes()
+    found, skip = _load(client, trust_cfg, story_id, ci_identity)
 
     def scan(rows):
         wins, bad = {}, 0
@@ -437,5 +423,260 @@ def require(client, trust_cfg, story_id, verb, plan_bytes, ci_identity=None):
             _, bad = scan([c for c in found if (k := _order(c)) is None or k > cut])
             if not bad:
                 return
-    raise ApprovalMissing(E_MISSING.format(story=int(story_id), gates=", ".join(f"{g} {h}" for g, h in hashes.items()),
-                                           bad=f" {bad} newer malformed command line(s) by an approver for this plan: check the thread." if bad else ""))
+    raise ApprovalMissing(message(hashes, bad))
+
+
+def _load(client, trust_cfg, story_id, ci_identity=None):
+    """(every comment of the story with its meta, the excluded identities) after the approvers are known to be set; ApprovalMissing with a fixed text when the
+    comments are unreadable or truncated or the token identity is unknown. The caller has run `comment_mode_allowed`."""
+    if not trust_cfg.approvers:
+        raise ApprovalMissing(E_NO_APPROVERS)
+    try:
+        found, truncated = comments.fetch(client, story_id, with_meta=True)
+    except comments.CommentsUnreadable:
+        raise ApprovalMissing(E_UNREADABLE) from None
+    if truncated:
+        raise ApprovalMissing(E_UNREADABLE)
+    try:
+        return found, excluded(client, found, ci_identity)
+    except ValueError:  # `questions._me` puts the client's error text into its message
+        raise ApprovalMissing(E_IDENTITY) from None
+
+
+def require(client, trust_cfg, story_id, verb, plan_bytes, ci_identity=None):
+    """The gate in front of an ADO write in `approval: "comment"` mode (a no-op otherwise); called after the `--expect-plan` check. The verb's gates
+    (`VERB_GATES[verb]`) are ONE target for this plan (see `_approve_for`; each gate's hash is `gate_hash(g, story_id, plan_bytes)`): fail closed, and
+    the count of newer malformed lines is shown. A refusal has a fixed text (`ApprovalRefused`: bypass bit; `ApprovalMissing`: the rest). Reads only; an HTTP error propagates."""
+    if trust_cfg.approval != "comment":
+        return
+    _approve_for(client, trust_cfg, story_id, lambda: {g: gate_hash(g, story_id, plan_bytes) for g in sorted(VERB_GATES[verb])},
+                 lambda hashes, bad: E_MISSING.format(story=int(story_id), gates=", ".join(f"{g} {h}" for g, h in hashes.items()), bad=_bad(bad)),
+                 ci_identity)
+
+
+def _bad(n, what="for this plan"):
+    return f" {n} newer malformed command line(s) by an approver {what}: check the thread." if n else ""
+
+
+# ---- `ado approvals check` (P4-12b): the review gates by hash, the wait gates by ADO state --------------------------------------------------------
+
+GATES = ("review-spec", "approve-questions", "approve-plan-questions", "wait-po-answers", "approve-answers-questions", "review-plan", "approve-push",
+         "approve-decisions", "approve-sync", "review-review", "approve-pr", "wait-po-validation")  # the 12 gates of the shipped workflow, fixed
+REVIEW_GATES = ("review-spec", "review-plan", "review-review")  # approved by hash over their artifacts
+WAIT_GATES = ("wait-po-answers", "wait-po-validation")  # met by what ADO shows, no hash
+E_GATE = "unknown gate: --gate must be one of the 12 gates of the ado-lifecycle workflow (docs/configuration.md, 'Approvers and comment mode')"
+E_APPLY_GATE = "gate {gate} is not checked here: the apply it guards (`--apply`) requires the approver comment itself"
+E_ARTIFACT = ("comment approval: an artifact this gate shows cannot be read (missing, a symlink, outside the working tree, over 1 MiB, not UTF-8, or not in the form the "
+              "gate needs), so there is nothing to approve")
+E_REVIEW = ("comment approval: no valid approval for gate {gate} on story {story}. A trusted approver must comment `/approve {gate} {hash}` (first line, unedited, "
+            "newer than any approval request).{bad}")
+E_NOT_WAIT = "gate {gate} is not a wait gate: it is checked by `ado approvals check` as a review or an apply gate, not by its open questions or decisions"
+E_WAIT = "comment approval: gate {gate} on story {story} is not met: {n} open ({ids}).{bad}"
+E_QUESTIONS = ("comment approval: the story's questions comment cannot be trusted (more than one comment carries the questions marker, it is not the token identity's own, "
+               "it was edited by another identity, or it has unexpected markup or lines), so nothing is met.")
+E_DECISIONS = ("comment approval: a decisions comment on the story cannot be trusted (edited, disguised, cut, hidden in markup, unexpected lines, or none of them is "
+               "the token identity's own), so nothing is met.")
+E_AGE_UNKNOWN = "comment approval: how long the questions have been shown cannot be established from the server (versions of the kit's comment), so nothing is met."
+E_NO_TIME = "comment approval: the server time cannot be established, so no question can be due under `assume_after_hours`; nothing is met."
+_REVIEW_H, _FIDELITY_H = re.compile(r"^### Review\b"), re.compile(r"^### AC fidelity\b")
+
+
+def _block(sec, heading):
+    """The authored text of the newest live (not `(superseded)`) block of ledger section `sec` that starts with `heading`, up to the next `#`..`###` heading;
+    fences and comments hide headings. None when there is none or the section cannot be told apart from its visible form."""
+    raw, vis = sec.splitlines(keepends=True), dod._visible(sec)[0].split("\n")
+    if len(raw) != len(vis):
+        return None
+    live = [i for i, line in enumerate(vis) if heading.match(line) and not line.rstrip().endswith("(superseded)")]
+    if not live:
+        return None
+    end = next((j for j in range(live[-1] + 1, len(vis)) if re.match(r"#{1,3} ", vis[j])), len(vis))
+    return "".join(raw[live[-1]:end])
+
+
+def artifacts(gate_id, story_id, cfg, repo="."):
+    """The bytes a review gate shows its approver (D§4.2), for `gate_hash`: UTF-8 text of the listed artifacts, each framed as `<label> <byte count>\\n<bytes>\\n`
+    (so no content can pass for a frame): `review-spec` = spec.md + ledger section 2; `review-plan` = plan.md + spec.md + ledger section 2; `review-review` =
+    the newest live `### Review` block of ledger section 4, then (strict mode only) the newest live `### AC fidelity` block (an empty frame when there is none),
+    then HEAD's full commit id. spec.md and plan.md sit in the ledger's `Spec dir`. Every file is read confined to `repo` (`gate._read`: no symlink,
+    realpath inside, 1 MiB, UTF-8); the result depends on file contents and HEAD only, never on paths or time. ValueError (E_ARTIFACT) for anything missing or unreadable."""
+    from . import gate, prs
+    if gate_id not in REVIEW_GATES:
+        raise ValueError(E_ARTIFACT)
+    ledger = gate._read(os.path.join(repo, dod.dod_file(cfg.dod_path, comments._num(story_id))), repo, set())
+    if ledger is None or dod.unclosed(ledger):
+        raise ValueError(E_ARTIFACT)
+    parts = []
+
+    def spec_file(name):
+        spec_dir = dod.ledger_spec_dir(ledger)
+        text = gate._read(os.path.join(repo, spec_dir, name), repo, set()) if spec_dir else None
+        if text is None:
+            raise ValueError(E_ARTIFACT)
+        parts.append((name, text))
+
+    def ledger_part(label, text):
+        if text is None:
+            raise ValueError(E_ARTIFACT)
+        parts.append((label, text))
+
+    if gate_id == "review-plan":
+        spec_file("plan.md")
+    if gate_id != "review-review":
+        spec_file("spec.md")
+        ledger_part("ledger-2", dod.section(ledger, 2))
+    else:
+        sec4 = dod.section(ledger, 4)
+        ledger_part("review", _block(sec4, _REVIEW_H) if sec4 is not None else None)
+        if cfg.mode == "strict":
+            parts.append(("fidelity", _block(sec4, _FIDELITY_H) or ""))
+        try:
+            head = prs._text(prs._git(repo, "rev-parse", "--verify", "HEAD^{commit}"), "HEAD").strip()
+        except prs._Refuse:
+            raise ValueError(E_ARTIFACT) from None
+        if not re.fullmatch(r"[0-9a-f]{40}", head):
+            raise ValueError(E_ARTIFACT)
+        parts.append(("head", head))
+    return b"".join(f"{label} {len(b)}\n".encode() + b + b"\n" for label, b in ((label, text.encode("utf-8")) for label, text in parts))
+
+
+def _wait_answers(client, story_id, trust_cfg, found, skip):
+    """(open question ids, malformed-line count) of `wait-po-answers` from ADO only. There is at most ONE comment that carries the questions marker
+    (`comments.marked`, so a disguised one counts), and it must be the token identity's own plain kit comment (anything else, a second marker comment, one by
+    another identity, an edit by another identity, a text that is not exactly a shape the kit writes: E_QUESTIONS); no marker comment is nothing to wait for.
+    Every question that was OPEN in ANY version of that comment (its versions) stays open until the newest valid approver `/answer Q<n>` (`newest`: the
+    guards) that is newer than the version that started to show it, with no newer malformed approver line, or until it is due (`assume_after_hours` by
+    `client.server_now()`, counted from that version); a question that vanished from the current text is not answered by vanishing."""
+    from . import questions
+    marked = [c for c in found if comments.marked(c.get("text"), questions.MARKER)]
+    if not marked:
+        return [], 0
+    try:
+        own = questions.own_comment(client, found)
+    except ValueError:
+        raise ApprovalMissing(E_QUESTIONS) from None
+    if own is None or [c["id"] for c in marked] != [own["id"]]:
+        raise ApprovalMissing(E_QUESTIONS)
+    try:
+        vs = questions.versions_of(client, story_id, own)
+    except ValueError:
+        raise ApprovalMissing(E_AGE_UNKNOWN) from None
+    held = [questions.posted_open(v["text"]) for v in vs]
+    if vs[-1]["text"] != own["html"] or None in held:
+        raise ApprovalMissing(E_QUESTIONS)
+    try:
+        asked = questions.ages(client, story_id, held[-1], found, vs)
+    except ValueError:
+        raise ApprovalMissing(E_AGE_UNKNOWN) from None
+    first = {}  # Q<n> -> index of the first version that showed it as open
+    for i, h in enumerate(held):
+        for q in h:
+            first.setdefault(q["id"], i)
+    now_ids = {q["id"] for q in held[-1]}
+    hours = trust_cfg.unattended.get("assume_after_hours")
+    hours = hours if type(hours) is int and 1 <= hours <= 720 else None
+    now, still, bad_total = None, [], 0
+    for i in sorted(first, key=lambda q: int(q[1:])):
+        when = asked.get(i) if i in now_ids else _when(vs[first[i]]["modified"])
+        if when is None and i not in now_ids:
+            raise ApprovalMissing(E_AGE_UNKNOWN)
+        tally = {}
+        win = newest(client, story_id, found, i, trust_cfg.approvers, skip, tally=tally)
+        key = _order({"date": win["created"], "id": win["id"]}) if win else None
+        if win and win["verb"] == "answer" and not win["bad_newer"] and when and key and key > (when, (2, 0)):
+            continue  # answered; a tie with the posting loses, as for `questions --sync`
+        if hours and when:
+            now = now or _server_now(client)
+            if now - when >= datetime.timedelta(hours=hours):
+                continue  # due
+        still.append(i)
+        bad_total += tally.get("bad_newer", 0)
+    return still, bad_total
+
+
+def _server_now(client):
+    try:
+        now = client.server_now()
+    except AdoError:
+        now = None
+    if now is None:
+        raise ApprovalMissing(E_NO_TIME)
+    return now
+
+
+def _wait_validation(client, story_id, trust_cfg, found, skip):
+    """(open decision ids, malformed-line count) of `wait-po-validation` from ADO only. Every comment that carries the decisions marker (`comments.marked`, so
+    a disguised one counts) must be a plain kit posting, as `ado done`'s cross-check reads it (E_DECISIONS otherwise): starts with the marker, has a readable
+    time, was never edited, is not hidden in markup, shows the heading and only `D<n> (kind): ...` lines, none of them cut at the posting limit; at least one
+    posting must be the token identity's. Every `D<n>` they list needs the newest valid `/approve|/reject D<n>` (`newest`) newer than the newest posting
+    that shows it (or its last modification), with no newer malformed approver line. No posting at all is nothing to wait for."""
+    from . import decisions, questions
+    posts = {}  # D<n> -> the newest kit decisions comment that shows it
+    marked = [c for c in found if comments.marked(c.get("text"), decisions.MARKER)]
+    if not marked:
+        return [], 0
+    try:
+        me = _guid(questions._me(client))
+    except ValueError:
+        raise ApprovalMissing(E_IDENTITY) from None
+    if me is None or not any(c.get("author") == me for c in marked):
+        raise ApprovalMissing(E_DECISIONS)
+    edits, cut_at = {}, {}
+    for c in marked:
+        lines = comments.kit_lines(str(c.get("html") or ""), decisions.MARKER)
+        if str(c["id"]) not in edits:
+            edits[str(c["id"])] = _edited(client, story_id, c)
+        ids = [(decisions.POSTED_LINE.match(ln), ln) for ln in lines if ln != decisions.MARKER and ln != decisions._HEAD]
+        if (not str(c.get("text") or "").lstrip().startswith(decisions.MARKER) or _order(c) is None or edits[str(c["id"])] or decisions._HEAD not in lines
+                or any(m is None for m, _ in ids)):
+            raise ApprovalMissing(E_DECISIONS)
+        for m, ln in ids:
+            i = f"D{int(m.group(1))}"
+            if i not in posts or _order(c) > _order(posts[i]):
+                posts[i] = c
+                cut_at[i] = len(ln) >= decisions.MAX_COMMENT_LINE and ln.endswith("…")  # the kit's own cut: the PO could not see the whole line
+    still, bad_total = [], 0
+    for i in sorted(posts, key=lambda d: int(d[1:])):
+        post, tally = posts[i], {}
+        win = newest(client, story_id, found, i, trust_cfg.approvers, skip, tally=tally)
+        pkey = decisions._posting_key(post)
+        key = _order({"date": win["created"], "id": win["id"]}) if win else None
+        if cut_at[i] or not (win and win["verb"] in ("approve", "reject") and not win["bad_newer"] and pkey and key and key > pkey):
+            still.append(i)  # a decision whose NEWEST posting is cut stays open: an approver cannot approve text they cannot see in full
+            bad_total += tally.get("bad_newer", 0)
+    return still, bad_total
+
+
+def wait_state(client, story_id, gate_id, trust_cfg, ci_identity=None):
+    """`{"met": bool, "open": [ids], "bad_newer": int}` for `wait-po-answers` (open question ids) or `wait-po-validation` (open decision ids), computed from
+    ADO's comments ONLY, never from the ledger or the decisions file (an agent can edit those). `bad_newer` counts malformed approver lines newer than the
+    answer or verdict on the open ids (the caller shows it). Runs `comment_mode_allowed` first; ApprovalRefused / ApprovalMissing with a fixed text for anything
+    unreadable, truncated or unknown (never a pass). Reads only; an HTTP error propagates."""
+    if gate_id not in WAIT_GATES:
+        raise ApprovalRefused(E_NOT_WAIT.format(gate=gate_id) if gate_id in GATES else E_GATE)
+    comment_mode_allowed(client)
+    found, skip = _load(client, trust_cfg, story_id, ci_identity)
+    still, bad = (_wait_answers if gate_id == "wait-po-answers" else _wait_validation)(client, story_id, trust_cfg, found, skip)
+    return {"met": not still, "open": still, "bad_newer": bad}
+
+
+def check(client, trust_cfg, story_id, gate_id, cfg, repo=".", ci_identity=None):
+    """`ado approvals check`: a dict `{"gate", "mode", "met": True, ...}` when the gate is met, else ApprovalRefused / ApprovalMissing (fixed text; nothing from a
+    comment). An unknown gate is refused first. Terminal mode (`approval != "comment"`) is a no-op that reads nothing from ADO. Comment mode runs
+    `comment_mode_allowed` first; a review gate needs the newest valid approver command over the gate to be `/approve <gate> <hash of artifacts()>` (the
+    shared `_approve_for`, so a request, a newer reject and newer malformed lines count as for the applies); a wait gate needs `wait_state` met; the seven
+    apply gates are checked by their own `--apply` (`require`) and are refused here."""
+    if gate_id not in GATES:
+        raise ApprovalRefused(E_GATE)
+    if trust_cfg.approval != "comment":
+        return {"gate": gate_id, "mode": "terminal", "met": True}
+    if gate_id in WAIT_GATES:
+        st = wait_state(client, story_id, gate_id, trust_cfg, ci_identity)
+        if not st["met"]:
+            raise ApprovalMissing(E_WAIT.format(gate=gate_id, story=int(story_id), n=len(st["open"]), ids=", ".join(st["open"]), bad=_bad(st["bad_newer"], "on these")))
+        return {"gate": gate_id, "mode": "comment", "met": True, "open": []}
+    if gate_id not in REVIEW_GATES:
+        raise ApprovalRefused(E_APPLY_GATE.format(gate=gate_id))
+    _approve_for(client, trust_cfg, story_id, lambda: {gate_id: gate_hash(gate_id, story_id, artifacts(gate_id, story_id, cfg, repo))},
+                 lambda hashes, bad: E_REVIEW.format(gate=gate_id, story=int(story_id), hash=hashes[gate_id], bad=_bad(bad)), ci_identity)
+    return {"gate": gate_id, "mode": "comment", "met": True}

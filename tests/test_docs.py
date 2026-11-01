@@ -440,7 +440,7 @@ def _ado_command_problems(files):
                         continue
                     if words[0].startswith("-"):
                         cmd, given = "", words
-                    elif words[0] in ("pr", "strict", "stack", "kits") and len(words) > 1 and re.fullmatch(r"[a-z]+", words[1]):
+                    elif words[0] in ("pr", "strict", "stack", "kits", "approvals") and len(words) > 1 and re.fullmatch(r"[a-z]+", words[1]):
                         cmd, given = f"{words[0]} {words[1]}", words[2:]
                     elif re.fullmatch(r"[a-z]+", words[0]):
                         cmd, given = words[0], words[1:]
@@ -2589,3 +2589,33 @@ def test_comment_approval_of_the_five_applies_is_documented():
     for cmd in ("commands/push.md", "commands/pr.md"):
         assert "approval: \"comment\"" in _flat(cmd) and "never post it yourself" in _flat(cmd), cmd
     assert "the other verbs that act on" not in hitl and "come later" not in cfg.split("Comment approval inside", 1)[0].split("### Approvers and comment mode", 1)[1]
+
+
+def test_approvals_check_is_documented():
+    """P4-12b: the verb, the 12 gates, what each review gate's hash covers, the wait gates' ADO-only rule and the apply gates' exclusion are named where comment mode is."""
+    from ado import approvals
+    cfg, readme, agents, hitl, log, wf = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "CHANGELOG.md", "workflows/ado-lifecycle/README.md"))
+    for g in approvals.GATES:
+        assert f"`{g}`" in cfg, g
+    for needle in ("**Gate checks: `ado approvals check <id> --gate <gate>`.**", "`approvals.GATES`", "approvals.artifacts(gate, story, cfg, repo)", "nothing read from ADO",
+                   "`spec.md` and ledger section 2", "`plan.md`, `spec.md` and ledger section 2", "HEAD's full commit id", "newest live `### Review` block", "`### AC fidelity` block",
+                   "framed as `<label> <byte count>`", "never from the ledger or the decisions file", "`unattended.assume_after_hours`", "`client.server_now()`",
+                   "the local clock is never read", "N newer malformed command line(s) by an approver", "exit 2 here in comment mode", "versions",
+                   "at most ONE comment", "a question that vanishes from the text is not answered by vanishing", "disguised one", "line endings (CRLF or LF)", "never match one",
+                   "the same token identity that posted", "a question or decision that was never posted, or a kit comment deleted through raw REST, or edited through raw REST",
+                   "the done-time check covers decisions only", "`questions-posted` hint",
+                   "at least as strictly as `ado done`'s cross-check", "stays open while its newest posting shows it cut", "edited through raw REST by the token identity",
+                   "Two cases block a gate for good", "rotating the token identity while questions are open"):
+        assert needle in cfg, needle
+    for doc in (hitl, readme, agents, log):
+        assert "approvals check <id> --gate" in doc, doc[:30]
+    for needle in ("approvals.wait_state(client, story, gate, trust)", "approvals.artifacts(gate, story, cfg, repo)", "(P4-12b", "never from the ledger or the decisions file", "Terminal mode"):
+        assert needle in log, needle
+    assert "never by what the ledger or the decisions file says" in hitl and "`/approve <gate> <hash>` line the refusal shows" in hitl
+    assert "`comments.marked`" in log and "`decisions.POSTED_LINE`" in log and "the poller must run as the identity that posted" in log
+    assert "A question or decision that was never posted, or a kit comment deleted or edited through raw REST" in hitl
+    assert "caught by `ado status` and the done-time check" not in cfg and "read as `ado done`'s cross-check reads it" not in cfg and "none cut at the posting limit" not in cfg
+    assert "blocks the gate until a human deletes that comment" in hitl and "keeps that `D<n>` open while its newest posting shows it cut" in log
+    assert "never post it yourself" in agents and "the ledger and the decisions file do not count" in agents
+    assert "`ado approvals check <id> --gate <gate>` (P4-12b)" in wf
+    assert "`ado approvals` and the poller come with" not in cfg

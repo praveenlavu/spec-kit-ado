@@ -128,7 +128,7 @@ a refusal, "set origin/HEAD or pass --base", because the keys cannot be checked 
 output of any verb.
 
 In this build the keys are validated, `trusted` reads them, `ado doctor` checks them and `ado setup --profile team|strict` asks for the
-approvers. The code that decides which comment counts exists (`ado.approvals`, below). Three places use it so far, `ado decisions <id> --sync`, `ado questions <id> --sync` and the done-time cross-check of `ado done` (below); the applies of the five ADO writes use it too (below, "Comment approval inside the five applies"); `ado approvals` and the poller come with the later tasks of this version. With `approvers` set `ado decisions --resolve` is refused.
+approvers. The code that decides which comment counts exists (`ado.approvals`, below). Three places use it so far, `ado decisions <id> --sync`, `ado questions <id> --sync` and the done-time cross-check of `ado done` (below); the applies of the five ADO writes use it too (below, "Comment approval inside the five applies"); `ado approvals check` is described below; the poller comes with a later task of this version. With `approvers` set `ado decisions --resolve` is refused.
 
 **Comment approval inside the five applies (`approval: "comment"`).** With `approval: "comment"` on the target branch, `--apply` of the five ADO
 writes (`ado questions <id> --post`, `ado push`, `ado decisions <id> --post`, `ado pr create`, `ado branch <id> --link`) also needs a trusted
@@ -161,6 +161,47 @@ example after the markers were stripped) is covered by the same comment until a 
 approver must read the plan text the hash was computed from, which is why the hash covers that text and not a summary). The poller of a later task must
 hash the rendered plan TEXT, not the `--plan-out` file: a plan over 190 lines gets a `⚠` first line naming the file, so the two differ. The CI service identity is added to the excluded identities by a later task of this version (the `ci_identity` parameter of
 `approvals.excluded` and `approvals.require` already exists).
+
+**Gate checks: `ado approvals check <id> --gate <gate>`.** The 12 gates of the workflow are fixed (`approvals.GATES`: `review-spec`, `approve-questions`,
+`approve-plan-questions`, `wait-po-answers`, `approve-answers-questions`, `review-plan`, `approve-push`, `approve-decisions`, `approve-sync`,
+`review-review`, `approve-pr`, `wait-po-validation`); any other value exits 2 before anything is read. The check is read-only. **Terminal mode** (`approval` not
+`comment` on the target branch): exit 0, nothing read from ADO (no token needed). **Comment mode:** the bypass-rules refusal comes first. The three review
+gates are met only by the newest valid approver command over the gate, `/approve <gate> <hash>`, with `hash = approvals.gate_hash(gate, story,
+approvals.artifacts(gate, story, cfg, repo))`; a newer `/reject`, another hash, an approval request newer than the approval and a newer malformed approver line
+(`N newer malformed command line(s) by an approver for this plan: check the thread`) all refuse, exactly as for the applies. What the hash covers (UTF-8, each
+part framed as `<label> <byte count>` plus the bytes, so nothing can pass for a frame; read confined to the working tree: no symlink, 1 MiB, never a path or a
+time): `review-spec` = `spec.md` and ledger section 2; `review-plan` = `plan.md`, `spec.md` and ledger section 2 (both files in the ledger's `Spec dir`);
+`review-review` = the newest live `### Review` block of ledger section 4, in strict mode the newest live `### AC fidelity` block (an empty frame when there is
+none), and HEAD's full commit id, so any later commit makes the approval stale. A missing or unreadable artifact refuses (there is nothing to approve).
+The hash covers the bytes as the checkout holds them, so line endings (CRLF or LF) are part of it, and `mode` (whether the fidelity frame is hashed) and `dod_path`
+come from the config in the working tree, not the target branch: a flipped `mode` always changes the bytes (a frame is added or dropped), so it can only make an
+approval stale, never match one; the hash binds content, never a path. The poller (P4-13) must compute it with the same function (`approvals.artifacts`) on the
+same checkout.
+The two wait gates have no hash and are computed from the story's comments only, never from the ledger or the decisions file, which an agent can edit.
+`wait-po-answers`: at most ONE comment on the story may carry the `[spec-kit-ado:questions]` marker (a marker hidden behind zero-width characters or markup
+counts as carrying it, as in the done-time check); it must be the token identity's own comment, not edited by another identity, and its text must be exactly
+what the kit writes (the `ANSWERED` text, or the heading and `Q<n>: ...` lines): a bare marker, a second marker comment, one by another identity, markup or an
+unknown line refuses (never "met"). Every question that was open in ANY version of that comment (its versions) stays open until the newest valid approver
+`/answer Q<n>` that is newer than the version that started to show it, with no newer malformed approver line, or until it is due (`unattended.assume_after_hours`
+hours on the server's clock, `client.server_now()`, counted from that version; the local clock is never read, and with no server time the check refuses); a
+question that vanishes from the text is not answered by vanishing. `wait-po-validation`: every comment that carries the `[spec-kit-ado:decisions]` marker (also
+a disguised one) must be a plain posting, read at least as strictly as `ado done`'s cross-check reads it (it also refuses a missing heading and a line that is not
+`D<n> (kind): ...`): starts with the marker, has a readable time, was never edited, is not hidden in markup, and at least one is the token identity's own; otherwise it
+refuses. A line the kit itself cut at the posting limit (500 characters ending in `…`) is not a refusal: that decision stays open while its newest posting shows it
+cut, and a short repost followed by a guarded `/approve` or `/reject` meets it. Every `D<n>` they list
+needs the newest valid approver `/approve` or `/reject D<n>` newer than the newest comment that posted it. A newer malformed approver line on an open id is counted
+in the refusal; unreadable or cut-off comments, no way to tell the question's age and an unknown token identity all refuse. **Residuals (stated, not closed):** with
+no comment of that kind there is nothing to wait for, so a question or decision that was never posted, or a kit comment deleted through raw REST, or edited through raw REST by the token identity so that it no longer carries the marker in its
+first 64 visible characters (withdrawn text, a 70-character prefix; blank-looking U+2800 and Hangul fillers are ignored), is not detected by
+this check (the done-time check covers decisions only; for questions `ado status` has just the `questions-posted` hint); and the identity that posts must be the
+identity that checks, so the poller (P4-13) must run with the same token identity that posted (or be given the posting identity explicitly), else every wait gate
+refuses. **Two cases block a gate for good until a human acts:** a commenter who quotes the marker among the first 64 visible characters of a comment (for
+example `/answer Q1: yes, re [spec-kit-ado:questions]`) makes that comment count as a marker comment, so the gate refuses until that comment is deleted; and
+rotating the token identity while questions are open makes `ado questions --post` add a second marker comment, which refuses until the old comment is deleted
+(delete the comment that is not the current identity's, then run the check again). A scrubbed or cut-short question line shown to the PO cannot be told from the comment alone. The seven apply gates (`approve-questions`,
+`approve-plan-questions`, `approve-answers-questions`, `approve-push`, `approve-decisions`, `approve-sync`, `approve-pr`) exit 2 here in comment mode: their own
+`--apply` runs the check, with the plan. Refusal texts are fixed: gate, story, ids, counts and the hash that would be accepted. The workflow runs the check after each
+review and wait gate in a later task of this version.
 
 **Which comment counts (`ado.approvals`).** An approver approves by posting a comment whose **first non-empty line is the whole command**:
 `/approve D<n>` or `/reject D<n>: note` for a decision, `/answer Q<n>: text` for a question, `/approve <gate-id> <64 lowercase hex>` or

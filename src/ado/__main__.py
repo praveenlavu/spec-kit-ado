@@ -499,6 +499,18 @@ def _sync_questions(client, args):
     return {"id": args.id, **report, **({"notice": notice} if notice else {})}
 
 
+def _approvals_check(args):
+    """`approvals check ID --gate G` (P4-12b): terminal mode is a no-op that reads nothing from ADO (not even a token); comment mode needs the approvers' comments
+    (`approvals.check`). Exit 2 with a fixed text when the gate is unknown, not checkable here or not met."""
+    if args.gate not in approvals.GATES:
+        raise ValueError(approvals.E_GATE)
+    trust = trusted(".")
+    if trust.approval != "comment":
+        return approvals.check(None, trust, args.id, args.gate, None)
+    client = AdoClient(_config(args))
+    return approvals.check(client, trust, args.id, args.gate, client.config)
+
+
 def _resolve_decision(args):
     """`decisions --resolve`: the PO's verdict is recorded by a human. Tested before anything is read or written."""
     if trusted(".").approvers:
@@ -986,6 +998,14 @@ def main(argv=None):
     q.add_argument("--allow-override", action="store_true",
                    help="with --no-record: accept an override in force (default: it is the finding override-in-force, since it skips the run)")
 
+    p = sub.add_parser("approvals", help="Comment approval (approval: \"comment\" on the target branch): check a workflow gate")
+    asub = p.add_subparsers(dest="approvals_command", required=True)
+    q = asub.add_parser("check", help="Exit 0 when the gate is met, 2 with a fixed text when not (read-only). Review gates need an approver's "
+                        "`/approve <gate> <hash>`; wait-po-answers and wait-po-validation are met by the approvers' /answer, /approve and /reject comments; "
+                        "a no-op when approval is not \"comment\"")
+    q.add_argument("id", type=int, help="story id")
+    q.add_argument("--gate", required=True, metavar="GATE", help="one of: " + ", ".join(approvals.GATES))
+
     args = parser.parse_args(argv)
     if getattr(args, "expect_plan", None) and not args.apply:
         parser.error("--expect-plan needs --apply")
@@ -1031,6 +1051,8 @@ def main(argv=None):
         parser.error(f"--probe-item must be a work item id between 1 and {prs.MAX_ID}")
     if args.command == "status" and not 1 <= args.id <= prs.MAX_ID:
         parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
+    if args.command == "approvals" and not 1 <= args.id <= prs.MAX_ID:
+        parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
     if args.command == "rules" and not 1 <= args.id <= 999999999:
         parser.error("the story id must be between 1 and 999999999")
     if args.command == "branch":
@@ -1058,6 +1080,8 @@ def main(argv=None):
             out = _resolve_decision(args)
         elif args.command == "rules" and args.confirm:  # local only: no token, no request
             out = _rules_confirm(args)
+        elif args.command == "approvals":  # reads only; terminal mode needs no token
+            out = _approvals_check(args)
         elif args.command == "comments" and args.author_ids:  # reads only; stdout lines, no file
             lines, truncated = comments.author_id_lines(AdoClient(_config(args)), args.id)
             print("\n".join(lines), end="\n" if lines else "")
