@@ -394,3 +394,169 @@ def test_get_bytes_cross_host_redirect_refused(monkeypatch):
     finally:
         srv.shutdown()
     assert hits == [f"127.0.0.1:{srv.server_port}"]
+
+
+# ---- P4-1: error metadata (kind / status / type_key) and server time ----
+def _hdrs(**kw):
+    import email.message
+    m = email.message.Message()
+    for k, v in kw.items():
+        m[k.replace("_", "-")] = v
+    return m
+
+
+class _WithHeaders(FakeResponse):
+    def __init__(self, body=b"{}", status=200, **hdrs):
+        super().__init__(body)
+        self.status, self.headers = status, _hdrs(**hdrs)
+
+
+def _err_of(monkeypatch, outcomes):
+    _counting(monkeypatch, outcomes)
+    with pytest.raises(AdoError) as ei:
+        AdoClient(CFG, sleep=lambda s: None).get("/p")
+    return ei.value
+
+
+def test_signin_203_sets_kind_signin(monkeypatch):
+    e = _err_of(monkeypatch, [_Status203(b'{"a": 1}')])
+    assert (e.kind, e.status) == ("signin", 203)
+
+
+def test_html_body_sets_kind_signin(monkeypatch):
+    e = _err_of(monkeypatch, [FakeResponse(b"  <html>Sign in</html>")])
+    assert (e.kind, e.status) == ("signin", 200)
+
+
+def test_cross_host_302_kind_signin():
+    import urllib.request
+    from ado import client
+    req = urllib.request.Request("https://dev.azure.com/contoso/_apis/x")
+    with pytest.raises(AdoError, match="another host") as ei:
+        client._SameHostRedirects().redirect_request(req, None, 302, "Found", {}, "https://login.example.net/s")
+    assert (ei.value.kind, ei.value.status) == ("signin", 302)
+
+
+def test_401_empty_body_kind_signin(monkeypatch):
+    e = _err_of(monkeypatch, [_http_error(401, b"")])
+    assert (e.kind, e.status) == ("signin", 401) and "401" in str(e) and "PAT scope" in str(e)
+    e = _err_of(monkeypatch, [_http_error(401, b'{"typeKey":"UnauthorizedRequestException"}')])
+    assert (e.kind, e.type_key) == ("http", "UnauthorizedRequestException")  # a JSON 401 is not a sign-in page
+
+
+def test_http_error_sets_status_and_type_key(monkeypatch):
+    body = json.dumps({"message": "TF200016: no", "typeKey": "ProjectDoesNotExistWithNameException"}).encode()
+    e = _err_of(monkeypatch, [_http_error(404, body)])
+    assert (e.status, e.kind, e.type_key) == (404, "http", "ProjectDoesNotExistWithNameException")
+    assert str(e) == "HTTP 404 reason: TF200016: no"  # message unchanged
+
+
+@pytest.mark.parametrize("key", ["x" * 101, "has space", "a;b", "é", "a\nb", 7, None, ["A"], ""])
+def test_type_key_sanitized(monkeypatch, key):
+    e = _err_of(monkeypatch, [_http_error(400, json.dumps({"message": "m", "typeKey": key}).encode())])
+    assert e.type_key == ""
+
+
+def test_type_key_boundary_and_non_json_body(monkeypatch):
+    assert _err_of(monkeypatch, [_http_error(400, json.dumps({"typeKey": "A_b.9" * 20}).encode())]).type_key == "A_b.9" * 20
+    e = _err_of(monkeypatch, [_http_error(409, b"<html>conflict</html>")])
+    assert (e.status, e.kind, e.type_key) == (409, "http", "")
+
+
+def test_network_error_kind(monkeypatch):
+    e = _err_of(monkeypatch, [urllib.error.URLError("down")] * 3)
+    assert (e.kind, e.status) == ("network", None) and "network error" in str(e)
+
+
+def test_last_date_from_http_error_headers(monkeypatch):
+    err = urllib.error.HTTPError("u", 404, "reason", hdrs=_hdrs(Date="Sun, 01 Nov 2026 10:00:00 GMT"),
+                                 fp=io.BytesIO(b"{}"))
+    _counting(monkeypatch, [err])
+    c = AdoClient(CFG)
+    with pytest.raises(AdoError):
+        c.get("/p")
+    assert c.last_date == "Sun, 01 Nov 2026 10:00:00 GMT"
+
+
+def test_server_now_from_date_header(monkeypatch):
+    import datetime
+    seen = _counting(monkeypatch, [_WithHeaders(b'{"authenticatedUser": {}}', Date="Sun, 01 Nov 2026 10:00:05 GMT")])
+    c = AdoClient(CFG)
+    now = c.server_now()
+    assert now == datetime.datetime(2026, 11, 1, 10, 0, 5, tzinfo=datetime.timezone.utc)
+    assert now.utcoffset() == datetime.timedelta(0)
+    c.server_now()
+    assert len(seen) == 1  # the header is reused, no second request
+
+
+def test_server_now_none_without_header(monkeypatch):
+    seen = _counting(monkeypatch, [_WithHeaders(b"{}"), _WithHeaders(b"{}", Date="not a date")])
+    c = AdoClient(CFG)
+    assert c.server_now() is None and c.last_date is None
+    c.get("/p")  # a malformed Date is kept raw but never parsed into a time
+    assert c.last_date == "not a date" and c.server_now() is None and len(seen) == 2
+
+
+@pytest.mark.parametrize("date", [
+    " ", "", "   \t", "garbage", "Fri, 31 Dec 9999 23:30:00 -0100", "Sun, 01 Nov 20260000000000000000 10:00:00 GMT",
+    "Sun, 01 Nov 2026 10:00:00", "Sun, 01 Nov 2026 10:00:00 -0000", "Sun, 32 Nov 2026 10:00:00 GMT"])
+def test_server_now_none_for_any_unusable_date(monkeypatch, date):
+    c = AdoClient(CFG)
+    c.last_date = date
+    assert c.server_now() is None  # never raises, never a guess
+
+
+def test_server_now_gmt_and_offset_zones_are_utc(monkeypatch):
+    import datetime
+    c = AdoClient(CFG)
+    c.last_date = "Sun, 01 Nov 2026 11:00:00 +0100"
+    assert c.server_now() == datetime.datetime(2026, 11, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)
+    c.last_date = "Sun, 01 Nov 2026 10:00:00 UT"
+    assert c.server_now() == datetime.datetime(2026, 11, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)
+
+
+def test_failed_connection_data_get_raises_ado_error(monkeypatch):
+    _counting(monkeypatch, [_http_error(403)])
+    with pytest.raises(AdoError):
+        AdoClient(CFG).server_now()
+
+
+def test_server_now_adds_monotonic_elapsed_not_wall_clock(monkeypatch):
+    import datetime
+    import time
+    mono = [1000.0]
+    monkeypatch.setattr(time, "monotonic", lambda: mono[0])
+    _counting(monkeypatch, [_WithHeaders(b"{}", Date="Sun, 01 Nov 2026 10:00:00 GMT")])
+    c = AdoClient(CFG)
+    assert c.server_now() == datetime.datetime(2026, 11, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)
+    mono[0] += 30
+    monkeypatch.setattr(time, "time", lambda: 4102444800.0)  # wall clock jumps to 2100: no effect
+    assert c.server_now() == datetime.datetime(2026, 11, 1, 10, 0, 30, tzinfo=datetime.timezone.utc)
+    mono[0] -= 50  # a (never real) backwards step must not move the server time back
+    assert c.server_now() == datetime.datetime(2026, 11, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)
+
+
+@pytest.mark.parametrize("ident, desc, anon", [
+    ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "", True), ("AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", None, True),
+    ("  aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\n", "", True), ("1111", "System:PublicAccess;x", True),
+    ("1111", "  system:publicaccess;x", True), ("1111", "SYSTEM:PUBLICACCESS", True),
+    ("1111", "Microsoft.IdentityModel.Claims.ClaimsIdentity;x", False), ("", "", False), (None, None, False)])
+def test_is_anonymous(ident, desc, anon):
+    from ado.client import is_anonymous
+    assert is_anonymous(ident, desc) is anon
+
+
+def test_fake_client_server_time_hooks():
+    from tests.conftest import FakeClient
+    f = FakeClient(CFG)
+    assert f.last_date is None and f.server_now() is None
+    f.now = "t"
+    assert f.server_now() == "t"
+
+
+def test_server_now_ignores_local_clock(monkeypatch):
+    import datetime
+    import time
+    _counting(monkeypatch, [_WithHeaders(b"{}", Date="Sun, 01 Nov 2026 10:00:00 GMT")])
+    monkeypatch.setattr(time, "time", lambda: 4102444800.0)  # local clock set to 2100
+    assert AdoClient(CFG).server_now() == datetime.datetime(2026, 11, 1, 10, 0, 0, tzinfo=datetime.timezone.utc)

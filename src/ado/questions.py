@@ -2,7 +2,7 @@ import html
 import re
 
 from . import comments, workitems
-from .client import AdoError
+from .client import AdoError, is_anonymous
 from .dod import _esc, _text, _visible, section
 
 UNPARSED_NOTE = "§2 has an unclosed code fence or comment; questions could not be read"
@@ -83,13 +83,18 @@ def comment_html(open_questions, assumed=()):
 
 
 def _me(client):
-    """The authenticated identity id (org-level endpoint). Unresolvable -> ValueError: never guess whose comment it is."""
+    """The authenticated identity id (org-level endpoint). Unresolvable -> ValueError: never guess whose comment it is.
+    Without credentials connectionData answers 200 as the anonymous user, which is never "us"."""
     try:
-        me = (client.get("/_apis/connectionData?api-version=7.1-preview").get("authenticatedUser") or {}).get("id")
+        user = client.get("/_apis/connectionData?api-version=7.1-preview").get("authenticatedUser") or {}
     except AdoError as e:
         raise ValueError(f"cannot tell which ADO comments are yours ({e}); nothing posted")
+    me = user.get("id")
     if not me:
         raise ValueError("cannot tell which ADO comments are yours (no authenticated user id); nothing posted")
+    if is_anonymous(me, user.get("descriptor")):
+        raise ValueError("cannot tell which ADO comments are yours (the request carried no valid credentials); "
+                         "nothing posted")
     return me
 
 

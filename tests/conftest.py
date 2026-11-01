@@ -24,6 +24,11 @@ class FakeClient:
         self.config = config
         self.calls = []
         self._responses = list(responses or [])
+        self.last_date = None
+        self.now = None  # what server_now() returns (a tz-aware UTC datetime), set by the test
+
+    def server_now(self):
+        return self.now
 
     def request(self, method, path, body=None, content_type="application/json", raw=False):
         self.calls.append(

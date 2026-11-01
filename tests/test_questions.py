@@ -296,6 +296,20 @@ def test_unresolvable_identity_refuses_without_a_write(tmp_path, monkeypatch, ca
     assert _writes(fake) == []
 
 
+@pytest.mark.parametrize("who", [
+    {"authenticatedUser": {"id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}},
+    {"authenticatedUser": {"id": "11111111-2222-3333-4444-555555555555", "descriptor": "System:PublicAccess;aaa"}},
+    {"authenticatedUser": {"id": "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"}},
+    {"authenticatedUser": {"id": " aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa\n"}},
+    {"authenticatedUser": {"id": "11111111-2222-3333-4444-555555555555", "descriptor": " system:publicaccess;x"}}])
+def test_me_rejects_anonymous_identity(who):
+    with pytest.raises(ValueError, match="no valid credentials.*nothing posted") as ei:
+        qmod._me(FakeClient(Config("contoso", "Fabrikam"), [who]))
+    assert "aaaa" not in str(ei.value) and "PublicAccess" not in str(ei.value)
+    ok = {"authenticatedUser": {"id": "11111111-2222-3333-4444-555555555555", "descriptor": "Microsoft.IdentityModel.x"}}
+    assert qmod._me(FakeClient(Config("contoso", "Fabrikam"), [ok])) == "11111111-2222-3333-4444-555555555555"
+
+
 def test_identity_is_read_org_level(tmp_path, monkeypatch):
     m, fake = _env(tmp_path, monkeypatch, [])
     assert m.main(["questions", "1001", "--post"]) == 0
