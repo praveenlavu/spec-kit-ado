@@ -57,8 +57,9 @@ The files `<dod_path>/Rules_<id>.md` and the ledger's `Rules from:` / `Rules rev
   sits at the end of the criterion cell of the AC row it belongs to (step 3). A trailing `[BR-<id>-<n>]` tag is not a reword of
   the AC; it is the only addition allowed to that cell. If the work needs a rule that no AC row cites, stop and ask: the story
   needs an AC in ADO, or the rule is out of scope (a `Q<n>`, see `speckit.ado.plan` step 3a). Never tag an AC the rule does not fit.
-- The `Rules_<id>.md` files and the ledger's `Rules reviewed:` line are never edited by you; `ado rules <id> --confirm` and the
-  human own them (a malformed line is the human's to repair). Do not re-pull the rules during implement.
+- The `Rules_<id>.md` files and the ledger's `Rules reviewed:` line are never edited by you; `ado rules <id> --confirm` writes the
+  line (for a rule not confirmed yet, you run it; a changed hash is re-confirmed by the human only), and a malformed line is the
+  human's to repair. Do not re-pull the rules during implement.
 - If the project routes a BDD extension (`bdd` or `reqnroll-bdd`) for the implement phase through `rules/routing.md`, a rule's
   `Example:` lines may seed its scenarios, which carry the rule id in their name; the AC rows still name the tests, and you never
   install or switch an extension.
@@ -108,9 +109,11 @@ without the commit/PR value. Optionally run `ado gate <id> --offline` (read-only
 check traceability and assertions; report its findings, do not hide them. When `rules.enabled`, do not use `--offline` for this:
 an offline gate cannot evaluate rule drift, so under `"mode": "strict"` it always blocks (`rule_drift` is not evaluated). Run the
 online `ado gate <id>`, or, offline, `ado strict check <id> --phase pr` (it judges the same rule coverage but never `rule_drift`;
-read its findings, and ignore the ones about phases not reached yet). A `rule_drift` (online gate), `rule-changed` or
-`rules-header` finding is handled like AC drift: stop and report it, never re-pull, refresh or re-confirm yourself (with
-`--workflow`, write a `Needs human decision` line and stop).
+read its findings, and ignore the ones about phases not reached yet). A `rule-unconfirmed` finding (a rule with no recorded hash yet)
+is free: read the rule, then run `ado rules <id> --confirm` yourself (no terminal needed) and check again. A `rule_drift` (online gate),
+`rule-changed` (a recorded hash differs: a human re-confirms it in their own terminal after reading the change) or `rules-header`
+finding is handled like AC drift: stop and report it, never re-pull, refresh or re-confirm yourself (with `--workflow`, write a
+`Needs human decision` line and stop).
 
 ### 4. Sync task state to ADO ⛔
 

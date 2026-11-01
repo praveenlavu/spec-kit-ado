@@ -837,8 +837,8 @@ def _file_problems(wid, lines):
 
 
 def coverage(ledger_md, sources, files, rules_from, reviewed, decisions_parsed, phase, trace=None):
-    """The local findings of a story's business rules: `{"in_scope", "covered", "excluded", "uncovered", "unknown", "changed", "problems",
-    "missing", "format", "header"}`, every value a list of rule ids, work item ids or fixed keys (never file or ledger text).
+    """The local findings of a story's business rules: `{"in_scope", "covered", "excluded", "uncovered", "unknown", "unconfirmed", "changed",
+    "problems", "missing", "format", "header"}`, every value a list of rule ids, work item ids or fixed keys (never file or ledger text).
     `files`: `{work item id (int): parse_file result}` for the files that could be read; `rules_from` / `reviewed` are the results of
     `dod.ledger_rules_from` / `dod.ledger_rules_reviewed`; `decisions_parsed` is `decisions.parse_decisions`; `phase` is `pr` or `done`.
     - `missing`: an id of `Rules from:` with no usable file (absent, unreadable or `invalid`); `format`: a file whose `rules-format` is not
@@ -849,9 +849,11 @@ def coverage(ledger_md, sources, files, rules_from, reviewed, decisions_parsed, 
       duplicate rows, so one row with an absent test must not be hidden by another). `uncovered`: in scope and not covered.
     - `unknown`: a cited well-formed id found in no readable file (ids of `missing` / `format` files are left to those findings), and
       one `?` per malformed `BR-` token in the table (a count: the token is PR text and is not repeated).
-    - `changed`: an in-scope rule whose heading hash is not the one in `Rules reviewed:` (or has none: unconfirmed, or whose file text no
-      longer matches its heading hash), and any recorded id that is still `approved` in a file and has another hash, in scope or not.
-      A recorded id that left the files or is no longer approved is not judged here (the live drift check sees it).
+    - `unconfirmed`: an in-scope rule with no recorded hash whose file text matches its heading hash: the first confirm is free
+      (`ado rules <id> --confirm`, no terminal). `changed`: a human's, never free: an in-scope rule whose heading hash is not the one in
+      `Rules reviewed:`, a rule whose file text no longer matches its heading hash (recorded or not: `--confirm` refuses it), and any
+      recorded id that is still `approved` in a file and has another hash, in scope or not. A malformed `Rules reviewed:` line makes nothing free (every in-scope
+      rule is `changed`, next to the `rules-reviewed` header finding). The two lists never share an id. A recorded id that left the files or is no longer approved is not judged here (the live drift check sees it).
     - `problems`: `_file_problems` over the readable files. Warnings are not findings.
     `trace`: the `gate.check_traceability` result for this ledger and these sources when the caller already has it (the gate does), so each
     test is looked up once; else it is computed here."""
@@ -883,9 +885,12 @@ def coverage(ledger_md, sources, files, rules_from, reviewed, decisions_parsed, 
     unknown = sorted((r for r in seen if r not in rule and _key(r)[0] not in left), key=_key) + ["?"] * len(tagged["unknown"])
     recorded = reviewed["hashes"]
     judged = set(sc["in_scope"]) | {r for r in recorded if r in rule and rule[r]["status"] == "approved"}
-    changed = sorted((r for r in judged if recorded.get(r) != rule[r]["hash"] or rule[r].get("body_hash") != rule[r]["hash"]), key=_key)
+    sound = {r for r in judged if rule[r].get("body_hash") == rule[r]["hash"]}  # a hash mismatch is never "free to confirm": `--confirm` refuses it
+    free = not reviewed["present"] or reviewed["valid"]  # a malformed record cannot be extended by `--confirm` (a human repairs it): nothing is free then
+    unconfirmed = sorted((r for r in sc["in_scope"] if free and r in sound and r not in recorded), key=_key)
+    changed = sorted((r for r in judged if r not in unconfirmed and (recorded.get(r) != rule[r]["hash"] or r not in sound)), key=_key)
     return {"in_scope": sc["in_scope"], "covered": [r for r in sc["in_scope"] if r in cited], "excluded": sc["excluded"],
-            "uncovered": [r for r in sc["in_scope"] if r not in cited], "unknown": unknown, "changed": changed,
+            "uncovered": [r for r in sc["in_scope"] if r not in cited], "unknown": unknown, "unconfirmed": unconfirmed, "changed": changed,
             "problems": [p for w in sorted(good) for p in _file_problems(w, good[w]["problems"])],
             "missing": sorted(missing), "format": sorted(fmt), "header": header}
 
@@ -975,8 +980,9 @@ CONFIRM_FILES = "a rules file named in `Rules from:` is missing, unreadable, inv
 CONFIRM_DECISIONS = "the decisions file exists but is not a readable regular file; nothing was changed"
 CONFIRM_HASH = ("a rule in scope does not match its heading hash, so the file text is not what was reviewed ({ids}); "
                 "run `ado rules <story id>` to copy it again, nothing was changed")
-CONFIRM_TERMINAL = ("re-confirming a rule whose recorded hash changed, or dropping a recorded one, records that a human re-read it, which only a human may do: "
-                    "run it in your own terminal (stdin and stdout must both be a terminal; a guard against accidents, not a security boundary); nothing was changed")
+CONFIRM_TERMINAL = ("recorded without a terminal (new rules): {recorded}. Needs a human: re-confirming a rule whose recorded hash changed, or dropping a recorded one, "
+                    "records that a human re-read it, so the human runs `ado rules <story id> --confirm` in their own terminal after reading the change "
+                    "(stdin and stdout must both be a terminal; a guard against accidents, not a security boundary). Changed since confirmed: {changed}. Dropped: {removed}")
 CONFIRM_SWAPPED = "the ledger, a rules file or the decisions file changed while you were reading: nothing was approved"
 CONFIRM_WRITE = "the ledger could not be written or read back identical; nothing was confirmed (check the file)"
 CONFIRM_ENV = "ADO_CONFIG is set: Config.load would read that file, not ./ado.config.json, so dod_path could differ from the committed one; unset it to confirm"
@@ -1012,8 +1018,8 @@ def prepare_confirm(dod_path, story_id):
     file; the hashes to record are the HEADING hashes of the rules in scope, which must equal the hash of the text in the file. `reviewed` is
     the new value of `Rules reviewed:` (sorted by work item, then number), `added` / `changed` / `removed` the ids that differ from what the ledger
     records now. `needs_human` is true when an already-recorded id would get another hash or leave the record (a human's act). `code` is the
-    `stack.approval_code` over the story, the ledger as read and the new value. `write()` replaces the ledger atomically (tmp file in the same
-    directory, the bytes read now are required, read back; the file's own line terminator is kept) and returns whether it wrote. ValueError with a fixed
+    `stack.approval_code` over the story, the ledger as read and the new value. `write_free()` records only the new ids (every recorded id left as it is) with the same guarantees; `write()` replaces
+    the ledger atomically (tmp file in the same directory, the bytes read now are required, read back; the file's own line terminator is kept) and returns whether it wrote. ValueError with a fixed
     text (ids and hashes only, no file text) for every refusal: nothing is written."""
     path = dod.dod_file(dod_path, story_id)
     if not os.path.lexists(path):
@@ -1042,33 +1048,37 @@ def prepare_confirm(dod_path, story_id):
     if bad := [r for r, v in rule.items() if v["body_hash"] != v["hash"]]:
         raise ValueError(CONFIRM_HASH.format(ids=", ".join(bad)))
     new, old = {r: v["hash"] for r, v in rule.items()}, rev["hashes"]
-    value = ", ".join(f"{r}@{h}" for r, h in new.items()) or "none"
     added = [r for r in new if r not in old]
     changed = [r for r in new if r in old and old[r] != new[r]]
     removed = sorted((r for r in old if r not in new), key=_key)
-    noop = rev["present"] and old == new
-    text = md if noop else _with_reviewed(md, value)
-    if text is None:
-        raise ValueError(CONFIRM_HEADER)
 
-    def check(raw):  # what is about to replace the ledger: header trusted, the same Rules from, exactly the new record, nothing else moved
-        back = raw.decode("utf-8")
-        if not (dod._header(back)[1] and dod.ledger_rules_from(back) == frm and dod.ledger_rules_reviewed(back) == {"present": True, "valid": True, "hashes": new}
-                and _without(back) == _without(md)):
-            raise ValueError(CONFIRM_WRITE)
+    def plan(hashes, noop):  # (the value, write): `hashes` is the whole record to leave in the ledger
+        value = ", ".join(f"{r}@{h}" for r, h in sorted(hashes.items(), key=lambda kv: _key(kv[0]))) or "none"
+        text = md if noop else _with_reviewed(md, value)
+        if text is None:
+            raise ValueError(CONFIRM_HEADER)
 
-    def write():
-        if noop:
-            return False
-        try:
-            stack._atomic_replace(path, text, check, md.encode("utf-8"))
-        except ValueError as e:
-            raise ValueError(CONFIRM_SWAPPED if str(e) == stack._E_CHANGED else CONFIRM_WRITE) from None
-        return True
+        def check(raw):  # what is about to replace the ledger: header trusted, the same Rules from, exactly this record, nothing else moved
+            back = raw.decode("utf-8")
+            if not (dod._header(back)[1] and dod.ledger_rules_from(back) == frm and dod.ledger_rules_reviewed(back) == {"present": True, "valid": True, "hashes": hashes}
+                    and _without(back) == _without(md)):
+                raise ValueError(CONFIRM_WRITE)
 
+        def write():
+            if noop:
+                return False
+            try:
+                stack._atomic_replace(path, text, check, md.encode("utf-8"))
+            except ValueError as e:
+                raise ValueError(CONFIRM_SWAPPED if str(e) == stack._E_CHANGED else CONFIRM_WRITE) from None
+            return True
+        return value, write
+
+    value, write = plan(new, rev["present"] and old == new)
+    _, write_free = plan({**old, **{r: new[r] for r in added}}, not added)  # the part no terminal is needed for: new ids only, every recorded id untouched
     code = stack.approval_code({"story": story_id, "ledger_sha256": hashlib.sha256(md.encode("utf-8")).hexdigest(), "reviewed": value})
     return {"reviewed": value, "added": added, "changed": changed, "removed": removed, "needs_human": bool(changed or removed), "code": code,
-            "old": old, "new": new, "write": write}
+            "old": old, "new": new, "write": write, "write_free": write_free}
 
 
 def _without(md):
@@ -1076,6 +1086,14 @@ def _without(md):
     at = _line_at(md, "Rules reviewed")
     lines = md.splitlines(keepends=True)
     return "".join(lines[:at] + lines[at + 1:]) if at is not None else md
+
+
+def confirm_refusal(prep, cap=20):
+    """The fixed exit-2 text of a confirm without a terminal that still has changed or dropped ids: which ids were recorded (the free new ones,
+    already written) and which need a human's own terminal. Rule ids only (each is a validated `BR-<id>-<n>`), at most `cap` per list."""
+    def ids(v):
+        return (", ".join(v[:cap]) + (f" and {len(v) - cap} more" if len(v) > cap else "")) or "none"
+    return CONFIRM_TERMINAL.format(recorded=ids(prep["added"]), changed=ids(prep["changed"]), removed=ids(prep["removed"]))
 
 
 def confirm_preview(story_id, prep):

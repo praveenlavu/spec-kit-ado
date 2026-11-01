@@ -171,9 +171,11 @@ them into a shell line. Do not run `ado rules <id>` here (a re-pull after the pl
    `Q<n>` to the product owner in your own words, naming the rule id; never rewrite a rule, never edit a rules file. Not
    installed, not pinned or not allowed by the project's kit rules: skip it silently.
 7. **Confirm.** Then run `ado rules <id> --confirm` (local only). It records the hashes of the rules you planned against in the
-   ledger header (`Rules reviewed:`); the first confirm of new ids is free, so run it yourself. If it refuses because a recorded
-   hash would change or a recorded id would be dropped, that is a re-confirm: the human's, in their own terminal, after reading the
-   changed rules. Never run a re-confirm yourself and never try to answer its prompt. With `--workflow`, add `- [ ] Rule
+   ledger header (`Rules reviewed:`). A rule with no recorded hash yet is `rule-unconfirmed`: the first confirm is free, so run it
+   yourself, no terminal needed. Without a terminal it records every such new id in one write; if a recorded hash would also change
+   or a recorded id would be dropped (`rule-changed`), it then exits 2 and names the ids it recorded and the ones that need a
+   human. Those are a re-confirm: **STOP**, the human's, in their own terminal, after reading the changed rules. Never run a
+   re-confirm yourself and never try to answer its prompt. With `--workflow`, add `- [ ] Rule
    BR-<id>-<n> changed since it was confirmed: read it, then run ado rules <id> --confirm in your own terminal — rule-changed`
    under `### Needs human decision` (rule ids only; step 4 does not write it a second time) and carry on.
 8. **Commit the rules files.** Locally, no gate, never push. Stage only the ledger `<dod_path>/DoD_<id>.md`, the decisions file
@@ -199,12 +201,14 @@ When `rules.enabled`, the same `ado gate <id>` output has a `rules` key (ids onl
 - `rules.drift` is not empty (rule ids, `chain` or `problems`: the committed rules files differ from the rules live in ADO,
   `rule_drift`), or `rules.unreachable` is `true` (`rules-unreachable`: ADO could not be read, or the gate's token cannot read the
   Epic/Feature), or `rules.header` holds `rules-from` or `rules-reviewed` (`rules-header`: the ledger's `Rules from:` /
-  `Rules reviewed:` line is missing or malformed), or `rules.changed` still lists a rule after step 3a's confirm
-  (`rule-changed`): handle it like AC drift and **stop** the rules work. Tell the user which class it is and the ids; whether to
+  `Rules reviewed:` line is missing or malformed), or `rules.changed` lists a rule
+  (`rule-changed`: a recorded hash differs): handle it like AC drift and **stop** the rules work. Tell the user which class it is and the ids; whether to
   re-pull (`ado rules <id>`), refresh the ledger (`ado dod <id> --refresh`) and re-confirm is their decision. Do not re-pull,
   refresh or re-confirm yourself. With `--workflow`: add one line under `### Needs human decision` (`- [ ] Business rules differ
   from ADO or could not be checked (rule_drift): re-pull and re-confirm? — <class>`, or the `rule-changed` / `rules-header` form; a `rule-changed` line step 3a already wrote is not written again),
   do nothing more with the rules, and go on to the summary.
+- `rules.unconfirmed` still lists a rule (`rule-unconfirmed`): run `ado rules <id> --confirm` yourself (step 3a item 7; the first
+  confirm is free, no terminal needed) and run the gate again; it is not a stop and not a `Needs human decision` line.
 - `rules.drift_note` is present: the live check was not run (`--offline`) or ADO was not read. Say rule drift was **NOT checked**
   and give the note; never say "no rule drift".
 - `rules.uncovered` is expected while the tests do not exist yet (the plan comes before `implement`): it must hold only rules that

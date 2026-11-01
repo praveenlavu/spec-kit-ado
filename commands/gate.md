@@ -33,7 +33,7 @@ to skip. Whatever would be a question becomes one line
 section 2 (add the heading if it is missing). Then carry on, and still log the result in
 step 4.
 With `--workflow` and `rules.enabled`, every business-rules class below that needs a human (drift, `rules-unreachable`, a
-changed or unconfirmed rule, a malformed ledger header line) also becomes one
+changed rule, a malformed ledger header line; not an unconfirmed rule, which you confirm yourself) also becomes one
 `- [ ] Business rules need a human: <class> — <what to do>` line under `### Needs human decision` (rule ids only), and the result is
 still logged in step 4.
 
@@ -102,7 +102,8 @@ keys are the `rule_coverage` check (local, from the working tree or the CI check
 | `rules.excluded` | rules a counted exclusion lifts (a posted `out of scope:` decision); list the ids and that the PO still has to validate them before `done` |
 | `rules.uncovered` | `rule-uncovered`: in scope, but no AC row cites it with a test that exists. Before tests exist this is expected; after, the fix is the AC row's `[BR-<id>-<n>]` tag, an AC the story gains in ADO, or a PO exclusion that is posted. A rejected exclusion puts the rule back here: it is never deleted or re-worded |
 | `rules.unknown` | `rule-unknown`: a cited id is in no rules file, or `?` for a malformed `BR-` tag (a count only); correct the tag |
-| `rules.changed` | `rule-changed`: the rule is unconfirmed, differs from `Rules reviewed:`, or its text no longer matches its fingerprint. The first confirm of new ids is free (`ado rules <id> --confirm`); re-confirming a changed or dropped hash is a human act in their own terminal; if the file was edited by hand, the human re-pulls first. Never run a re-confirm yourself |
+| `rules.unconfirmed` | `rule-unconfirmed`: an in-scope rule with no recorded hash in `Rules reviewed:` yet (right after the first pull this is every rule). The first confirm is free: read the rule, then run `ado rules <id> --confirm` yourself (local, no terminal needed) and run the gate again |
+| `rules.changed` | `rule-changed`: the recorded hash in `Rules reviewed:` differs from the rule in the file, or the rule's text no longer matches its fingerprint. **STOP**: a human re-confirms it in their own terminal after reading the change (`ado rules <id> --confirm`); if the file was edited by hand, the human re-pulls first. Never run a re-confirm yourself; with `--workflow` write a `Needs human decision` line. `--confirm` without a terminal still records the `rules.unconfirmed` ids and then lists the ones that need the human |
 | `rules.problems` | `rules-problem`: `<rule id>:<key>` or `<work item id>:<key>`, an error problem in a rules file; the PO fixes the Description in ADO and the human re-pulls |
 | `rules.missing` | `rules-missing`: work item ids on `Rules from:` with no usable file; `ado rules <id>` |
 | `rules.format` | `rules-format`: work item ids whose file has another `rules-format`; `ado rules <id>` |
@@ -112,8 +113,8 @@ keys are the `rule_coverage` check (local, from the working tree or the CI check
 
 An `out of scope:` decision line that breaks its grammar lifts nothing, so its rule shows as `rules.uncovered`; `ado strict check
 <id> --phase pr` names the line by its `D<n>` id as `rules-problem`. The fix is to add a corrected `out of scope:` line with
-`ado decisions <id> --add` and post it with `--post` (preview, yes, apply); never edit a line the PO answered. The seven strict
-ids (`rule-uncovered`, `rule-unknown`, `rule-changed`, `rules-problem`, `rules-missing`, `rules-format`, `rules-header`) cannot be
+`ado decisions <id> --add` and post it with `--post` (preview, yes, apply); never edit a line the PO answered. The eight strict
+ids (`rule-uncovered`, `rule-unknown`, `rule-unconfirmed`, `rule-changed`, `rules-problem`, `rules-missing`, `rules-format`, `rules-header`) cannot be
 overridden. With `gate.block` listing `rule_coverage` or `rule_drift` (strict mode adds both), a class above that is not empty makes
 `blocking` true; otherwise it is advisory, but report it all the same. This is process enforcement, not a security boundary.
 

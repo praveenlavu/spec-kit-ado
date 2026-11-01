@@ -974,9 +974,9 @@ def _clean():
 
 def test_coverage_keys_and_a_clean_story():
     c = _cov(_clean())
-    assert list(c) == ["in_scope", "covered", "excluded", "uncovered", "unknown", "changed", "problems", "missing", "format", "header"]
+    assert list(c) == ["in_scope", "covered", "excluded", "uncovered", "unknown", "unconfirmed", "changed", "problems", "missing", "format", "header"]
     assert c["in_scope"] == c["covered"] == ["BR-1201-1", "BR-1201-2"]  # the draft and the retired rule are never in scope
-    assert not any(c[k] for k in ("excluded", "uncovered", "unknown", "changed", "problems", "missing", "format", "header"))
+    assert not any(c[k] for k in ("excluded", "uncovered", "unknown", "unconfirmed", "changed", "problems", "missing", "format", "header"))
 
 
 def test_uncovered_rule_untagged_or_tagged_on_an_ac_with_no_present_test():
@@ -1021,15 +1021,51 @@ def test_unknown_ids_are_ids_or_a_question_mark_never_the_token_text():
     assert d["unknown"] == [] and d["in_scope"] == ["BR-1201-1", "BR-1201-2"]
 
 
-def test_changed_unconfirmed_and_recorded_hash_differs():
-    c = _cov(_gl(*ROWS))  # no Rules reviewed: line: no confirmed hash at all
-    assert c["changed"] == ["BR-1201-1", "BR-1201-2"]
-    other = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}, BR-1201-2@deadbeef"))
-    assert other["changed"] == ["BR-1201-2"]
-    none = _cov(_gl(*ROWS, reviewed="none"))
-    assert none["changed"] == ["BR-1201-1", "BR-1201-2"]
-    part = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}"))
-    assert part["changed"] == ["BR-1201-2"]  # a rule in scope with no recorded hash is unconfirmed
+def test_first_pull_is_all_unconfirmed_none_changed():
+    for led in (_gl(*ROWS), _gl(*ROWS, reviewed="none")):  # no `Rules reviewed:` line at all, or an empty record: no confirmed hash
+        c = _cov(led)
+        assert c["unconfirmed"] == ["BR-1201-1", "BR-1201-2"] and c["changed"] == []
+
+
+def test_a_recorded_different_hash_is_changed_only():
+    c = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}, BR-1201-2@deadbeef"))
+    assert c["changed"] == ["BR-1201-2"] and c["unconfirmed"] == []
+
+
+def test_a_rule_with_no_recorded_hash_is_unconfirmed_while_the_rest_is_confirmed():
+    c = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}"))
+    assert c["unconfirmed"] == ["BR-1201-2"] and c["changed"] == []
+
+
+def test_a_mix_of_both_keeps_the_two_lists_separate():
+    c = _cov(_gl(*ROWS, frm=(1201, 1200), reviewed=f"BR-1201-1@deadbeef"), files=_files(f1201=F1201, f1200=F1200))
+    assert c["changed"] == ["BR-1201-1"] and c["unconfirmed"] == ["BR-1200-1", "BR-1201-2"]
+    assert not set(c["changed"]) & set(c["unconfirmed"])
+
+
+def test_an_unrecorded_rule_whose_text_no_longer_matches_its_hash_is_changed_not_unconfirmed():
+    # `--confirm` refuses such a rule (the file text is not what was reviewed), so it is a human's: never "free to confirm"
+    edited = F1201.replace("- Rule: Customers earn 1 points.", "- Rule: Customers earn nothing.")
+    assert edited != F1201
+    c = _cov(_gl(*ROWS, reviewed=f"BR-1201-2@{H['BR-1201-2']}"), files=_files(f1201=edited))
+    assert c["changed"] == ["BR-1201-1"] and c["unconfirmed"] == []
+    down = F1201.replace(f"### BR-1201-2 · approved · {H['BR-1201-2']}", f"### BR-1201-2 · draft · {H['BR-1201-2']}")
+    d = _cov(_gl(*ROWS), files=_files(f1201=down))
+    assert d["changed"] == ["BR-1201-2"] and d["unconfirmed"] == ["BR-1201-1"]
+
+
+def test_a_malformed_record_makes_nothing_free_to_confirm():
+    # `--confirm` refuses a malformed `Rules reviewed:` line (a human repairs it), so an agent must not be told to run it
+    bad = _gl(*ROWS, reviewed=ALL).replace("@" + H["BR-1201-1"], "@XYZ")
+    c = _cov(bad)
+    assert c["header"] == ["rules-reviewed"] and c["unconfirmed"] == [] and c["changed"] == ["BR-1201-1", "BR-1201-2"]
+
+
+def test_an_excluded_or_draft_rule_without_a_record_is_neither_list():
+    ex = decisions.render_file(1001) + _excl("BR-1201-2") + "\n"
+    c = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}"), decisions_md=ex)
+    assert c["unconfirmed"] == [] and c["changed"] == []  # not in scope, nothing recorded: nothing to confirm
+    assert "BR-1201-3" not in _cov(_gl(*ROWS))["unconfirmed"]
 
 
 def test_changed_judges_every_recorded_id_that_is_still_approved_in_scope_or_not():
@@ -1182,6 +1218,35 @@ def test_blocked_rule_coverage_prints_its_own_line():
     adv = render_summary(_rg(_gl(ROWS[0], ROWS[2], reviewed=ALL)))
     assert "Blocking" not in adv and "`BR-1201-2`" in adv.partition("**Advisory:**")[2]
     assert "Business rules" not in render_summary(_rg(_clean()))  # nothing to report: no line
+
+
+def test_gate_json_summary_and_findings_split_unconfirmed_from_changed():
+    led = _gl(*ROWS, frm=(1201, 1200), reviewed=f"BR-1201-1@deadbeef")
+    files = _files(f1201=F1201, f1200=F1200)
+    r = _rg(led, files, block=["rule_coverage"])
+    assert r["rules"]["changed"] == ["BR-1201-1"] and r["rules"]["unconfirmed"] == ["BR-1200-1", "BR-1201-2"]
+    assert r["blocked_by"] == ["rule_coverage"]
+    line = next(x for x in render_summary(r).splitlines() if x.startswith("- Business rules:"))
+    assert "not confirmed yet" in line and "changed since confirmed" in line
+    assert "`BR-1200-1`" in line.split("not confirmed yet")[1].split("changed since confirmed")[0] and "`BR-1201-2`" in line.split("not confirmed yet")[1].split("changed since confirmed")[0]
+    assert "`BR-1201-1`" in line.split("changed since confirmed")[1] and "BR-1201-1" not in line.split("changed since confirmed")[0]
+    assert "ado rules <story id> --confirm" in line and "own terminal" in line  # each class names its own fix
+    # only unconfirmed: blocks, the line says no terminal is needed and carries no `changed` words
+    only = _rg(_gl(*ROWS), block=["rule_coverage"])
+    assert only["blocking"] is True and only["rules"]["changed"] == []
+    only_line = next(x for x in render_summary(only).splitlines() if x.startswith("- Business rules:"))
+    assert "changed since confirmed" not in only_line and "no terminal" in only_line
+    # only changed: blocks, no `not confirmed yet` words
+    chg_only = _rg(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}, BR-1201-2@deadbeef"), block=["rule_coverage"])
+    assert chg_only["blocking"] is True and chg_only["rules"]["unconfirmed"] == []
+    assert "not confirmed yet" not in render_summary(chg_only)
+    assert "Customers earn" not in render_summary(r)
+
+
+def test_unconfirmed_alone_is_a_rule_coverage_finding():
+    off = _rg(_gl(*ROWS), block=[])
+    assert off["blocking"] is False and off["rules"]["unconfirmed"] == ["BR-1201-1", "BR-1201-2"]
+    assert _rg(_gl(*ROWS), block=["rule_coverage"])["blocked_by"] == ["rule_coverage"]
 
 
 def test_summary_line_has_ids_and_counts_only():

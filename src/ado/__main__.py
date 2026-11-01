@@ -483,7 +483,8 @@ def _kits_pin(args):
 
 def _rules_confirm(args):
     """`ado rules <id> --confirm`: records in the ledger header the rule hashes a human reviewed (local only: no token, no request). New ids
-    are added by anyone. An already-recorded id that would get another hash, or leave the record, is a human re-reading a changed rule: it
+    are added by anyone, also when another id changed or was dropped (written first, in one atomic write, then exit 2 naming the two lists). An
+    already-recorded id that would get another hash, or leave the record, is a human re-reading a changed rule: it
     needs a terminal on stdin AND stdout (a guard against accidents, not a security boundary: a pseudo-terminal gives a tty), prints the ids
     and old/new hashes, and writes only when the typed `approval code` matches; everything is read again and the code recomputed right
     before the write."""
@@ -493,7 +494,8 @@ def _rules_confirm(args):
     prep = rules.prepare_confirm(dod_path, args.id)
     if prep["needs_human"]:
         if not (sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty()):
-            raise ValueError(rules.CONFIRM_TERMINAL)
+            prep["write_free"]()  # the new ids are free: recorded in one atomic write before the refusal for the rest
+            raise ValueError(rules.confirm_refusal(prep))
         print(rules.confirm_preview(args.id, prep))
         if not stack.confirm_code(prep["code"]):
             raise ValueError(stack.E_NOT_CONFIRMED)

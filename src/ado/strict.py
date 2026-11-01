@@ -1044,8 +1044,10 @@ def _rules_fixes(sid):
                            f"`out of scope: BR-<id>-<n>` decision (`ado decisions {sid} --add`, then `--post`); never overridable"),
         "rule-unknown": (f"correct or remove the tag in the AC row; if the rule exists in ADO, pull it with `ado rules {sid}` and commit the file; "
                          "a tag is exactly `BR-<work item id>-<number>`"),
-        "rule-changed": (f"read the rule in its rules file (re-pull with `ado rules {sid}` if the file was edited by hand), then a human confirms it "
-                         f"with `ado rules {sid} --confirm` (the first confirm of a new rule is free; re-confirming a changed or dropped hash is a human's, in their own terminal)"),
+        "rule-unconfirmed": (f"read the rule in its rules file, then run `ado rules {sid} --confirm` yourself (the first confirm of a new rule is free: "
+                             "no terminal needed)"),
+        "rule-changed": (f"STOP: a human re-confirms it with `ado rules {sid} --confirm` in their own terminal after reading the change in the rules file "
+                         f"(re-pull with `ado rules {sid}` first if the file was edited by hand); re-confirming a changed or dropped hash is never the agent's"),
         "rules-problem": f"fix the Business rules section of the Epic/Feature in ADO, then `ado rules {sid}` and commit the file",
         "rules-bad-exclusion": (f"add a correct line, exactly `out of scope: BR-<id>-<n>[, BR-<id>-<n>]`, with `ado decisions {sid} --add` and post it with "
                                 f"`--post` (`ado decisions {sid}` shows the lines; never edit a line the PO answered); a malformed line excludes nothing"),
@@ -1058,7 +1060,7 @@ def _rules_fixes(sid):
 
 def _rules(c):
     """The offline business-rules findings of `rules.coverage` (R§7), only with `rules.enabled` (the target branch's config in CI, like every
-    strict rule): `rule-uncovered`, `rule-unknown`, `rule-changed` (also a rule kept in scope only by a hash mismatch), `rules-problem` (an error
+    strict rule): `rule-uncovered`, `rule-unknown`, `rule-unconfirmed` (no recorded hash yet: free to confirm), `rule-changed` (changed since confirmed, also a rule kept in scope only by a hash mismatch), `rules-problem` (an error
     problem of a file, or a malformed `out of scope:` line named by its D id), `rules-missing`, `rules-format`, `rules-header`. Inputs are the
     ones `ado gate` uses (the ledger, the rules files `Rules from:` names, the decisions file, the test files by the gate's globs). The live
     drift check is the gate's: this one makes no request. A detail carries ids, work item ids and counts only, never rule or ledger text."""
@@ -1075,8 +1077,10 @@ def _rules(c):
     if cov["unknown"]:
         out.append(_finding("rule-unknown", "cited rule id(s) found in no rules file: " + (_ids(named) or "none") +
                             f"; malformed `BR-` tag(s): {len(cov['unknown']) - len(named)}", fix["rule-unknown"]))
+    if cov["unconfirmed"]:
+        out.append(_finding("rule-unconfirmed", f"rule(s) in scope not confirmed yet: {_ids(cov['unconfirmed'])}", fix["rule-unconfirmed"]))
     if cov["changed"]:
-        out.append(_finding("rule-changed", "rule(s) not confirmed, changed since confirmed, or whose text no longer matches the hash in their "
+        out.append(_finding("rule-changed", "rule(s) changed since confirmed, or whose text no longer matches the hash in their "
                             f"heading: {_ids(cov['changed'])}", fix["rule-changed"]))
     bad = rules.scope({}, [], c.decisions, c.phase)["bad_exclusions"]
     if cov["problems"] or bad:  # one finding, so the id shows once in the refusal text

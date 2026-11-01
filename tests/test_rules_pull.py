@@ -456,6 +456,10 @@ def ctx(tmp_path, monkeypatch, capsys):
     return Ctx(tmp_path, m)
 
 
+def refusal(recorded="none", changed="none", removed="none"):
+    return rules.CONFIRM_TERMINAL.format(recorded=recorded, changed=changed, removed=removed)
+
+
 def leftovers(ctx):
     return sorted(p.name for p in (ctx.root / "dod").iterdir() if p.name.endswith(".tmp"))
 
@@ -498,7 +502,7 @@ def test_changed_hash_refused_without_tty(ctx, capsys):
     before = ctx.text()
     code, out, raw, err = ctx.run(capsys)
     assert code == 2 and out is None and raw == ""
-    assert err == f"error: {rules.CONFIRM_TERMINAL}\n" and ctx.text() == before
+    assert err == f"error: {refusal(changed='BR-1201-1')}\n" and ctx.text() == before
     assert "aaaaaaaa" not in err and ctx.h["BR-1201-1"] not in err and leftovers(ctx) == []
 
 
@@ -519,7 +523,7 @@ def test_dropping_a_recorded_id_needs_the_terminal_too(ctx, capsys, monkeypatch)
     ctx.record(f"BR-1200-1@{ctx.h['BR-1200-1']}, BR-1200-2@bbbbbbbb, BR-1201-1@{ctx.h['BR-1201-1']}")  # BR-1200-2 is in no file
     before = ctx.text()
     code, _, _, err = ctx.run(capsys)
-    assert code == 2 and err == f"error: {rules.CONFIRM_TERMINAL}\n" and ctx.text() == before
+    assert code == 2 and err == f"error: {refusal(removed='BR-1200-2')}\n" and ctx.text() == before
     terminal(monkeypatch)
     code, out, raw, _ = ctx.run(capsys)
     assert code == 0 and "BR-1200-2" in raw and "bbbbbbbb" in raw and out is None  # the preview comes first, the JSON after it
@@ -711,7 +715,7 @@ def test_the_code_is_never_read_from_a_pipe(ctx, capsys, monkeypatch):
     monkeypatch.setattr(sys, "stdin", Piped())
     monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
     code, _, raw, err = ctx.run(capsys)
-    assert code == 2 and err == f"error: {rules.CONFIRM_TERMINAL}\n" and "approval code" not in raw and ctx.ledger.read_bytes() == before
+    assert code == 2 and err == f"error: {refusal(changed='BR-1201-1')}\n" and "approval code" not in raw and ctx.ledger.read_bytes() == before
 
 
 def test_stdout_must_be_a_terminal_too(ctx, capsys, monkeypatch):
@@ -719,7 +723,7 @@ def test_stdout_must_be_a_terminal_too(ctx, capsys, monkeypatch):
     monkeypatch.setattr(sys, "stdin", TypedStdin())
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
     code, _, raw, err = ctx.run(capsys)
-    assert code == 2 and err == f"error: {rules.CONFIRM_TERMINAL}\n" and "approval code" not in raw and ctx.ledger.read_bytes() == before
+    assert code == 2 and err == f"error: {refusal(changed='BR-1201-1')}\n" and "approval code" not in raw and ctx.ledger.read_bytes() == before
 
 
 def test_the_ledger_edited_between_the_prompt_and_the_code_is_refused(ctx, capsys, monkeypatch):
@@ -808,7 +812,7 @@ def test_a_real_process_without_terminals_refuses_a_re_confirmation(ctx):
     before = ctx.ledger.read_bytes()
     for kw in ({"stdout_pty": False}, {"stdin_pty": False}, {"stdout_pty": False, "stdin_pty": False}):
         code, screen, err = run_in_pty(CMD, ctx.root, **kw)
-        assert code == 2 and rules.CONFIRM_TERMINAL in err and "approval code" not in screen and ctx.ledger.read_bytes() == before, kw
+        assert code == 2 and refusal(changed="BR-1201-1") in err and "approval code" not in screen and ctx.ledger.read_bytes() == before, kw
     code, screen, err = run_in_pty(CMD, ctx.root, answer="not-the-code")
     assert code == 2 and ctx.ledger.read_bytes() == before
 
@@ -878,3 +882,129 @@ def test_json_carries_locators_and_the_notes_count(tmp_path, monkeypatch, capsys
     assert "## Notes" in text and "ZZSECRET" not in text and "ZZINTRO" not in text
     pf = rules.parse_file(text, 1201)
     assert not pf["invalid"] and pf["notes"] == [rules.NOTE_INTRO] and sorted(pf["rules"]) == ["BR-1201-1"]
+
+
+# ---- P3-13c: a confirm without a terminal records the free new ids even when another id changed or was dropped ----
+
+EPIC3 = wi(1200, "Epic", desc((1, "approved"), (2, "approved"), (3, "retired")), title="Loyalty programme")  # three approved rules in scope: BR-1200-1, BR-1200-2, BR-1201-1
+
+
+@pytest.fixture
+def ctx3(tmp_path, monkeypatch, capsys):
+    m, _ = env(tmp_path, monkeypatch, [STORY, FEATURE, EPIC3], {"enabled": True})
+    assert m.main(["rules", "1001"]) == 0
+    capsys.readouterr()
+    dod.write_dod(STORY, "dod", "contoso", "Fabrikam", rules_from=[1201, 1200])
+
+    def boom(c):
+        raise AssertionError("--confirm must not reach ADO")
+    monkeypatch.setattr(m, "AdoClient", boom)
+    return Ctx(tmp_path, m)
+
+
+def rec(ctx, *ids, **other):
+    """`Rules reviewed:` text: the current hash of each id in `ids`, then `id=hash` pairs from `other` (keys with `_` for `-`)."""
+    return ", ".join([f"{r}@{ctx.h[r]}" for r in ids] + [f"{r.replace('_', '-')}@{h}" for r, h in other.items()])
+
+
+def test_no_terminal_one_changed_two_new_records_the_two_new_and_refuses_the_changed(ctx3, capsys):
+    ctx3.record("BR-1201-1@aaaaaaaa")
+    before = ctx3.text()
+    code, out, raw, err = ctx3.run(capsys)
+    assert code == 2 and out is None and raw == ""
+    assert err == f"error: {refusal(recorded='BR-1200-1, BR-1200-2', changed='BR-1201-1')}\n"
+    assert "aaaaaaaa" not in err and ctx3.h["BR-1201-1"] not in err and "Customers earn" not in err
+    assert ctx3.value() == rec(ctx3, "BR-1200-1", "BR-1200-2", BR_1201_1="aaaaaaaa")  # the old record untouched, the two new ids in
+    assert dod.ledger_rules_reviewed(ctx3.text())["hashes"] == {"BR-1200-1": ctx3.h["BR-1200-1"], "BR-1200-2": ctx3.h["BR-1200-2"], "BR-1201-1": "aaaaaaaa"}
+    assert [x for x in ctx3.text().splitlines() if "Rules reviewed" not in x] == [x for x in before.splitlines() if "Rules reviewed" not in x]  # only that line differs
+    assert leftovers(ctx3) == []
+
+
+def test_the_free_part_is_one_atomic_write(ctx3, capsys, monkeypatch):
+    ctx3.record("BR-1201-1@aaaaaaaa")
+    calls = []
+    real = stack._atomic_replace
+    monkeypatch.setattr(stack, "_atomic_replace", lambda *a, **k: calls.append(a[0]) or real(*a, **k))
+    assert ctx3.run(capsys)[0] == 2
+    assert len(calls) == 1
+
+
+def test_no_terminal_a_dropped_id_and_a_new_id(ctx3, capsys):
+    ctx3.record(f"BR-1200-1@{ctx3.h['BR-1200-1']}, BR-1200-9@bbbbbbbb, BR-1201-1@{ctx3.h['BR-1201-1']}")  # BR-1200-9 is in no file; BR-1200-2 is new
+    code, _, raw, err = ctx3.run(capsys)
+    assert code == 2 and raw == "" and err == f"error: {refusal(recorded='BR-1200-2', removed='BR-1200-9')}\n"
+    assert ctx3.value() == rec(ctx3, "BR-1200-1", "BR-1200-2", BR_1200_9="bbbbbbbb", BR_1201_1=ctx3.h["BR-1201-1"])
+
+
+def test_no_terminal_changed_and_dropped_with_nothing_new_writes_nothing(ctx3, capsys):
+    ctx3.record(f"BR-1200-1@{ctx3.h['BR-1200-1']}, BR-1200-2@{ctx3.h['BR-1200-2']}, BR-1201-1@aaaaaaaa, BR-1200-9@bbbbbbbb")
+    before, st = ctx3.ledger.read_bytes(), ctx3.ledger.stat()
+    code, _, _, err = ctx3.run(capsys)
+    assert code == 2 and err == f"error: {refusal(changed='BR-1201-1', removed='BR-1200-9')}\n"
+    assert ctx3.ledger.read_bytes() == before and ctx3.ledger.stat().st_ino == st.st_ino and ctx3.ledger.stat().st_mtime_ns == st.st_mtime_ns
+
+
+def test_with_a_terminal_and_the_code_everything_is_recorded(ctx3, capsys, monkeypatch):
+    ctx3.record("BR-1201-1@aaaaaaaa")
+    stdin = terminal(monkeypatch)
+    code, out, raw, err = ctx3.run(capsys)
+    assert code == 0 and err == "" and stdin.lines == 1
+    assert ctx3.value() == rec(ctx3, "BR-1200-1", "BR-1200-2", "BR-1201-1")
+    assert json.loads(raw[raw.index("{"):]) == {"id": 1001, "reviewed": ctx3.value(), "added": ["BR-1200-1", "BR-1200-2"], "changed": ["BR-1201-1"], "removed": [], "written": True}
+
+
+@pytest.mark.parametrize("answer", ["deadbeef0000\n", "", KeyboardInterrupt])
+def test_a_wrong_code_records_nothing_not_even_the_new_ids(ctx3, capsys, monkeypatch, answer):
+    ctx3.record("BR-1201-1@aaaaaaaa")
+    before = ctx3.ledger.read_bytes()
+    terminal(monkeypatch, answer)
+    code, _, _, err = ctx3.run(capsys)
+    assert code == 2 and err == f"error: {stack.E_NOT_CONFIRMED}\n" and ctx3.ledger.read_bytes() == before and leftovers(ctx3) == []
+
+
+def test_an_untrusted_or_malformed_header_writes_nothing_even_for_new_ids(ctx3, capsys):
+    ctx3.record("BR-1201-1@aaaaaaaa")
+    bad = ctx3.text().replace("BR-1201-1@aaaaaaaa", "BR-1201-1@aaaaaaaa, BR-1201-1@aaaaaaaa")  # a duplicate id: malformed
+    ctx3.put(bad)
+    code, _, raw, err = ctx3.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_HEADER}\n" and raw == "" and ctx3.text() == bad
+    ctx3.put(ctx3.text().replace("- **Rules from:** 1201, 1200\n", "<!--\n- **Rules from:** 1201, 1200\n-->\n- **Rules from:** 1201, 1200\n", 1))
+    before = ctx3.ledger.read_bytes()
+    assert ctx3.run(capsys)[0] == 2 and ctx3.ledger.read_bytes() == before
+
+
+def test_a_hash_mismatch_rule_stops_everything_new_ids_included(ctx3, capsys):
+    ctx3.record("BR-1201-1@aaaaaaaa")
+    f = ctx3.root / "dod" / "Rules_1200.md"
+    f.write_text(f.read_text(encoding="utf-8").replace("Customers earn 1 points per euro.", "Customers earn nothing."), encoding="utf-8")
+    before = ctx3.ledger.read_bytes()
+    code, _, raw, err = ctx3.run(capsys)
+    assert code == 2 and "BR-1200-1" in err and raw == "" and ctx3.ledger.read_bytes() == before
+
+
+def test_crlf_ledger_keeps_its_terminators_in_the_free_write(ctx3, capsys):
+    md = ctx3.text().replace("\n", "\r\n")
+    ctx3.put(md)
+    ctx3.put(ctx3.text().replace(FROM_LINE.replace("\n", "\r\n"), FROM_LINE.replace("\n", "\r\n") + "- **Rules reviewed:** BR-1201-1@aaaaaaaa\r\n"))
+    code, _, _, err = ctx3.run(capsys)
+    assert code == 2 and "BR-1200-1" in err
+    raw = ctx3.ledger.read_bytes()
+    assert raw.count(b"\n") == raw.count(b"\r\n") and ctx3.value() == rec(ctx3, "BR-1200-1", "BR-1200-2", BR_1201_1="aaaaaaaa")
+
+
+def test_the_refusal_text_is_fixed_and_lists_ids_only(ctx3):
+    assert "{recorded}" in rules.CONFIRM_TERMINAL and "{changed}" in rules.CONFIRM_TERMINAL and "{removed}" in rules.CONFIRM_TERMINAL
+    prep = {"added": [f"BR-1-{n}" for n in range(1, 26)], "changed": ["BR-1201-1"], "removed": []}
+    text = rules.confirm_refusal(prep)
+    assert "and 5 more" in text and "BR-1-20" in text and "BR-1-21" not in text and "Changed since confirmed: BR-1201-1" in text and "Dropped: none" in text
+    assert "own terminal" in text and "not a security boundary" in text
+
+
+def test_a_real_process_without_terminals_records_the_new_ids_and_exits_2(ctx3):
+    base = ctx3.text()
+    for kw in ({"stdout_pty": False}, {"stdin_pty": False}, {"stdout_pty": False, "stdin_pty": False}):
+        ctx3.put(base)
+        ctx3.record("BR-1201-1@aaaaaaaa")
+        code, screen, err = run_in_pty(CMD, ctx3.root, **kw)
+        assert code == 2 and refusal(recorded="BR-1200-1, BR-1200-2", changed="BR-1201-1") in err, kw
+        assert "approval code" not in screen and ctx3.value() == rec(ctx3, "BR-1200-1", "BR-1200-2", BR_1201_1="aaaaaaaa"), kw

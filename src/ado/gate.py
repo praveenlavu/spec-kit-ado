@@ -327,9 +327,9 @@ GATE_CHECKS = ("ac_traceability", "assertion", "ac_drift", "open_questions", "co
 
 
 def rule_findings(cov):
-    """What `rule_coverage` reports for a `rules.coverage` result: the uncovered, unknown and changed ids, then one `?` for each of
+    """What `rule_coverage` reports for a `rules.coverage` result: the uncovered, unknown, unconfirmed and changed ids, then one `?` for each of
     problems / missing / format / header that is not empty. Empty is a pass."""
-    return [*cov["uncovered"], *cov["unknown"], *cov["changed"], *("?" for k in ("problems", "missing", "format", "header") if cov[k])]
+    return [*cov["uncovered"], *cov["unknown"], *cov["unconfirmed"], *cov["changed"], *("?" for k in ("problems", "missing", "format", "header") if cov[k])]
 
 
 def drift_findings(rl):
@@ -422,7 +422,8 @@ def _rules_line(rl):
     parts = [(rl["uncovered"], lambda v: "not cited by an AC row whose test exists: " + _ids(v)),
              (unknown, lambda v: "cited but in no rules file: " + _ids(v)),
              (["?"] * (len(rl["unknown"]) - len(unknown)), lambda v: f"{len(v)} malformed `BR-` tag(s) in section 3"),
-             (rl["changed"], lambda v: "changed since confirmed, or not confirmed (read the rule, then `ado rules <story id> --confirm`): " + _ids(v)),
+             (rl["unconfirmed"], lambda v: "not confirmed yet (read the rule, then run `ado rules <story id> --confirm` yourself, no terminal needed): " + _ids(v)),
+             (rl["changed"], lambda v: "changed since confirmed, or its text no longer matches its hash (a human re-confirms with `ado rules <story id> --confirm` in their own terminal after reading the change): " + _ids(v)),
              (rl["problems"], lambda v: "error problem(s) in a rules file: " + _ids(v)),
              (rl["missing"], lambda v: "no usable rules file for work item " + _ids(v) + " (`ado rules <story id>`)"),
              (rl["format"], lambda v: "a rules file in another format for work item " + _ids(v) + " (re-pull with `ado rules <story id>`)"),

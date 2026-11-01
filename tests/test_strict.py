@@ -2131,7 +2131,7 @@ RF = _rules_md(1201, (1, "approved"), (2, "approved"), (3, "draft"))
 RH = {r: v["hash"] for r, v in rules.parse_file(RF, 1201)["rules"].items()}
 RREV = f"BR-1201-1@{RH['BR-1201-1']}, BR-1201-2@{RH['BR-1201-2']}"
 RTAGS = " [BR-1201-1] [BR-1201-2]"
-RULE_IDS = ("rule-uncovered", "rule-unknown", "rule-changed", "rules-problem", "rules-missing", "rules-format", "rules-header")
+RULE_IDS = ("rule-uncovered", "rule-unknown", "rule-unconfirmed", "rule-changed", "rules-problem", "rules-missing", "rules-format", "rules-header")
 
 
 def _rules_on(root, tags=RTAGS, frm="1201", reviewed=RREV):
@@ -2174,6 +2174,7 @@ def test_a_clean_story_under_rules_is_ok(tmp_path, git_env, phase):
 RULE_CASES = {  # rule id -> (kwargs of _rules_on, what the detail must name)
     "rule-uncovered": ({"tags": " [BR-1201-1]"}, ["BR-1201-2"]),
     "rule-unknown": ({"tags": RTAGS + " [BR-777-1] BR-1201-0"}, ["BR-777-1", "malformed `BR-` tag(s): 1"]),
+    "rule-unconfirmed": ({"reviewed": f"BR-1201-1@{RH['BR-1201-1']}"}, ["BR-1201-2"]),
     "rule-changed": ({"reviewed": f"BR-1201-1@{RH['BR-1201-1']}, BR-1201-2@deadbeef"}, ["BR-1201-2"]),
     "rules-problem": ({"rfile": _rules_md(1201, (1, "approved"), (2, "approved"), extra="<p>Rule 2: Another rule two.</p>")},
                       ["BR-1201-2:duplicate-number"]),
@@ -2222,7 +2223,34 @@ def test_the_fixes_name_the_commands(tmp_path, git_env):
     assert "ado rules 1001 --confirm" in fix["rules-header"] and "by hand" in fix["rules-header"]
     root, client = _rstory(tmp_path, git_env, name="b", reviewed="none")
     fix = {f["rule"]: f["fix"] for f in _pr(root, client)["findings"]}
-    assert "ado rules 1001 --confirm" in fix["rule-changed"] and "own terminal" in fix["rule-changed"]
+    assert set(fix) == {"rule-unconfirmed"} and "ado rules 1001 --confirm" in fix["rule-unconfirmed"] and "no terminal" in fix["rule-unconfirmed"]
+    assert "own terminal" not in fix["rule-unconfirmed"] and "human" not in fix["rule-unconfirmed"]
+    root, client = _rstory(tmp_path, git_env, name="c", reviewed=f"BR-1201-1@{RH['BR-1201-1']}, BR-1201-2@deadbeef")
+    fix = {f["rule"]: f["fix"] for f in _pr(root, client)["findings"]}
+    assert set(fix) == {"rule-changed"} and "ado rules 1001 --confirm" in fix["rule-changed"] and "own terminal" in fix["rule-changed"]
+    assert "human" in fix["rule-changed"] and "after reading" in fix["rule-changed"]
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_unconfirmed_and_changed_are_separate_findings_with_their_own_ids(tmp_path, git_env, phase):
+    root, client = _rstory(tmp_path, git_env, reviewed="BR-1201-1@deadbeef")  # BR-1201-1 changed since confirmed, BR-1201-2 never confirmed
+    res = _pr(root, client, phase)
+    assert _rules(res) == ["rule-unconfirmed", "rule-changed"]
+    assert "BR-1201-2" in _finding_of(res, "rule-unconfirmed")["detail"] and "BR-1201-1" not in _finding_of(res, "rule-unconfirmed")["detail"]
+    assert "BR-1201-1" in _finding_of(res, "rule-changed")["detail"] and "BR-1201-2" not in _finding_of(res, "rule-changed")["detail"]
+    assert res["ok"] is False and client.calls == []
+    assert "deadbeef" not in json.dumps(res)  # hashes are not echoed
+
+
+@pytest.mark.parametrize("phase", ["pr", "done"])
+def test_neither_unconfirmed_nor_changed_can_be_overridden(tmp_path, git_env, phase):
+    for rid in ("rule-unconfirmed", "rule-changed"):
+        assert rid not in {r for rs in strict._COVERS.values() for r in rs} and rid not in decisions.OVERRIDE_RULES
+    dec = (decisions.render_file(1001) + _d(1, "skip rule-unconfirmed", kind="override", posted=True)
+           + _d(2, "skip rule-changed", kind="override", posted=True))
+    root, client = _rstory(tmp_path, git_env, dec=dec, reviewed="BR-1201-1@deadbeef")
+    res = _pr(root, client, phase)
+    assert "rule-unconfirmed" in _rules(res) and "rule-changed" in _rules(res) and res["overrides_used"] == []
 
 
 def test_a_rule_kept_in_scope_only_by_a_hash_mismatch_is_rule_changed(tmp_path, git_env):

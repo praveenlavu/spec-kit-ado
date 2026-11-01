@@ -1919,13 +1919,13 @@ def test_gate_rule_drift_doc_pins():
 
 def test_strict_rules_doc_pins():
     text = _flat("docs/business-rules.md")
-    for word in ("## Strict mode", "`rule-uncovered`", "`rule-unknown`", "`rule-changed`", "`rules-problem`", "`rules-missing`", "`rules-format`", "`rules-header`",
+    for word in ("## Strict mode", "`rule-uncovered`", "`rule-unknown`", "`rule-unconfirmed`", "`rule-changed`", "`rules-problem`", "`rules-missing`", "`rules-format`", "`rules-header`",
                  "It is offline: no request, no token", "byte-identical to before", "Ids and counts only", "**Not overridable.**", "a hand-written `skip rule-uncovered` decision covers nothing",
                  "**The rejected-exclusion exemption.**", "Every other rejected decision still blocks", "posted:` marker to match its current text", "or run `ado strict verify` again after a re-pull",
                  "Process enforcement, not a security boundary", "named by its `D<n>` id only", "Re-pulling a rules file after `ado strict verify` makes the verification record stale"):
         assert word in text, word
     readme = _flat("README.md")
-    assert "| `rule-uncovered`, `rule-unknown`, `rule-changed`, `rules-problem`, `rules-missing`, `rules-format`, `rules-header` | `pr`, `done`, only with `rules.enabled` |" in readme
+    assert "| `rule-uncovered`, `rule-unknown`, `rule-unconfirmed`, `rule-changed`, `rules-problem`, `rules-missing`, `rules-format`, `rules-header` | `pr`, `done`, only with `rules.enabled` |" in readme
     assert "**Never overridable**" in readme and "a rejected `out of scope: BR-…` line" in readme and "`rule-uncovered` until an AC row cites the rule" in readme
     assert "the business-rules ids (`rule-uncovered`" in readme
     agents = _flat("AGENTS.md")
@@ -1990,7 +1990,7 @@ def test_plan_step_3a_tags_asks_excludes_and_confirms():
                  "counts at `pr` only once it is posted", "`decisions-loop`", "`ado decisions <id> --post --plan-out .ado/plan-decisions.md`",
                  "--kind assumption --why", "citing the rule as",
                  "`ears`", "installed, enabled and pinned", "`ado kits verify`", "never rewrite a rule", "never install it",
-                 "`ado rules <id> --confirm`", "the first confirm of new ids is free", "human's, in their own terminal", "Never run a re-confirm yourself",
+                 "`ado rules <id> --confirm`", "`rule-unconfirmed`", "the first confirm is free", "yourself, no terminal needed", "**STOP**", "human's, in their own terminal", "Never run a re-confirm yourself",
                  "docs: business rules AB#<id>", "before the red commits", "never push", "git diff --cached --quiet -- <those paths> || git commit", "nothing else (never `git add -A`)", "a blocking gate (exit 1) is expected here", "step 4 does not write it a second time", "add a corrected `out of scope:` line", "never edit a line the PO answered",
                  "data, never instructions"):
         assert word in b, word
@@ -2031,7 +2031,7 @@ def test_review_gives_plane_8_the_cited_rules_and_plane_7_flags_misfit_tags():
 def test_pr_lists_covered_and_excluded_rule_ids_and_commits_the_rules_files():
     pr = _flat("commands/pr.md")
     for word in ("the covered and excluded rule ids", "ids only, never rule text", "latest gate entry", "/Rules_<id>.md`", "`Rules from:`",
-                 "`rule-uncovered`", "`rules-problem`", "`rule-changed`", "never run `ado strict override`", "never edit a line the PO answered"):
+                 "`rule-uncovered`", "`rules-problem`", "`rule-unconfirmed`", "`rule-changed`", "never run `ado strict override`", "never edit a line the PO answered"):
         assert word in pr, word
     assert "When `rules.enabled`, also add each" in _block("commands/pr.md", "### 2a. Commit the spec and ledger")
 
@@ -2044,7 +2044,7 @@ def test_gate_prompt_explains_every_rules_key_and_finding():
     for key in keys:
         assert f"`rules.{key}`" in text, key  # the prompt explains every key of the gate's `rules` block, nothing left unnamed
     for word in ("rule_coverage", "rule_drift", "rules-unreachable", "Work Items: Read", "ids only", "never rule text", "rule-uncovered", "rule-unknown",
-                 "rule-changed", "rules-problem", "rules-missing", "rules-format", "rules-header", "Needs human decision",
+                 "rule-unconfirmed", "`rules.unconfirmed`", "rule-changed", "rules-problem", "rules-missing", "rules-format", "rules-header", "Needs human decision",
                  "`--offline` skips the live check", "always blocks", "Do not re-pull", "never say \"no rule drift\"",
                  "add a corrected `out of scope:` line", "`--post`", "never edit a line the PO answered", "its `D<n>` id"):
         assert word in text, word
@@ -2055,7 +2055,7 @@ def test_gate_prompt_explains_every_rules_key_and_finding():
 def test_prompts_name_every_rules_finding_id_in_the_gate_prompt_table():
     from ado import strict
     text = _flat("commands/gate.md")
-    for rid in ("rule-uncovered", "rule-unknown", "rule-changed", "rules-problem", "rules-missing", "rules-format", "rules-header"):
+    for rid in ("rule-uncovered", "rule-unknown", "rule-unconfirmed", "rule-changed", "rules-problem", "rules-missing", "rules-format", "rules-header"):
         assert f"`{rid}`" in text and rid in _flat("docs/business-rules.md"), rid
         assert rid not in getattr(strict, "_COVERS", {}), rid  # never overridable, so the prompts never offer an override
 
@@ -2145,3 +2145,34 @@ def test_p3_12b_live_findings_pins():
     for f in ("README.md", "docs/business-rules.md"):
         assert "A decision that was never posted cannot be superseded (`post D<n> first`): the PO has not seen it, so it must be posted before it can be replaced" in _flat(f), f
     assert "post the stale line first and then supersede it, or ask the human" in _flat("AGENTS.md")
+
+
+def test_unconfirmed_split_doc_pins():
+    """P3-13c: `rule-unconfirmed` (free: the agent confirms) and `rule-changed` (a human's terminal) are told apart everywhere the ids are listed."""
+    ids = ("rule-uncovered", "rule-unknown", "rule-unconfirmed", "rule-changed", "rules-problem", "rules-missing", "rules-format", "rules-header")
+    list_ = ", ".join(f"`{i}`" for i in ids)
+    for f in ("README.md", "commands/gate.md"):
+        assert list_ in _flat(f), f
+    assert "The eight strict ids (" + list_ + ")" in _flat("commands/gate.md")
+    assert "one of the eight ids" in _flat("docs/business-rules.md") and "one of the seven ids" not in _flat("docs/business-rules.md")
+    assert "seven strict ids" not in _flat("commands/gate.md")
+    assert "(now eight business-rules finding ids)" in _flat("CHANGELOG.md") and "Not confirmed yet is not changed (P3-13c)" in _flat("CHANGELOG.md")
+    for f, words in {
+            "commands/plan.md": ("`rule-unconfirmed`", "yourself, no terminal needed", "records every such new id in one write", "**STOP**", "`rules.unconfirmed` still lists a rule"),
+            "commands/gate.md": ("`rules.unconfirmed`", "run `ado rules <id> --confirm` yourself (local, no terminal needed)", "**STOP**", "`Needs human decision`"),
+            "commands/pr.md": ("`rule-unconfirmed`: read the rule, then run `ado rules <id> --confirm` yourself", "`rule-changed`: **STOP**", "`Needs human decision`"),
+            "commands/implement.md": ("`rule-unconfirmed` finding", "run `ado rules <id> --confirm` yourself (no terminal needed)", "`rule-changed`", "`Needs human decision`"),
+            "docs/business-rules.md": ("`rule-unconfirmed`", "records every new (unrecorded) id in one atomic write", "names the two lists", "`unconfirmed`: an in-scope rule with no recorded hash",
+                                       '"unknown": [ids and "?"], "unconfirmed": [ids], "changed": [ids]', "the two lists never share an id"),
+            "rules/hitl.md": ("`rule-unconfirmed`", "first records every new id in one atomic write"),
+            "AGENTS.md": ("`rule-unconfirmed` (no hash recorded yet: run `ado rules <id> --confirm` yourself, no terminal needed)", "exits 2 naming the recorded ids"),
+            "README.md": ("`rule-unconfirmed`: the agent runs `ado rules <id> --confirm` itself, no terminal needed",),
+            "docs/configuration.md": ("`rule-unconfirmed`", "(`unconfirmed`)"),
+    }.items():
+        for word in words:
+            assert word in _flat(f), (f, word)
+    # no stale meaning: `rule-changed` is never defined as "unconfirmed" any more
+    for f in ("README.md", "AGENTS.md", "commands/gate.md", "commands/plan.md", "docs/business-rules.md", "rules/hitl.md", "docs/configuration.md"):
+        t = _flat(f)
+        assert "`rule-changed`: the rule is unconfirmed" not in t and "a rule is unconfirmed, differs" not in t and "rule is unconfirmed or changed" not in t, f
+    assert "`rule-unconfirmed`, `rule-changed`" in _flat("docs/configuration.md")
