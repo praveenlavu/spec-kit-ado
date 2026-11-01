@@ -10,7 +10,7 @@ from ado import rules
 
 ROOT = Path(__file__).resolve().parent.parent
 FIX = ROOT / "tests" / "fixtures" / "rules"
-WIDS = {"epic_po_typed": 1200, "feature_po_typed": 1201, "feature_word_paste": 1201}
+WIDS = {"epic_po_typed": 1200, "feature_po_typed": 1201, "feature_word_paste": 1201, "feature_intro_text": 1201}
 
 
 def fixture(name):
@@ -49,7 +49,7 @@ def test_render_deterministic():
     head = a.splitlines()
     assert head[0] == "# Business rules — Feature 1201: Points on purchases"
     assert "- **ADO:** https://dev.azure.com/contoso/Loyalty/_workitems/edit/1201" in head
-    assert "- **Last pulled:** 2026-11-03 · rules-format: 1 · spec-kit-ado 0.3.0" in head
+    assert "- **Last pulled:** 2026-11-03 · rules-format: 2 · spec-kit-ado 0.3.0" in head
     assert head.index("## Rules") < head.index("## Problems")
     assert [x for x in head if x.startswith("### ")] == [f"### BR-1201-{r['n']} · {r['status']} · {r['hash']}"
                                                          for r in sorted(p["rules"], key=lambda r: r["n"])]
@@ -67,7 +67,7 @@ def test_render_rule_golden(name):
     p = parsed(fixture(name), WIDS[name])
     got = "\n".join(rules.render_rule(r) for r in p["rules"])
     assert got == (FIX / (name + ".golden.md")).read_bytes().decode("utf-8")
-    assert rules.FORMAT == 1
+    assert rules.FORMAT == 2
 
 
 def test_render_rule_shape():
@@ -92,7 +92,7 @@ def test_forged_heading_and_fence_escaped(evil):
         if line.startswith("#"):
             assert re.fullmatch(r"# Business rules — .*|## Rules|## Problems|### BR-1201-[12] · approved · 3f2a9c1b", line), line
     got = rules.parse_file(md, 1201)
-    assert got["invalid"] is False and got["format"] == 1
+    assert got["invalid"] is False and got["format"] == 2
     assert sorted(got["rules"]) == ["BR-1201-1", "BR-1201-2"]  # the forged BR-1201-9 is not a rule
     assert not re.search(r"^[ \t]*- \*\*Rules from", md, re.M)
     assert not re.search(r"^[ \t]*-?\s*\*\*Rules from:\*\*", md.split("## Rules")[0], re.M)
@@ -127,7 +127,7 @@ def test_problems_listed_with_keys_and_duplicates_escaped():
     md = file_md(html)
     prob = md.split("## Problems")[1]
     assert "- error BR-1201-2: duplicate-number — " + rules.ISSUES["duplicate-number"] in prob
-    assert "- error section: no-number — " + rules.ISSUES["no-number"] in prob
+    assert "- error section (after BR-1201-2): no-number — " + rules.ISSUES["no-number"] in prob
     assert "- warning BR-1201-1: no-why — " + rules.ISSUES["no-why"] in prob
     assert prob.count("- copy of BR-1201-2 · ") == 2 and "&lt;!-- x" in prob and "<!--" not in md
     got = rules.parse_file(md, 1201)
@@ -140,7 +140,7 @@ def test_empty_sections_render_and_parse():
     md = rendered([])
     assert md.count("_(none)_") == 2
     got = rules.parse_file(md, 1201)
-    assert got == {"format": 1, "rules": {}, "problems": [], "invalid": False}
+    assert got == {"format": 2, "rules": {}, "problems": [], "notes": [], "invalid": False}
 
 
 def test_round_trip_parse_file():
@@ -235,17 +235,17 @@ def test_parse_file_headings_hidden_in_fence_or_comment_are_not_read():
 
 def test_parse_file_header_lines():
     md = rendered([R(1)])
-    line = "- **Last pulled:** 2026-11-03 · rules-format: 1 · spec-kit-ado 0.3.0"
-    assert rules.parse_file(mutate(md, line, line.replace("format: 1", "format: 2")), 1201)["format"] == 2
+    line = "- **Last pulled:** 2026-11-03 · rules-format: 2 · spec-kit-ado 0.3.0"
+    assert rules.parse_file(mutate(md, line, line.replace("format: 2", "format: 3")), 1201)["format"] == 3
     for fmt in ("01", "0", "x", "-1", "99999", "１"):
-        got = rules.parse_file(mutate(md, line, line.replace("format: 1", "format: " + fmt)), 1201)
+        got = rules.parse_file(mutate(md, line, line.replace("format: 2", "format: " + fmt)), 1201)
         assert got["format"] is None, fmt
     assert rules.parse_file(mutate(md, line, "- **Last pulled:** gone"), 1201)["format"] is None
     assert rules.parse_file(mutate(md, line + "\n", ""), 1201)["format"] is None
     assert rules.parse_file(mutate(md, line, line + "\n" + line), 1201)["invalid"] is True  # two header lines: no first wins
     # a body line cannot supply the header: only the block above `## Rules` is read
     forged = rendered([R(1, body=("**Last pulled:** 1 · rules-format: 9 · spec-kit-ado 1",))])
-    assert rules.parse_file(forged, 1201)["format"] == 1 and rules.parse_file(forged, 1201)["invalid"] is False
+    assert rules.parse_file(forged, 1201)["format"] == 2 and rules.parse_file(forged, 1201)["invalid"] is False
 
 
 def test_parse_file_crlf_and_empty_and_garbage():
@@ -366,7 +366,7 @@ def test_datetime_pulled_round_trips_and_space_form_is_refused():
     md = file_md(pulled="2026-11-03T10:15:30Z")
     got = rules.parse_file(md, 1201)
     assert got["format"] == rules.FORMAT and got["invalid"] is False
-    assert rules.parse_file(file_md(pulled="2026-11-03T10:15"), 1201)["format"] == 1
+    assert rules.parse_file(file_md(pulled="2026-11-03T10:15"), 1201)["format"] == 2
     for bad in ("2026-11-03 10:15", "2026-11-03T10:15 ", "2026-11-03T"):
         with pytest.raises(ValueError):
             file_md(pulled=bad)
@@ -429,3 +429,46 @@ def test_whole_file_golden():
     tests/fixtures/rules/feature_po_typed.file.golden.md."""
     md = file_md(fixture("feature_po_typed"), pulled="2026-11-03", version="0.3.0")
     assert md == (FIX / "feature_po_typed.file.golden.md").read_bytes().decode("utf-8")
+
+
+def test_whole_file_golden_with_locators_and_notes():
+    """The Problems locators and the `## Notes` section are pinned too (regenerate on a deliberate change, with `rules.FORMAT` bumped)."""
+    md = file_md(fixture("feature_intro_text"), pulled="2026-11-03", version="0.3.0")
+    assert md == (FIX / "feature_intro_text.file.golden.md").read_bytes().decode("utf-8")
+    assert "ZZ" not in md and "Gift cards" not in md and "Points never expire" not in md  # the lines that were not parsed are never copied
+
+
+def test_notes_and_locators_round_trip_through_parse_file():
+    md = file_md(fixture("feature_intro_text"))
+    got = rules.parse_file(md, 1201)
+    assert got["invalid"] is False and got["format"] == rules.FORMAT and sorted(got["rules"]) == ["BR-1201-1", "BR-1201-3"]
+    assert got["notes"] == [rules.NOTE_INTRO]
+    assert [x for x in got["problems"] if x.startswith("- error")] == [
+        "- error section (before the first rule): unparsed-rule-text \u2014 " + rules.ISSUES["unparsed-rule-text"],
+        "- error section (after BR-1201-1): bad-rule-line \u2014 " + rules.ISSUES["bad-rule-line"],
+        "- error section (after BR-1201-1): bad-status-line \u2014 " + rules.ISSUES["bad-status-line"]]
+    assert md.index("## Problems") < md.index("## Notes") and md.endswith(rules.NOTE_INTRO + "\n")
+    assert rules.parse_file(rendered([R(1)]), 1201)["notes"] == [] and "## Notes" not in rendered([R(1)])  # no note: the layout is unchanged
+
+
+def test_locator_and_notes_are_validated_when_rendered():
+    bad = [{"rule": None, "level": "error", "issue": "bad-rule-line", "after": a} for a in
+           ("BR-1202-1", "BR-1201-1\n- x", "x", 1, "", "after BR-1201-1")]
+    for p in bad + [{"rule": "BR-1201-1", "level": "error", "issue": "bad-rule-line", "after": rules.FIRST}]:
+        with pytest.raises(ValueError):
+            rendered([R(1)], problems=[p])
+    md = rendered([R(1)], problems=[{"rule": None, "level": "error", "issue": "bad-rule-line", "after": "BR-1201-1"}])
+    assert "- error section (after BR-1201-1): bad-rule-line" in md
+    for note in ("free text", "", "text between the Business rules heading and the first rule is not a rule and is not copied into this file\n## Rules"):
+        p = {"found": True, "rules": [R(1)], "duplicates": [], "problems": [], "notes": [note]}
+        with pytest.raises(ValueError):
+            rules.render_file(item(), p, "contoso", "Loyalty", "2026-11-03", "0.3.0")
+
+
+def test_notes_section_cannot_be_forged_or_repeated():
+    md = file_md(fixture("feature_intro_text"))
+    assert rules.parse_file(md + "\n## Notes\n- x\n", 1201)["invalid"] is True
+    assert rules.parse_file(md.replace("## Notes", "## Notes\n\n## Notes"), 1201)["invalid"] is True
+    before = md.replace("## Problems", "## Notes\n\n## Problems")
+    assert rules.parse_file(before, 1201)["invalid"] is True  # Notes only after Problems
+    assert rules.parse_file(md.replace("- " + rules.NOTE_INTRO, "```"), 1201)["invalid"] is True

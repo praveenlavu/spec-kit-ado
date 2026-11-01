@@ -202,7 +202,7 @@ def test_heading_variants_and_no_rules_before_it():
 
 def test_text_before_rule_1_is_a_note():
     p = plain("Business rules\nSome intro the PO wrote.\nRule 1: x\nStatus: draft")
-    assert p["notes"] == ["text between the Business rules heading and the first rule was ignored"] and [r["n"] for r in p["rules"]] == [1]
+    assert p["notes"] == [rules.NOTE_INTRO] and issues(p, "error") == [] and [r["n"] for r in p["rules"]] == [1]
     assert plain("Business rules\nRule 1: x")["notes"] == []
 
 
@@ -284,7 +284,7 @@ def test_bad_rule_line(line):
     assert issues(p, "error") == ["bad-rule-line"] and [r["n"] for r in p["rules"]] == [1] and by_n(p)[1]["status"] == "draft"
 
 
-@pytest.mark.parametrize("line", ["Rule-based pricing applies", "Rules: none", "Rule of thumb: be kind", "Ruler 1: x", "Rule", "Rule one: x"])
+@pytest.mark.parametrize("line", ["Rule-based pricing applies", "Rules: none", "Rule of thumb: be kind", "Ruler 1: x", "Rule", "Rule of thumb: be kind", "Rule for gift cards: none", "A rule of thumb: be kind"])
 def test_rule_words_in_body_text_are_not_errors(line):
     p = plain(f"Business rules\nRule 1: ok\n{line}")
     assert issues(p, "error") == [] and line in by_n(p)[1]["body"]
@@ -360,14 +360,14 @@ def test_warnings_no_status_why_example_owner():
 def test_problem_shape_is_fixed_and_never_carries_rule_text():
     secret = "ZZ-secret-text"
     p = plain(f"Business rules\nRule 1a: {secret}\nRule 1: {secret}\nStatus: {secret}\nRule 3 - {secret}\nStatus {secret}")
-    assert p["problems"] and all(set(x) == {"rule", "level", "issue"} and x["issue"] in rules.ISSUES and x["level"] in ("error", "warning") for x in p["problems"])
+    assert p["problems"] and all(set(x) - {"after"} == {"rule", "level", "issue"} and x["issue"] in rules.ISSUES and x["level"] in ("error", "warning") for x in p["problems"])
     assert secret not in repr(p["problems"]) and secret not in repr(p["notes"])
     assert all(isinstance(m, str) and secret not in m for m in rules.ISSUES.values())
 
 
 def test_every_issue_key_is_covered():
     errors = {"no-number", "bad-number", "bad-rule-line", "no-section-heading", "duplicate-number", "unknown-status", "bad-status-line", "two-status",
-              "rule-too-long", "section-too-big", "no-parsable-rules", "unclosed-markup"}
+              "rule-too-long", "section-too-big", "no-parsable-rules", "unclosed-markup", "unparsed-rule-text"}
     assert set(rules.ISSUES) == errors | {"no-status", "no-why", "no-example", "no-owner"}
 
 
@@ -539,3 +539,195 @@ def test_rule_word_probes_are_fast():
 def test_fullwidth_digit_after_rule_is_bad_number():
     p = plain("Business rules\nRule 1: a\nRule \uff12: b")
     assert issues(p, "error") == ["bad-number"] and [r["n"] for r in p["rules"]] == [1]
+
+
+# ---- P3-13b: no rule is dropped silently, problems carry a locator, notes are shown ----
+
+INTRO_RULEISH = ["Rule one: Gift cards earn no points.", "Rule A: x", "R1: x", "BR-1: x", "br-1201-1: x", "Rul\u0435 one: x", "R\u03c5le A: x", "Rule \u0430: x", "Ｒｕｌｅ ｏｎｅ: x", "Ｒ１: x", "Rules: gift cards earn no points", "R 1 x",
+                 "Status: approved", "Why: loyalty policy", "Example: 24 points", "Owner: Loyalty product owner",
+                 "Status approved", "Status, draft", "STATUS : APPROVED"]
+
+
+@pytest.mark.parametrize("line", INTRO_RULEISH)
+def test_rule_like_intro_text_is_an_error_not_silent(line):
+    p = plain(f"Business rules\n{line}\nStatus: approved\nRule 2: y\nStatus: approved")
+    assert [r["id"] for r in p["rules"]] == ["BR-1201-2"]
+    errs = [x for x in p["problems"] if x["level"] == "error"]
+    assert [(x["rule"], x["issue"], x["after"]) for x in errs if x["issue"] == "unparsed-rule-text"] == [(None, "unparsed-rule-text", rules.FIRST)]
+    assert "unparsed-rule-text" in rules.ISSUES and not [x for x in p["problems"] if x["rule"] == "BR-1201-2" and x["level"] == "error"]
+
+
+def test_unparsed_intro_text_reaches_the_file_without_its_text():
+    secret = "Gift cards earn no ZZSECRET points."
+    html = f"<p>Business rules</p><p>Rule one: {secret}</p><p>Status: approved</p><p>Rule 2: y</p><p>Status: approved</p>"
+    md = rules.render_file({"id": 1201, "fields": {}}, parsed(html), "contoso", "Loyalty", "2026-11-03", "0.3.0")
+    assert "- error section (before the first rule): unparsed-rule-text — " + rules.ISSUES["unparsed-rule-text"] in md
+    assert "ZZSECRET" not in md and "Rule one" not in md
+    assert rules.parse_file(md, 1201)["invalid"] is False
+
+
+def test_plain_intro_prose_is_a_note_not_an_error():
+    p = plain("Business rules\nThe loyalty programme started in 2026.\nRule 1: x\nStatus: approved")
+    assert issues(p, "error") == [] and p["notes"] == [rules.NOTE_INTRO]
+    p = plain("Business rules\nRule one: x\nThe loyalty programme started in 2026.\nRule 1: x\nStatus: approved")  # both: an error and a note
+    assert issues(p, "error") == ["unparsed-rule-text"] and p["notes"] == [rules.NOTE_INTRO]
+    assert plain("Business rules\nRule one: x\nRule 1: x\nStatus: approved")["notes"] == []  # nothing but the error to say
+    assert plain("Business rules")["notes"] == [rules.NOTE_EMPTY]
+
+
+def test_intro_with_no_rule_at_all_still_reports_the_rule_like_line():
+    p = plain("Business rules\nRule one: x\nStatus: approved")
+    assert issues(p, "error") == ["no-parsable-rules", "unparsed-rule-text"]
+
+
+def test_intro_notes_and_errors_in_a_real_word_paste():
+    p = parsed("<p class=MsoNormal><span>Business rules</span></p><p>R1:&nbsp;Gift cards earn no points.</p><p>Status: approved</p><p>Rule 2: y</p>")
+    assert issues(p, "error") == ["unparsed-rule-text"] and [r["n"] for r in p["rules"]] == [2]
+
+
+def _loc(p):
+    return [(x["issue"], x.get("after")) for x in p["problems"] if x["rule"] is None and "after" in x]
+
+
+def test_locator_before_the_first_rule():
+    p = plain("Business rules\nRule 1a: x\nRule 2: y\nStatus: approved")
+    assert _loc(p) == [("bad-number", rules.FIRST)]
+
+
+def test_locator_after_a_middle_rule():
+    p = plain("Business rules\nRule 1: a\nStatus: approved\nRule 2: b\nStatus: approved\nRule 3 - c\nRule 4: d\nStatus: approved")
+    assert _loc(p) == [("bad-rule-line", "BR-1201-2")]
+
+
+def test_locator_after_the_last_rule_and_for_several_lines():
+    p = plain("Business rules\nRule 1: a\nRule 2: b\nRule: c\nRule 3x: d")
+    assert _loc(p) == [("no-number", "BR-1201-2"), ("bad-number", "BR-1201-2")]
+
+
+def test_locator_follows_a_duplicate_and_is_not_set_for_whole_section_problems():
+    p = plain("Business rules\nRule 1: a\nRule 1: b\nRule: c")
+    assert _loc(p) == [("no-number", "BR-1201-1")]
+    p = plain("Rule 1: a")
+    assert [x["issue"] for x in p["problems"]] == ["no-section-heading"] and "after" not in p["problems"][0]
+    assert all("after" not in x for x in plain("Business rules\nRule 1: a")["problems"])  # a rule's own problems name the rule
+
+
+def test_locator_is_an_id_or_a_fixed_phrase_never_text():
+    p = plain("Business rules\nZZ intro Rule one: x\nRule 1a: ZZSECRET\nRule 2: y\nRule 3 - ZZSECRET")
+    assert {x["after"] for x in p["problems"] if "after" in x} <= {rules.FIRST, "BR-1201-2"}
+    assert "ZZ" not in repr(p["problems"])
+
+
+def test_two_errors_in_one_bad_block_are_both_reported():
+    p = plain("Business rules\nRule 1: ok\nStatus: approved\nRule 2 - x\nStatus approved\nRule 3: y\nStatus: approved")
+    assert [(x["issue"], x["after"]) for x in p["problems"] if x["rule"] is None] == [("bad-rule-line", "BR-1201-1"), ("bad-status-line", "BR-1201-1")]
+    assert [r["n"] for r in p["rules"]] == [1, 3] and by_n(p)[1]["status"] == "approved"  # the bad block's lines still are not Rule 1's
+
+
+def test_bad_block_status_errors_all_listed():
+    p = plain("Business rules\nRule: x\nStatus: maybe\nStatus: draft\nRule 2: y\nStatus: approved")
+    assert [x["issue"] for x in p["problems"] if x["rule"] is None] == ["no-number", "two-status", "unknown-status"]
+    p = plain("Business rules\nRule 1a: x\nStatus: approved\nRule 2: y\nStatus: approved")
+    assert issues(p, "error") == ["bad-number"]  # a valid Status line under a bad block adds nothing
+
+
+def test_duplicate_copies_report_their_own_errors_too():
+    p = plain("Business rules\nRule 1: a\nStatus: maybe\nRule 1: b\nStatus: approved")
+    assert sorted(x["issue"] for x in p["problems"] if x["level"] == "error") == ["duplicate-number", "unknown-status"]
+
+
+def test_fold_does_not_make_ordinary_text_a_rule():
+    assert plain("Business rules\nRule 1: ok\nRésumé of the old Rule 2 is below\nStatus: approved")["problems"][0]["issue"] != "bad-rule-line"
+    assert plain("Business rules\nBranding applies\nRoutine: daily\nRule 1: x\nStatus: approved")["notes"] == [rules.NOTE_INTRO]
+
+
+@pytest.mark.parametrize("line", ["Rul\u0435 2: b", "R\u03c5le 2: b", "Ru\u04cfe 2: b"])
+def test_look_alike_letters_in_a_rule_label_are_flagged_below_a_rule_too(line):
+    p = plain(f"Business rules\nRule 1: ok\n{line}\nStatus: approved")
+    assert issues(p, "error") == ["bad-rule-line"] and by_n(p)[1]["status"] == "draft"
+
+
+def test_notes_and_locators_are_linear_on_1_mib():
+    N1 = 1 << 20
+    for chunk in ("<p>Rule one: x</p>", "<p>R1: " + "е" * 40 + "</p>", "<p>" + "Status: approved </p>", "<p>BR-1: x​</p>", "<p>Rule 1a: x</p><p>Status approved</p>",
+                  "<p>Ｒｕｌｅ " + "x" * 90 + "</p>", "<p>intro prose here</p>", "<p>" + "R" * 100 + "</p>"):
+        html = "<p>Business rules</p>" + chunk * (N1 // len(chunk) - 1)
+        html = html[:N1]
+        t = time.perf_counter()
+        lines, probs = rules.normalise(html)
+        p = rules.parse(lines, 1201, probs)
+        rules.render_file({"id": 1201, "fields": {}}, p, "contoso", "Loyalty", "2026-11-03", "0.3.0") if len(p["rules"]) <= rules.MAX_RULES else None
+        assert time.perf_counter() - t < 1.0, chunk
+    t = time.perf_counter()  # many bad blocks, under the 64 KiB cap so the problems are really rendered
+    p = rules.parse(["Business rules"] + ["Rule 1a: x", "Status approved"] * 2000 + ["Rule 1: y"], 1201)
+    assert len(p["problems"]) >= 4000 and "section-too-big" not in issues(p)
+    rules.render_file({"id": 1201, "fields": {}}, p, "contoso", "Loyalty", "2026-11-03", "0.3.0")
+    body = ["Rule 1: a"] + ["\u00d8 Rule one: " + "x" * 20, "[1] R1: y", "\uff32\uff55\uff4c\uff45 " + "\u0435" * 60] * 250
+    p = rules.parse(["Business rules"] + ["\u00d8 \u00d8 \u00d8 \u00d8 Rule one: x"] * 500 + body, 1201)
+    assert "section-too-big" not in issues(p)
+    assert time.perf_counter() - t < 1.0
+
+
+def test_problems_of_the_new_key_and_notes_never_carry_text():
+    secret = "ZZ-secret-text"
+    p = plain(f"Business rules\nRule one: {secret}\nStatus: {secret}\nprose {secret}\nRule 2 - {secret}\nStatus {secret}\nRule 3: x")
+    assert secret not in repr(p["problems"]) and secret not in repr(p["notes"])
+    assert all(n in rules.NOTES for n in p["notes"])
+
+
+MARKED = ["\u00d8 {}", "\uf0b7 {}", "v {}", "> {}", "a) {}", "(1) {}", "[1] {}", "1 - {}", "\u2022 {}", "\u00d8 \u00d8 a) {}"]
+SHAPES = ["Rule one: Gift cards earn no points.", "Rule A: x", "R1: x", "BR-1: x", "BR-1201-2: x", "Business rule 2: x", "Business Rule A: x",
+          "Rules 2: x", "Rule No. 2: x", "Rul\u0435 one: x", "\uff32\uff55\uff4c\uff45 \uff4f\uff4e\uff45: x", "BR\u20111: x"]
+
+
+@pytest.mark.parametrize("marker", MARKED)
+@pytest.mark.parametrize("shape", SHAPES)
+def test_marked_rule_like_intro_line_is_an_error_even_without_a_status_line(marker, shape):
+    p = plain("Business rules\n" + marker.format(shape) + "\nRule 2: y\nStatus: approved")
+    assert [(x["issue"], x["after"]) for x in p["problems"] if x["level"] == "error"] == [("unparsed-rule-text", rules.FIRST)], (marker, shape)
+
+
+@pytest.mark.parametrize("marker", ["{}"] + MARKED)
+@pytest.mark.parametrize("shape", SHAPES)
+def test_rule_like_line_below_a_valid_rule_is_an_error_and_changes_nothing(marker, shape):
+    base = plain("Business rules\nRule 1: ok\nStatus: approved\nRule 2: y\nStatus: approved")
+    p = plain("Business rules\nRule 1: ok\nStatus: approved\n" + marker.format(shape) + "\nRule 2: y\nStatus: approved")
+    errs = [(x["rule"], x["issue"], x.get("after")) for x in p["problems"] if x["level"] == "error"]
+    assert errs == [(None, "unparsed-rule-text", "BR-1201-1")], (marker, shape)
+    assert [r["status"] for r in p["rules"]] == ["approved", "approved"]
+    assert p["rules"][1] == base["rules"][1]
+    assert p["rules"][0]["body"][:2] == base["rules"][0]["body"][:2] and len(p["rules"][0]["body"]) == 3  # the line stays in Rule 1's text, nothing is merged elsewhere
+
+
+def test_body_rule_like_line_with_a_status_under_it_is_one_error_not_two_status():
+    p = plain("Business rules\nRule 1: ok\nStatus: approved\nRule one: x\nStatus: draft")
+    assert issues(p, "error") == ["two-status", "unparsed-rule-text"] and by_n(p)[1]["status"] == "draft"  # the two Status lines are visible; so is the cause
+    p = plain("Business rules\nRule 1: ok\nRule one: x\nStatus: draft")
+    assert issues(p, "error") == ["unparsed-rule-text"] and by_n(p)[1]["status"] == "draft"
+    assert [x["after"] for x in p["problems"] if x["issue"] == "unparsed-rule-text"] == ["BR-1201-1"]
+
+
+def test_body_rule_like_line_on_a_duplicate_copy_is_reported_once():
+    p = plain("Business rules\nRule 1: a\nRule one: x\nRule 1: b\nRule one: y")
+    assert issues(p, "error") == ["duplicate-number", "unparsed-rule-text"]
+
+
+@pytest.mark.parametrize("line", ["Rules: none", "Rule of thumb: be kind", "Rule-based pricing: yes", "Rules for gift cards apply: always",
+                                  "Ruler 1: x", "Rule", "Note: see Rule 2", "See Rule 2: the details", "Brand: Contoso", "Branch 1: x", "Bring 2: x",
+                                  "Why: because a rule applies", "Example: Rule one: x", "Owner: Loyalty product owner", "Tier | Points", "Policy 1: gift cards",
+                                  "Regel 1: x", "Business: retail", "A rule of thumb: be kind", "Brie 2: x"])
+def test_ordinary_body_text_and_labels_are_not_flagged(line):
+    p = plain(f"Business rules\nRule 1: ok\n{line}\nStatus: approved")
+    assert issues(p, "error") == [], line
+    assert line in by_n(p)[1]["body"]
+
+
+@pytest.mark.parametrize("line", ["\u0405tatus: approved", "\uff33tatus: approved", "\uff33\uff54\uff41\uff54\uff55\uff53 : approved", "\u00d8 Status: approved", "\u0405tatus approved",
+                                  "Why: x", "\u00d8 Example: x"])
+def test_look_alike_and_marked_label_lines_in_the_intro_are_errors(line):
+    assert issues(plain(f"Business rules\n{line}\nRule 1: ok\nStatus: approved"), "error") == ["unparsed-rule-text"]
+
+
+def test_a_repeated_heading_line_in_the_intro_is_only_a_note():
+    p = plain("Business rules\nBusiness rules:\nRule 1: ok\nStatus: approved")
+    assert issues(p, "error") == [] and p["notes"] == [rules.NOTE_INTRO]

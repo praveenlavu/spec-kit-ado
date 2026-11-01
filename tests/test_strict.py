@@ -2178,7 +2178,7 @@ RULE_CASES = {  # rule id -> (kwargs of _rules_on, what the detail must name)
     "rules-problem": ({"rfile": _rules_md(1201, (1, "approved"), (2, "approved"), extra="<p>Rule 2: Another rule two.</p>")},
                       ["BR-1201-2:duplicate-number"]),
     "rules-missing": ({"rfile": None}, ["1201"]),
-    "rules-format": ({"rfile": RF.replace("rules-format: 1", "rules-format: 2")}, ["1201"]),
+    "rules-format": ({"rfile": RF.replace("rules-format: 2", "rules-format: 3")}, ["1201"]),
     "rules-header": ({"frm": None}, ["rules-from"]),
 }
 

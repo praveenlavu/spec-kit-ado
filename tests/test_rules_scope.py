@@ -90,7 +90,7 @@ def test_exclusion_ids_malformed_or_not_an_exclusion(text):
 # ---- scope ----
 
 def rfile(wid, *rs, invalid=False):
-    return {"format": 1, "invalid": invalid, "problems": [],
+    return {"format": 2, "invalid": invalid, "problems": [],
             "rules": {} if invalid else {f"BR-{wid}-{n}": {"status": st, "hash": "3f2a9c1b", "section": "", "body_hash": "3f2a9c1b"} for n, st in rs}}
 
 
@@ -196,7 +196,7 @@ def test_scope_from_real_decisions_file():
 
 def test_edited_heading_status_or_body_stays_in_scope():
     def f(st, body_hash):
-        return {1201: {"format": 1, "invalid": False, "problems": [], "rules": {"BR-1201-1": {"status": st, "hash": "3f2a9c1b", "section": "", "body_hash": body_hash}}}}
+        return {1201: {"format": 2, "invalid": False, "problems": [], "rules": {"BR-1201-1": {"status": st, "hash": "3f2a9c1b", "section": "", "body_hash": body_hash}}}}
     for st in ("draft", "retired"):
         assert rules.scope(f(st, "3f2a9c1b"), [1201], parsed(), "pr")["in_scope"] == []  # a clean draft/retired rule stays out
         assert rules.scope(f(st, "0badc0de"), [1201], parsed(), "pr")["in_scope"] == ["BR-1201-1"]  # heading edited, hash left alone

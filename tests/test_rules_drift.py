@@ -129,7 +129,7 @@ def test_no_readable_format_is_an_empty_file_not_a_skip():
     """A PR that deletes or mangles `Last pulled` (format None) must not hide a rule edit from rule_drift: advisory with only rule_drift listed blocks."""
     _, texts = clean()
     for bad in ("\n".join(x for x in texts[1201].split("\n") if not x.startswith("- **Last pulled:**")),
-                texts[1201].replace("rules-format: 1 \u00b7 ", "")):
+                texts[1201].replace("rules-format: 2 \u00b7 ", "")):
         x = dict(texts)
         x[1201] = bad.replace("Customers earn 2 points per euro.", "Customers earn 0 points per euro.")
         files = {w: rules.parse_file(t, w) for w, t in x.items()}
@@ -139,7 +139,7 @@ def test_no_readable_format_is_an_empty_file_not_a_skip():
         r = run_gate(ledger(), {}, {}, None, block=["rule_drift"], rules_ctx={"files": files, "drift": d})
         assert r["blocked_by"] == ["rule_drift"] and r["blocking"] is True
     other = dict(texts)
-    other[1201] = texts[1201].replace("rules-format: 1", "rules-format: 2")  # a readable other format stays with coverage
+    other[1201] = texts[1201].replace("rules-format: 2", "rules-format: 3")  # a readable other format stays with coverage
     assert drift(live(), other)[0]["drift"] == []
 
 
@@ -247,7 +247,7 @@ def test_crlf_file_no_drift():
 
 def test_format_mismatch_reports_rules_format_only():
     _, texts = clean()
-    texts[1201] = texts[1201].replace("rules-format: 1", "rules-format: 2")
+    texts[1201] = texts[1201].replace("rules-format: 2", "rules-format: 3")
     other = live(feature=desc((1, "approved"), (2, "approved"), (3, "draft"), text="Customers earn {n} points per dollar."))
     d, _ = drift(other, texts)
     assert d["drift"] == [] and d["evaluated"] is True  # that file is `format` in coverage; no per-rule judgement here

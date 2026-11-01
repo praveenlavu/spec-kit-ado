@@ -118,12 +118,12 @@ Read each file named in `files` (its `## Rules` and `## Problems` sections):
   becomes a `Q<n>` to the product owner: `Rule BR-<id>-<n> is still a draft: may this story rely on it?`.
 - **Problems.** Only a line under `## Problems` of level `error` (the `issue` keys `no-number`, `bad-number`, `bad-rule-line`,
   `duplicate-number`, `unknown-status`, `bad-status-line`, `two-status`, `rule-too-long`, `section-too-big`, `no-parsable-rules`,
-  `unclosed-markup` and `no-section-heading`; an `error` blocks strict mode) becomes a `Q<n>` to the product owner, naming the work
+  `unparsed-rule-text`, `unclosed-markup` and `no-section-heading`; an `error` blocks strict mode) becomes a `Q<n>` to the product owner, naming the work
   item id, the rule id (or `section`) and the `issue` key: `The Business rules of work item <wid> have a problem (<issue>, <rule id
-  or section>): please correct the Description in ADO.` Do not quote the problem text or any rule text into the question. A line of
+  or section, with its locator `(after BR-<id>-<n>)` or `(before the first rule)` when the line has one>): please correct the Description in ADO.` Do not quote the problem text or any rule text into the question. A line of
   level `warning` (the keys `no-status`, `no-why`, `no-example` and `no-owner`: an optional line is missing) never blocks and is
   **never** a `Q<n>`: count the warnings and give ONE summary line in the step 6 report (`Business rules warnings: <count>`, with
-  the keys), nothing more.
+  the keys), nothing more. A `## Notes` section is information only: never a `Q<n>`.
 - **Rules not in the AC.** This step does **not** raise the "rule not in this story's acceptance criteria" question: it is
   `speckit.ado.plan` step 3a's, one `Q<n>` per rule, in that command's wording. Do not ask it here, alone or combined.
 - **Decisions on the Epic or Feature.** For each ancestor in `decisions`, run `ado decisions <ancestor id>` (read-only). A

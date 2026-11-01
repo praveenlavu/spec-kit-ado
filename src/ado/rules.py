@@ -34,6 +34,7 @@ ISSUES = {  # key -> fixed text; level is carried by each problem
     "rule-too-long": "a rule is longer than 2000 characters",
     "section-too-big": "the Business rules section is over 64 KiB or 100 rules, or the Description is over 1 MiB",
     "no-parsable-rules": "the Business rules section holds no `Rule <n>:` line",
+    "unparsed-rule-text": "text before the first rule looks like a rule, or is a Status, Why, Example or Owner line, but no `Rule <n>:` line is above it",
     "unclosed-markup": "an unclosed comment, style, script or xml block hides the text after it",
     "no-status": "no Status line (treated as draft)",
     "no-why": "no Why line",
@@ -43,8 +44,18 @@ ISSUES = {  # key -> fixed text; level is carried by each problem
 _WARNINGS = frozenset(("no-status", "no-why", "no-example", "no-owner"))
 
 
-def _problem(rule, issue):
-    return {"rule": rule, "level": "warning" if issue in _WARNINGS else "error", "issue": issue}
+FIRST = "before the first rule"  # the locator of a section-level problem above every rule; otherwise the id of the rule it follows
+NOTE_INTRO = "text between the Business rules heading and the first rule is not a rule and is not copied into this file"
+NOTE_EMPTY = "the Business rules section is empty"
+NOTES = (NOTE_INTRO, NOTE_EMPTY)  # fixed texts: a note never carries ADO text
+
+
+def _problem(rule, issue, after=None):
+    """`after` (section-level problems only) says where to look in ADO without echoing text: a rule id, or `FIRST`."""
+    p = {"rule": rule, "level": "warning" if issue in _WARNINGS else "error", "issue": issue}
+    if after is not None:
+        p["after"] = after
+    return p
 
 
 # ---- normalise ----
@@ -202,13 +213,23 @@ def _behind_marker(line):
     return all(_SYMBOL.fullmatch(t) for t in tokens) or bool(_RULE_LABEL.match(head, m.start()))
 
 
+_LOOKALIKE = ("\u0430a \u0435e \u043eo \u0440p \u0441c \u0445x \u0443y \u043ak \u043cm \u0442t \u043dh \u0432b \u0456i \u0455s \u0458j \u04cfl "
+              "\u03bfo \u03b5e \u03c1p \u03c5u \u03b9i \u03bak \u03bdv \u03c4t \u03b1a \u03b2b")  # Cyrillic/Greek lower-case letter + the Latin one it imitates
+_CONFUSABLE = {ord(w[0]): w[1] for w in _LOOKALIKE.split()}  # applied after casefold
+
+
+def _fold(s):
+    """The first 120 characters as a matching key only (the stored text is never folded): NFKC, case-folded, look-alike letters
+    read as Latin. Bounded, so linear over any input."""
+    return unicodedata.normalize("NFKC", s[:120]).casefold().translate(_CONFUSABLE)
+
+
 def _classify(line):
     """None (ordinary text), ("rule", n, rest) or ("bad", issue). A bad Rule line still ends the rule above it, so its Status
     line can never be read as the neighbour's. Fullwidth letters and digits are matched through NFKC (the key only, the stored
     text is untouched) and are an error, not a rule."""
     found = _classify_start(line)
-    if found is None and (_behind_marker(line) or (not line[:120].isascii()
-                                                  and _classify_start(unicodedata.normalize("NFKC", line[:120])) is not None)):
+    if found is None and (_behind_marker(line) or (not line[:120].isascii() and _classify_start(_fold(line)) is not None)):
         return ("bad", "bad-rule-line")
     return found
 
@@ -232,32 +253,69 @@ def _classify_start(line):
     return None
 
 
-def _build(wid, n, rest, lines):
-    """One rule: (R, problems). Status errors leave the status `draft`, which binds nobody."""
-    rid = f"BR-{wid}-{n}"
-    body = [rest] + lines
-    probs, status = [], "draft"
-    if _SECOND_RULE.search(rest):  # `Rule 1: a. Rule 2: b.` on one line: the second one would be lost inside the first
-        probs.append("bad-rule-line")
+def _status(lines):
+    """(status, issues, has_status_line) from the Status lines of one block; errors only, `no-status` is the caller's."""
     marked = [x for x in lines if _STATUS_LINE.match(x)]
     valid = [_STATUS.match(x) for x in marked]
+    issues, status = [], "draft"
     if len(marked) > 1:
-        probs.append("two-status")
+        issues.append("two-status")
     if not all(valid):  # `Status:` followed by anything but a status word
-        probs.append("unknown-status")
+        issues.append("unknown-status")
     if len(marked) == 1 and valid[0]:
         status = valid[0].group(1).lower()
     bad = any(_BAD_STATUS.match(x) for x in lines if not _STATUS_LINE.match(x))
     if bad:
-        probs.append("bad-status-line")
-    if not marked and not bad:
-        probs.append("no-status")
+        issues.append("bad-status-line")
+    return status, issues, bool(marked) or bad
+
+
+def _build(wid, n, rest, lines):
+    """One rule: (R, problems). Status errors leave the status `draft`, which binds nobody."""
+    rid = f"BR-{wid}-{n}"
+    body = [rest] + lines
+    probs = ["bad-rule-line"] if _SECOND_RULE.search(rest) else []  # `Rule 1: a. Rule 2: b.` on one line: the second one would be lost inside the first
+    status, st, has = _status(lines)
+    probs += st + ([] if has else ["no-status"])
     if len(" ".join(body)) > MAX_RULE:
         probs.append("rule-too-long")
     for k, label in (("why", "no-why"), ("example", "no-example"), ("owner", "no-owner")):
         if not any(_LABELS[k].match(x) for x in lines):
             probs.append(label)
     return {"id": rid, "n": n, "status": status, "body": body, "hash": rule_hash(n, status, body)}, [_problem(rid, i) for i in probs]
+
+
+_LABELLED = re.compile(r"(?:status|why|example|owner)\s*[:\uff1a]", re.I)
+_RULEISH = re.compile(r"(?:business\s*)?(?:rule|r\s*[0-9]|br\s*(?:[0-9]|[-\u2010-\u2015\u2212]))")  # on a folded line: how a PO might misspell `Rule 1:`
+_LABEL_SHAPE = re.compile(r"(?:business\s*)?(?:rules?\s+(?:no\.?\s*)?[^\s:\uff1a]{1,12}|r\s*[0-9]+|br[\s\u2010-\u2015\u2212-]*[0-9]+(?:-[0-9]+)?)\s*[:\uff1a]")
+
+
+def _forms(line):
+    """The folded line and the same line without up to 3 leading marker tokens (`Ø`, `a)`, `(1)`, `[1]`, `1 -`, `>`): the keys the
+    checks below read. Bounded to 120 characters, so linear."""
+    f = _fold(line)
+    s = f
+    for _ in range(3):
+        parts = s.split(None, 1)
+        if len(parts) < 2 or not _MARKER.fullmatch(parts[0]):
+            break
+        s = parts[1]
+    return (f, s) if s != f else (f,)
+
+
+def _unparsed(line):
+    """An intro line (above the first rule start) that is a rule or one of its labelled lines in a shape the grammar does not accept."""
+    forms = _forms(line)
+    if forms[0].rstrip(":") == "business rules":  # a repeated heading is not a rule
+        return False
+    return any(_LABELLED.match(f) or _BAD_STATUS.match(f) or _RULEISH.match(f) or _LABEL_SHAPE.match(f) for f in forms)
+
+
+def _rule_like_body(line):
+    """A line inside a valid rule that begins a rule the grammar does not accept (`Rule one:`, `R1:`, `BR-2:`, `Rules 2:`, `Rule No. 2:`,
+    `Business rule 2:`, behind a marker or not): it would otherwise be merged into the rule above with no word. Needs the colon, so prose
+    (`Rules: none`, `Rule of thumb`, `Rule 2 above applies`) stays body text; the Status/Why/Example/Owner labels are the rule's own."""
+    return any(not _LABELLED.match(f) and _LABEL_SHAPE.match(f) for f in _forms(line))
 
 
 def parse(lines, wid, problems=()):
@@ -282,16 +340,14 @@ def parse(lines, wid, problems=()):
     if sum(len(x) + 1 for x in section) > MAX_SECTION or sum(1 for k in kinds if k and k[0] == "rule") > MAX_RULES:
         probs.append(_problem(None, "section-too-big"))
         return out
-    blocks, intro = [], False
+    blocks, intro = [], []
     for x, k in zip(section, kinds):
         if k:
             blocks.append([k, []])
         elif blocks:
             blocks[-1][1].append(x)
         else:
-            intro = True
-    if intro:
-        out["notes"].append("text between the Business rules heading and the first rule was ignored")
+            intro.append(x)
     counts = {}
     for k, _ in blocks:
         if k[0] == "rule":
@@ -299,18 +355,28 @@ def parse(lines, wid, problems=()):
     if section and not counts:
         probs.append(_problem(None, "no-parsable-rules"))
     elif not section:
-        out["notes"].append("the Business rules section is empty")
-    flagged = set()
+        out["notes"].append(NOTE_EMPTY)
+    bad = [_unparsed(x) for x in intro]
+    if any(bad):  # a rule written in a way the grammar does not accept must not vanish as "intro text"
+        probs.append(_problem(None, "unparsed-rule-text", FIRST))
+    if not all(bad):
+        out["notes"].append(NOTE_INTRO)
+    flagged, prev = set(), FIRST
     for k, body in blocks:
-        if k[0] == "bad":
-            probs.append(_problem(None, k[1]))
+        if k[0] == "bad":  # the lines under it belong to it: their own status errors are reported in the same pull
+            probs.append(_problem(None, k[1], prev))
+            probs.extend(_problem(None, i, prev) for i in _status(body)[1])
             continue
         r, found = _build(wid, k[1], k[2], body)
+        prev = r["id"]
+        if any(_rule_like_body(x) for x in body):  # the body and the hash stay as they are; the PO is told where to look
+            found.append(_problem(None, "unparsed-rule-text", prev))
         if counts[k[1]] > 1:
             out["duplicates"].append(r)
             if k[1] not in flagged:
                 flagged.add(k[1])
                 probs.append(_problem(r["id"], "duplicate-number"))
+            probs.extend(p for p in found if p["level"] == "error" and p not in probs)
             continue
         out["rules"].append(r)
         probs.extend(found)
@@ -321,7 +387,7 @@ def parse(lines, wid, problems=()):
 # PR-controlled and fed by UNTRUSTED ADO text: every ADO-derived value is made one line and passed through `dod._esc`; ids, statuses and
 # hashes are validated before they are written; the parser accepts only the exact layout and fails closed (`invalid`), never first-wins.
 
-FORMAT = 1  # bump on ANY change to what render_file / render_rule write (the golden files pin it)
+FORMAT = 2  # bump on ANY change to what render_file / render_rule write (the golden files pin it)
 TAG_RE = re.compile(r"(?<![A-Za-z0-9-])BR-([1-9][0-9]{0,8})-([1-9][0-9]{0,3})(?![A-Za-z0-9-])")
 _STATUSES = ("approved", "draft", "retired")
 _HASH = re.compile(r"[0-9a-f]{8}")
@@ -381,10 +447,17 @@ def render_rule(R):
 def _problem_line(p, wid):
     if p.get("issue") not in ISSUES or p.get("level") not in ("error", "warning"):
         _bad("problem")
-    rid = p.get("rule")
+    rid, after = p.get("rule"), p.get("after")
     if rid is not None:
         _check({"id": rid, "status": "draft", "hash": "0" * 8, "body": []}, wid)
-    return f"- {p['level']} {rid or 'section'}: {p['issue']} \u2014 {ISSUES[p['issue']]}"
+    where = rid or "section"
+    if after is not None:
+        if rid is not None or not isinstance(after, str):
+            _bad("problem")
+        if after != FIRST:
+            _check({"id": after, "status": "draft", "hash": "0" * 8, "body": []}, wid)
+        where += f" ({FIRST if after == FIRST else 'after ' + after})"
+    return f"- {p['level']} {where}: {p['issue']} \u2014 {ISSUES[p['issue']]}"
 
 
 def _problem_lines(parsed, wid):
@@ -397,7 +470,7 @@ def _problem_lines(parsed, wid):
 
 def render_file(work_item, parsed, organization, project, pulled, version):
     """The whole file (R§5): header, `## Rules` ordered by number, `## Problems` (problem keys and rule ids; the copies of a duplicated
-    number are listed there, escaped, and are not rules). Deterministic."""
+    number are listed there, escaped, and are not rules), then `## Notes` when the parser made any (fixed texts). Deterministic."""
     wid = _wid(work_item.get("id"))
     if not isinstance(pulled, str) or not _PULLED.fullmatch(pulled):
         _bad("pulled date")
@@ -414,7 +487,11 @@ def render_file(work_item, parsed, organization, project, pulled, version):
     rs = sorted(parsed["rules"], key=lambda r: r["n"])
     out += [x for r in rs for x in (render_rule(r).rstrip("\n"), "")] or [_NONE, ""]
     plines = _problem_lines(parsed, wid)
-    return "\n".join(out + ["## Problems", ""] + (plines or [_NONE]) + [""])
+    notes = list(parsed.get("notes") or ())
+    if not all(n in NOTES for n in notes):
+        _bad("note")
+    tail = ["## Notes", ""] + ["- " + n for n in notes] + [""] if notes else []  # only when there is a note, so a file without one is unchanged
+    return "\n".join(out + ["## Problems", ""] + (plines or [_NONE]) + [""] + tail)
 
 
 def read_file(path, root, dod_path):
@@ -448,21 +525,21 @@ def _body_hash(rid, status, lines):
 
 
 def parse_file(md, wid):
-    """Rules file text -> {"format": int|None, "rules": {id: {"status", "hash", "section", "body_hash"}}, "problems": [lines], "invalid": bool}.
+    """Rules file text -> {"format": int|None, "rules": {id: {"status", "hash", "section", "body_hash"}}, "problems": [lines], "notes": [texts], "invalid": bool}.
     `section` is the heading line and the lines under it. `hash` is the heading's; `body_hash` is `rule_hash` of the body rebuilt from
     those lines (None if they are not in the rendered shape), so text edited under an unchanged heading shows as `body_hash != hash`.
     `_esc` is not exactly reversible (a line that starts with a list marker and then a fence or `#`, such as `+ ~~~`; a literal backslash before a fence or `#`; a literal `&lt;!--` in the source text), so for
     such rules `body_hash` may differ from `hash` on a clean file; that is reported as a mismatch and fails closed. Anything that is not the exact layout makes the file `invalid` (and `rules`
     empty): a heading-like line that is not canonical or names another work item, a duplicate heading or header line, a missing or
-    repeated `## Rules` / `## Problems`, or any fence or comment (a rendered file has none, so hiding text is itself the finding)."""
+    repeated `## Rules` / `## Problems` / `## Notes`, or any fence or comment (a rendered file has none, so hiding text is itself the finding)."""
     wid = _wid(wid)
-    out = {"format": None, "rules": {}, "problems": [], "invalid": False}
+    out = {"format": None, "rules": {}, "problems": [], "notes": [], "invalid": False}
     vis, still_open = dod._visible(md)
     raw, lines = md.splitlines(), vis.split("\n")
     if still_open or lines[:len(raw)] != raw:
         out["invalid"] = True
         return out
-    state, rule_list, pulled = 0, {}, []  # state: 0 header, 1 rules, 2 problems
+    state, rule_list, pulled = 0, {}, []  # state: 0 header, 1 rules, 2 problems, 3 notes
     cur = None
     for i, line in enumerate(raw):
         if re.match(r"[ \t]*#", line):
@@ -474,6 +551,8 @@ def parse_file(md, wid):
                 state, cur = 1, None
             elif line == "## Problems" and state == 1:
                 state, cur = 2, None
+            elif line == "## Notes" and state == 2:
+                state, cur = 3, None
             elif tag and int(tag.group(1)) == wid and m.group(2) in _STATUSES and m.group(1) not in rule_list:
                 cur = rule_list[m.group(1)] = {"status": m.group(2), "hash": m.group(3), "lines": [line]}
             else:
@@ -485,7 +564,9 @@ def parse_file(md, wid):
             cur["lines"].append(line)
         elif state == 2 and line.startswith("- "):
             out["problems"].append(line)
-    if len(raw) < 2 or state != 2 or not raw[0].startswith("# Business rules ") or len(pulled) > 1:
+        elif state == 3 and line.startswith("- "):
+            out["notes"].append(line[2:])
+    if len(raw) < 2 or state not in (2, 3) or not raw[0].startswith("# Business rules ") or len(pulled) > 1:
         out["invalid"] = True
         return out
     m = _PULLED_LINE.fullmatch(pulled[0]) if pulled else None
@@ -584,13 +665,14 @@ def pull(client, story_id):
     problems = []
     found = walk(client, story_id, cfg.rules["types"], problems)
     from . import gate  # lazy: gate will import this module
-    plan, decs, counts = [], [], {"approved": 0, "draft": 0, "retired": 0}
+    plan, decs, counts, notes = [], [], {"approved": 0, "draft": 0, "retired": 0}, 0
     for it in found:
         path = rules_file(cfg.dod_path, it["id"])
         cur = _current(path, it["id"])
         text, changed = _render(it, cfg.organization, cfg.project, _today(), cur)
         plan.append((it["id"], path, text, changed))
-        problems += [{"id": it["id"], "rule": p["rule"], "level": p["level"], "issue": p["issue"]} for p in it["parsed"]["problems"]]
+        problems += [{"id": it["id"], **p} for p in it["parsed"]["problems"]]
+        notes += len(it["parsed"]["notes"])
         for r in it["parsed"]["rules"]:
             counts[r["status"]] += 1
         dpath = decisions.decisions_file(cfg.dod_path, it["id"])
@@ -611,7 +693,7 @@ def pull(client, story_id):
             if not ok:
                 raise ValueError(f"could not write the rules file of work item {wid}")
     return {"from": [p[0] for p in plan], "files": [str(p[1]) for p in plan], "rules": counts, "problems": problems,
-            "changed": [p[0] for p in plan if p[3]], "decisions": decs}
+            "changed": [p[0] for p in plan if p[3]], "decisions": decs, "notes": notes}
 
 
 # ---- tags in the ledger and the scope of a story (P3-6): pure functions over PR-controlled files ----
@@ -732,7 +814,7 @@ def scope(files, rules_from, decisions_parsed, phase):
 # ---- coverage: the local half of the gate's `rule_coverage` (P3-8); pure over PR-controlled files, ids and fixed keys out ----
 
 _AC_CANON = re.compile(r"AC-([1-9][0-9]{0,8})")  # the one spelling of a row that counts as AC-<n> (not `AC-01`, not fullwidth digits)
-_PROBLEM_LINE = re.compile(r"- (?:error|warning) (section|BR-[0-9]+-[0-9]+): ([a-z-]+) \u2014 (.*)")
+_PROBLEM_LINE = re.compile(r"- (?:error|warning) (section(?: \((?:after BR-[0-9]+-[0-9]+|" + FIRST + r")\))?|BR-[0-9]+-[0-9]+): ([a-z-]+) \u2014 (.*)")
 _COPY_LINE = re.compile(r"- copy of (BR-[0-9]+-[0-9]+) \u00b7 [0-9a-f]{8}: ")
 
 
@@ -743,8 +825,8 @@ def _file_problems(wid, lines):
     out = []
     for x in lines:
         m, c = _PROBLEM_LINE.fullmatch(x), _COPY_LINE.match(x)
-        if m and m.group(2) in ISSUES and m.group(3) == ISSUES[m.group(2)] and (m.group(1) == "section" or TAG_RE.fullmatch(m.group(1))):
-            item = None if m.group(2) in _WARNINGS else f"{wid if m.group(1) == 'section' else m.group(1)}:{m.group(2)}"
+        if m and m.group(2) in ISSUES and m.group(3) == ISSUES[m.group(2)] and (m.group(1).startswith("section") or TAG_RE.fullmatch(m.group(1))):
+            item = None if m.group(2) in _WARNINGS else f"{wid if m.group(1).startswith('section') else m.group(1)}:{m.group(2)}"
         elif c and TAG_RE.fullmatch(c.group(1)):
             item = f"{c.group(1)}:duplicate-number"
         else:

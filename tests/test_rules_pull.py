@@ -163,7 +163,7 @@ def test_get_only(tmp_path, monkeypatch, capsys):
 def test_json_shape_and_files(tmp_path, monkeypatch, capsys):
     m, _ = env(tmp_path, monkeypatch, [STORY, FEATURE, EPIC], {"enabled": True})
     code, out, _ = run(m, capsys, "1001")
-    assert code == 0 and list(out) == ["from", "files", "rules", "problems", "changed", "decisions"]
+    assert code == 0 and list(out) == ["from", "files", "rules", "problems", "changed", "decisions", "notes"]
     assert out["from"] == [1201, 1200] and out["changed"] == [1201, 1200] and out["decisions"] == []
     assert out["files"] == [str(Path("dod/Rules_1201.md")), str(Path("dod/Rules_1200.md"))]
     assert out["rules"] == {"approved": 2, "draft": 1, "retired": 1}
@@ -185,7 +185,7 @@ def test_json_has_no_rule_text(tmp_path, monkeypatch, capsys):
     out = json.loads(raw)
     issues = {(p["id"], p["rule"], p["level"], p["issue"]) for p in out["problems"]}
     assert (1201, None, "error", "bad-number") in issues and (1201, "BR-1201-2", "error", "duplicate-number") in issues
-    assert all(set(p) == {"id", "rule", "level", "issue"} for p in out["problems"])
+    assert all(set(p) - {"after"} == {"id", "rule", "level", "issue"} for p in out["problems"])
     assert "SECRETWORD" in (tmp_path / "dod" / "Rules_1201.md").read_text(encoding="utf-8")  # the file is where rule text goes
 
 
@@ -241,7 +241,7 @@ def test_bad_parent_link_is_a_problem_and_the_ancestors_found_so_far_are_pulled(
 def test_no_ancestor_with_a_section_writes_nothing(tmp_path, monkeypatch, capsys):
     m, _ = env(tmp_path, monkeypatch, [dict(STORY, relations=[])], {"enabled": True})
     code, out, _ = run(m, capsys, "1001")
-    assert code == 0 and out == {"from": [], "files": [], "rules": {"approved": 0, "draft": 0, "retired": 0}, "problems": [], "changed": [], "decisions": []}
+    assert code == 0 and out == {"from": [], "files": [], "rules": {"approved": 0, "draft": 0, "retired": 0}, "problems": [], "changed": [], "decisions": [], "notes": 0}
     assert files(tmp_path) == [] and not (tmp_path / "dod").exists()
 
 
@@ -616,7 +616,7 @@ def test_an_invalid_or_missing_rules_file_is_refused(ctx, capsys):
     good = path.read_text(encoding="utf-8")
     path.write_text(good + "\n<!-- hide -->\n", encoding="utf-8")
     assert ctx.run(capsys)[3] == f"error: {rules.CONFIRM_FILES}\n"
-    path.write_text(good.replace("rules-format: 1", "rules-format: 2"), encoding="utf-8")
+    path.write_text(good.replace("rules-format: 2", "rules-format: 3"), encoding="utf-8")
     assert ctx.run(capsys)[3] == f"error: {rules.CONFIRM_FILES}\n"
     path.unlink()
     code, _, _, err = ctx.run(capsys)
@@ -860,3 +860,21 @@ def test_the_new_line_takes_the_terminator_of_the_files_first_line(ctx, capsys, 
     ctx.put(lf.replace(FROM_LINE, FROM_LINE.replace("\n", "\r\n")))
     assert ctx.run(capsys)[0] == 0
     assert ctx.ledger.read_bytes() == lf.replace(FROM_LINE, FROM_LINE.replace("\n", "\r\n") + want + "\n").encode()
+
+
+def test_json_carries_locators_and_the_notes_count(tmp_path, monkeypatch, capsys):
+    html = ("<p>Business rules</p><p>Intro ZZINTRO prose.</p><p>R1: ZZSECRET</p><p>Status: approved</p>" + desc((1, "approved"))[len("<p>Business rules</p>"):]
+            + "<p>Rule 2 - ZZSECRET</p><p>Status approved</p>")
+    m, _ = env(tmp_path, monkeypatch, [STORY, wi(1201, "Feature", html)], {"enabled": True})
+    code = m.main(["rules", "1001"])
+    raw = capsys.readouterr().out
+    out = json.loads(raw)
+    assert code == 0 and "ZZSECRET" not in raw and "ZZINTRO" not in raw
+    assert out["notes"] == 1
+    probs = [(p["issue"], p["after"]) for p in out["problems"] if "after" in p]
+    assert probs == [("unparsed-rule-text", rules.FIRST), ("bad-rule-line", "BR-1201-1"), ("bad-status-line", "BR-1201-1")]
+    assert all(p["rule"] is None and p["level"] == "error" and p["id"] == 1201 for p in out["problems"] if "after" in p)
+    text = (tmp_path / "dod" / "Rules_1201.md").read_text(encoding="utf-8")
+    assert "## Notes" in text and "ZZSECRET" not in text and "ZZINTRO" not in text
+    pf = rules.parse_file(text, 1201)
+    assert not pf["invalid"] and pf["notes"] == [rules.NOTE_INTRO] and sorted(pf["rules"]) == ["BR-1201-1"]

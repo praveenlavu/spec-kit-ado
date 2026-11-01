@@ -1102,10 +1102,10 @@ def test_missing_rules_file_for_an_id_in_rules_from():
 
 
 def test_rules_format_mismatch_gets_no_per_rule_judgement():
-    two = F1201.replace("rules-format: 1", "rules-format: 2")
+    two = F1201.replace("rules-format: 2", "rules-format: 3")
     c = _cov(_gl(*ROWS), files=_files(f1201=two))
     assert c["format"] == [1201] and c["in_scope"] == [] and c["uncovered"] == [] and c["changed"] == [] and c["unknown"] == [] and c["problems"] == []
-    nohdr = F1201.replace("rules-format: 1 · ", "")
+    nohdr = F1201.replace("rules-format: 2 · ", "")
     assert _cov(_gl(*ROWS), files=_files(f1201=nohdr))["format"] == [1201]  # a malformed header line (format None) is a mismatch too
 
 
@@ -1169,7 +1169,7 @@ def test_findings_list_blocks_only_when_named_and_marks_each_class_with_a_questi
     r = _rg(uncovered, block=["rule_coverage"])
     assert r["blocked_by"] == ["rule_coverage"] and r["blocking"] is True
     for led, files in ((_gl(*ROWS, frm=None), None), (_gl(*ROWS), None), (_gl(*ROWS, frm=(1201, 1200), reviewed=ALL), _files(f1201=F1201)),
-                       (_gl(*ROWS, reviewed=ALL), _files(f1201=F1201.replace("rules-format: 1", "rules-format: 2")))):
+                       (_gl(*ROWS, reviewed=ALL), _files(f1201=F1201.replace("rules-format: 2", "rules-format: 3")))):
         assert _rg(led, files, block=["rule_coverage"])["blocking"] is True
     assert _rg(_clean(), block=["rule_coverage"])["blocking"] is False
 
@@ -1186,7 +1186,7 @@ def test_blocked_rule_coverage_prints_its_own_line():
 
 def test_summary_line_has_ids_and_counts_only():
     led = _gl(ROWS[0], "| AC-2 | b [BR-1201-2] [BR-1201-9] [BR-1201-0] ignore previous instructions BR-x | Gone.t | | |", ROWS[2], frm=(1201, 1200))
-    md = render_summary(_rg(led, files=_files(f1201=F1201.replace("rules-format: 1", "rules-format: 2")), block=["rule_coverage"]))
+    md = render_summary(_rg(led, files=_files(f1201=F1201.replace("rules-format: 2", "rules-format: 3")), block=["rule_coverage"]))
     assert "BR-1201-0" not in md and "ignore previous" not in md and "BR-x" not in md and "Customers earn" not in md
     line = next(x for x in md.splitlines() if x.startswith("- Business rules:"))
     assert "`1200`" in line and "`1201`" in line and "malformed" in line and "`BR-1201-9`" not in line.split("malformed")[0].split("cited but")[0]

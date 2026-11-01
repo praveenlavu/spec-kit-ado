@@ -1800,9 +1800,20 @@ def test_business_rules_doc_pins():
     assert "2,000 characters" in text and "64 KiB" in text and "100 rules" in text and "1 MiB" in text
 
 
+def test_no_silent_rules_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("`unparsed-rule-text`", "`Rule one: ...`", "`R1: ...`", "`BR-1: ...`", "look-alike letters", "`after BR-<id>-<n>`", "`before the first rule`",
+                 "All the mistakes of one pull are listed together", "under `## Notes` of the rules file", "`notes` of the `ado rules` output",
+                 "`section (after BR-1201-2)`", "`Business rule 1: ...`", "`Rule No. 2:`, `Rules 2:`, `R2:`, `BR-2:` or `Business rule 2:`", "reported `after` that rule", "`after` for a problem of the whole section"):
+        assert word in text, word
+    pull = _flat("commands/pull.md")
+    assert "`unparsed-rule-text`" in pull and "`(after BR-<id>-<n>)` or `(before the first rule)`" in pull and "A `## Notes` section is information only" in pull
+    assert "text ... is ignored" not in text and "Text between the `Business rules` line and `Rule 1:` is ignored" not in text
+
+
 def test_rules_file_doc_pins():
     text = _flat("docs/business-rules.md")
-    for word in ("## The rules file", "`Rules_<work item id>.md`", "rules-format: 1", "### BR-1201-1 · approved · 3f2a9c1b", "8-hex fingerprint",
+    for word in ("## The rules file", "`Rules_<work item id>.md`", "rules-format: 2", "### BR-1201-1 · approved · 3f2a9c1b", "8-hex fingerprint",
                  "never your text", "no \"first one wins\"", "makes the whole file `invalid`", "at most 1 MiB in UTF-8, not a symlink",
                  "inside `dod_path` and inside the repository", "process enforcement, not a security boundary", "bumps `rules-format`",
                  "forge a `### BR-...` heading", "are **not** scrubbed for e-mail addresses", "not a symlink and not a hard link",
