@@ -2088,10 +2088,40 @@ def test_hitl_agents_readme_changelog_describe_the_prompt_wiring():
 def test_rules_reconfirmed_doc_pins():
     text = _flat("docs/business-rules.md")
     for word in ("**Reconfirmed (CI only, a note).**", "`rules.reconfirmed` is the list of", "an id that is new here is not listed", "`rules reconfirmed: BR-1201-1 (3f2a9c1b -> none)`",
-                 "a human re-confirmed this rule; check the PR diff", "never a finding: no exit code changes, nothing blocks", "until piece 4's approver-comment path can clear it; then it becomes a block",
+                 "re-confirmed without the target branch's recorded hash: check the PR diff", "never a finding: no exit code changes, nothing blocks", "until piece 4's approver-comment path can clear it; then it becomes a block",
                  "counts as nothing recorded (`[]`), never as a pass", "`rules reconfirmed: target ledger unreadable`", "`rules.reconfirmed_note`", "the CI job needs `fetch-depth: 0`",
                  "Without `--base`, or with rules off, there is no key and no line", "see `rules.reconfirmed` in \"The gate check\"", "`rules.reconfirmed` compares the ledger with the target branch's copy"):
         assert word in text, word
     assert "later work" not in text.split("The terminal check stops an agent")[1].split("## The gate check")[0]
     assert "`fetch-depth: 0`" in _flat("docs/ci-github.md").split("`rules.reconfirmed`")[1] and "`fetchDepth: 0`" in _flat("docs/ci-azure-pipelines.md").split("`rules.reconfirmed`")[1]
     assert "`reconfirmed`" in _flat("README.md") and "`rules.reconfirmed`" in _flat("AGENTS.md") and "`rules.reconfirmed` (P3-10b)" in _flat("CHANGELOG.md")
+
+
+def test_p3_12b_live_findings_pins():
+    from ado import rules
+    pull = _block("commands/pull.md", "### 2a. Pull the business rules")
+    prob = pull.split("- **Problems.**")[1].split("- **Rules not in the AC.**")[0]
+    errors, warns = prob.split("level `warning`")[0], prob.split("level `warning`")[1]
+    assert "Only a line under `## Problems` of level `error`" in errors and "**never** a `Q<n>`" in warns and "ONE summary line" in warns
+    for key in rules.ISSUES:  # every key the CLI can emit is classified in the prompt, by the level rules.py gives it
+        assert f"`{key}`" in (warns if key in rules._WARNINGS else errors), key
+    assert "does **not** raise the \"rule not in this story's acceptance criteria\" question" in pull and "`speckit.ado.plan` step 3a's, one `Q<n>` per rule" in pull
+    assert "one `Q<n>` per in-scope rule, raised here and only here, whatever other `Q<n>` already touch the same rule's wording or status" in _block("commands/plan.md", "### 3a. Business rules")
+    new = "re-confirmed without the target branch's recorded hash: check the PR diff"
+    assert rules.RECONFIRM_NOTE == new
+    for f in ("docs/business-rules.md", "README.md"):
+        assert new in _flat(f), f
+    assert "re-confirmed without the target branch's recorded hash" in _flat("CHANGELOG.md")
+    for f in ("docs/business-rules.md", "docs/ci-github.md", "docs/ci-azure-pipelines.md", "commands/gate.md", "CHANGELOG.md"):
+        assert "`chain`" in _flat(f), f
+    br = _flat("docs/business-rules.md")
+    assert "ADO removes the parent link from the child when the parent is deleted" in br and "not `rules-unreachable`" in br and "still linked but cannot be read" in br
+    for f in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        assert "an Epic or Feature deleted in ADO loses its link, so the gate reports `chain` drift (strict blocks)" in _flat(f), f
+    assert "a deleted Epic/Feature is `chain` drift" in _flat("commands/gate.md")
+    readme = _flat("README.md")
+    assert "`stack-check` step (`ado stack show --check`) also needs an approved stack profile" in readme and "matches `strict.test_command`" in readme
+    assert "the run stops at `stack-check` (exit 2)" in readme and "docs/stack-kits.md" in readme.split("`stack-check` step")[1][:400]
+    for f in ("README.md", "docs/business-rules.md"):
+        assert "A decision that was never posted cannot be superseded (`post D<n> first`): the PO has not seen it, so it must be posted before it can be replaced" in _flat(f), f
+    assert "post the stale line first and then supersede it, or ask the human" in _flat("AGENTS.md")

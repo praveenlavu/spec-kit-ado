@@ -816,7 +816,7 @@ DRIFT_OFFLINE = {"evaluated": False, "drift": [], "unreachable": False, "note": 
 
 
 RECONFIRM_UNREADABLE = "rules reconfirmed: target ledger unreadable"  # the target branch's ledger could not be read: `reconfirmed` is omitted, never []
-RECONFIRM_NOTE = "a human re-confirmed this rule; check the PR diff"  # a note until piece 4's approver-comment path can clear it (then a block)
+RECONFIRM_NOTE = "re-confirmed without the target branch's recorded hash: check the PR diff"  # a note until piece 4's approver-comment path can clear it (then a block)
 
 
 def reconfirmed(old, new):

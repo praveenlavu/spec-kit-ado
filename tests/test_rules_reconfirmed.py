@@ -183,7 +183,7 @@ def test_strict_check_warns_with_the_same_ids_and_changes_nothing_else(tmp_path,
     res = _check(client, root, phase)
     assert {k: v for k, v in res.items() if k != "warnings"} == base  # a warning: ok, findings and overrides are unchanged
     [w] = [w for w in res["warnings"] if w.startswith("rules reconfirmed: ")]
-    assert f"BR-1201-1 ({A} -> " in w and f"BR-1201-2 ({B} -> " in w and w.endswith("a human re-confirmed this rule; check the PR diff")
+    assert f"BR-1201-1 ({A} -> " in w and f"BR-1201-2 ({B} -> " in w and w.endswith("re-confirmed without the target branch's recorded hash: check the PR diff")
     _tgt(root, head)  # the same record: nothing
     assert _check(client, root, phase) == base
     _tgt(root, head.replace(RREV, "BR-1201-1@" + A))  # BR-1201-2 is new at the head

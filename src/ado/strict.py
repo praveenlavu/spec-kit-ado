@@ -1116,7 +1116,7 @@ def target_reviewed(dod_path, repo, base, story_id):
 
 def _reconfirmed_warnings(c, target):
     """For `strict check --phase pr|done --base REF` with rules enabled: one warning naming each rule id the target branch's ledger records that
-    this ledger lacks or records with another hash (a human re-confirmed it; check the PR diff), or the fixed unreadable text. A note, never a
+    this ledger lacks or records with another hash (re-confirmed without the target branch's recorded hash; check the PR diff), or the fixed unreadable text. A note, never a
     finding. [] otherwise (rules off, no `--base`, no ledger, nothing reconfirmed): the output is the baseline."""
     if target is None or not c.cfg.rules["enabled"] or c.ledger is None or c.phase not in ("pr", "done"):
         return []

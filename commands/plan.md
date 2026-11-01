@@ -147,7 +147,8 @@ them into a shell line. Do not run `ado rules <id>` here (a re-pull after the pl
    tags). The AC text stays verbatim: a trailing tag is the only addition to that cell, and never a new row for a rule. If the AC
    has no row yet, add it as `speckit.ado.implement` step 1 does (the criterion copied word for word from section 1). Tag only
    what the AC really states: tagging an unrelated AC to quiet a finding defeats the check, and the review flags it.
-3. **A rule no AC reflects is a `Q<n>`** to the product owner, in this wording: `Rule BR-<id>-<n> is not in this story's acceptance
+3. **A rule no AC reflects is a `Q<n>`** to the product owner (one `Q<n>` per in-scope rule, raised here and only here, whatever
+   other `Q<n>` already touch the same rule's wording or status), in this wording: `Rule BR-<id>-<n> is not in this story's acceptance
    criteria: should the story gain an AC in ADO, or is it out of scope here?` (one line `- [ ] Q<n>: … → _(open)_ · owner: PO`,
    with `--workflow` as described under User Input). The AC are never extended here: if the product owner says the story gains an
    AC, the story is changed in ADO and the human decides to refresh the ledger (`ado dod <id> --refresh`), as for AC drift; then
