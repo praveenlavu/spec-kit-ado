@@ -1836,3 +1836,13 @@ def test_ledger_header_doc_pins():
     assert "Ledger header hardening (P3-5b)" in _flat("CHANGELOG.md")
     for word in ("a problem in the section", "An untrusted header fails closed", "is hidden by a comment or fence", "is invalid, not absent", "`<!--` written as `&lt;!--`", "recorded escaped"):
         assert word in text, word
+
+
+def test_tags_and_exclusions_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("## Tags and exclusions", "`| AC-2 | gift cards earn nothing [BR-1201-3] | ... |`", "criterion cell", "`unknown`", "`xBR-1201-1`",
+                 "- [ ] D3: out of scope: BR-1201-1, BR-1200-1 → _(open)_ · kind: decision", "`bad_exclusions`", "as it reads now",
+                 "open or validated for a pull request (`pr`), validated only at `done`", "A rejected exclusion excludes nothing",
+                 "the effective set", "**Worked example.**", "is a **local claim**", "Known limit in 0.3", "whatever the heading now says", "process enforcement, not a security boundary", "do not echo them"):
+        assert word in text, word
+    assert "Rule tags and scope (P3-6)" in _flat("CHANGELOG.md")

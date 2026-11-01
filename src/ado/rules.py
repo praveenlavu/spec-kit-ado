@@ -605,3 +605,95 @@ def pull(client, story_id):
                 raise ValueError(f"could not write the rules file of work item {wid}")
     return {"from": [p[0] for p in plan], "files": [str(p[1]) for p in plan], "rules": counts, "problems": problems,
             "changed": [p[0] for p in plan if p[3]], "decisions": decs}
+
+
+# ---- tags in the ledger and the scope of a story (P3-6): pure functions over PR-controlled files ----
+
+_RUN = re.compile(r"[A-Za-z0-9-]+")  # a tag is a whole run of these (TAG_RE's look-arounds), so a run is a tag or it is not
+MAX_UNKNOWN = 100
+MAX_TOKEN = 40
+
+
+def tags(ledger_md):
+    """`{"rows": {"AC-<n>": [rule ids]}, "unknown": [str]}` from cell 1 (the criterion) of the section 3 rows, found by the SAME
+    visible-line walk as `gate.parse_section3` (a row in a fence or comment is not a row; a duplicate AC row adds its tags to the same list).
+    Every run of letters, digits and `-` that holds `BR-` and is not exactly a `TAG_RE` match (`BR-1201-0`, `xBR-1201-1`, `BR-1201-1a`)
+    goes to `unknown`, cut to 40 characters, at most 100: it is a count for the caller to report, never text to echo. Linear."""
+    from . import gate  # lazy: gate will import this module
+    out, unknown = {}, []
+    for line in dod._visible(dod.section(ledger_md, 3) or "")[0].splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if not gate._AC_RE.match(cells[0]):
+            continue
+        ids = out.setdefault(cells[0], [])
+        for m in _RUN.finditer(cells[1] if len(cells) > 1 else ""):
+            if TAG_RE.fullmatch(m.group()):
+                if m.group() not in ids:
+                    ids.append(m.group())
+            elif "BR-" in m.group() and len(unknown) < MAX_UNKNOWN and m.group()[:MAX_TOKEN] not in unknown:
+                unknown.append(m.group()[:MAX_TOKEN])
+    return {"rows": out, "unknown": unknown}
+
+
+_OUT = "out of scope:"
+_OUT_LOOSE = re.compile(r"(?:supersedes\s*D[0-9]+\s*:\s*)*out\s+of\s+scope", re.I)  # whatever reads like an exclusion, prefixes included, is reported if it breaks the grammar
+MAX_EXCLUDED = 50
+
+
+def _exclusion_text(d):
+    t = d["text"]
+    m = decisions._SUP.match(t)  # one leading `supersedes D<n>: ` only
+    return t[m.end():] if m else t
+
+
+def exclusion_ids(d):
+    """The rule ids a parsed decision excludes: its text (after one leading `supersedes D<n>: `) is exactly `out of scope:` and
+    1 to 50 comma-separated `TAG_RE` ids, spaces only, nothing else. Otherwise None (a duplicate id is listed once)."""
+    t = _exclusion_text(d)
+    if not t.startswith(_OUT):
+        return None
+    parts = [p.strip(" ") for p in t[len(_OUT):].split(",")]
+    if len(parts) > MAX_EXCLUDED or not all(TAG_RE.fullmatch(p) for p in parts):
+        return None
+    return list(dict.fromkeys(parts))
+
+
+def _key(rid):
+    m = TAG_RE.fullmatch(rid)
+    return int(m.group(1)), int(m.group(2))
+
+
+def scope(files, rules_from, decisions_parsed, phase):
+    """`{"in_scope": [ids], "excluded": [ids], "bad_exclusions": ["D<n>"]}`, ids by (work item, number). `files` maps a work item id (int)
+    to its `parse_file` result, `rules_from` is the ledger's id list. In scope: every `approved` rule of those files (an `invalid` file
+    or a missing id gives none; the caller reports it; a rule whose `body_hash` differs stays in scope, the caller reports it) minus the
+    rules a counted exclusion names. Over `decisions.effective`, a decision line counts when it is of kind decision or assumption, its
+    text is exactly `exclusion_ids`' grammar, it carries a `posted:` marker equal to `decisions.marker_hash` of its CURRENT text, and
+    it is open or validated (phase `pr`) / validated (phase `done`). A rejected exclusion excludes nothing and is not reported. A line
+    that starts like an exclusion (after any number of `supersedes D<n>:` prefixes, however spaced) but breaks the grammar (not rejected) is in `bad_exclusions`. ValueError for any other phase."""
+    if phase not in ("pr", "done"):
+        raise ValueError("phase must be pr or done")
+    live = ("validated",) if phase == "done" else ("open", "validated")
+    eff = decisions.effective(decisions_parsed)
+    named, bad = set(), []
+    for k in ("open", "validated"):
+        for d in eff[k]:
+            if d["kind"] == "override":
+                continue
+            ids = exclusion_ids(d)
+            if ids is None:
+                if _OUT_LOOSE.match(d["text"].lstrip()):
+                    bad.append(d["id"])
+            elif k in live and d["posted"] and d["posted"]["hash"] == decisions.marker_hash(d):
+                named.update(ids)
+    approved = set()
+    for wid in rules_from:
+        f = files.get(wid) if type(wid) is int else None
+        if isinstance(f, dict) and not f.get("invalid"):
+            approved.update(r for r, v in f["rules"].items() if TAG_RE.fullmatch(r) and _key(r)[0] == wid
+                            and (v["status"] == "approved" or v.get("body_hash") != v["hash"]))  # a mismatch/None: the heading status is untrusted
+    return {"in_scope": sorted(approved - named, key=_key), "excluded": sorted(approved & named, key=_key),
+            "bad_exclusions": sorted(set(bad), key=lambda i: int(i[1:]))}
