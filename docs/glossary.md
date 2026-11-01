@@ -41,5 +41,6 @@ approval by a comment on the story exist, and so does the rule for which comment
 | **Approval mode** | opt-in | `"approval": "comment"` on the target branch: gates and verdicts need a comment from an approver instead of a keypress at the terminal, while `"terminal"` stays the default. |
 | **Approve and reject commands** | opt-in | The first non-empty line of an approver's comment, such as `/approve D3` or `/reject D3: reason`, which counts only when the comment is unedited, unquoted and written by an approver in person. |
 | **Approval comment** | opt-in | A comment that counts as an approval because its author is in `approvers`, so the agent's own comments, quoted text and edited comments never do. |
+| **Sync** | opt-in | `ado decisions <id> --sync`, which copies an approver's `/approve` or `/reject` comment on a posted decision into the local decisions file as its verdict, with the comment's id in `via`. |
 | **Unattended** | opt-in | The `unattended` object on the target branch, with `assume_after_hours` and `approval_requests`, for runs with nobody at a terminal. |
 | **Workflow** | opt-in | `ado-lifecycle`, the Spec Kit workflow that runs the whole lifecycle with a human gate before every ADO write. |

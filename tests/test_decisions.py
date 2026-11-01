@@ -932,3 +932,526 @@ def test_resolve_on_a_superseded_decision_prints_a_notice_and_changes_nothing_el
     assert [x["id"] for x in d["rejected"]] == ["D3"]  # the verdict is recorded as always
     assert _resolve(m, "D6", "--validated") == 0
     assert "notice" not in json.loads(capsys.readouterr().out)
+
+
+# ---- P4-9: `ado decisions <id> --sync` (an approver's /approve D<n> or /reject D<n> comment becomes the verdict, locally) ----
+import copy  # noqa: E402
+
+from ado import __main__ as _main  # noqa: E402
+from ado import approvals, comments  # noqa: E402
+from ado.client import AdoError  # noqa: E402
+from ado.config import Trust  # noqa: E402
+from tests.conftest import comment_pages, connection_data, raw_comment, versions_response  # noqa: E402
+
+TOK, KITID, APPR = "aaaa1111-0000-4000-8000-00000000000a", "4444444a-4444-4444-8444-44444444444b", "55555555-5555-4555-8555-555555555555"
+T_POST, T_V1, T_V2, T_V3 = "2026-10-01T10:00:00Z", "2026-10-01T11:00:00Z", "2026-10-01T12:00:00Z", "2026-10-01T13:00:00Z"
+S1 = "- [ ] D1: Use cursor paging → _(open)_ · kind: decision · why: the story names no page size"
+S2 = "- [ ] D2: Cap at 50 rows → _(open)_ · kind: assumption · why: the story is silent"
+S3 = "- [ ] D3: Skip audit log → _(open)_ · kind: decision · why: out of scope"
+
+
+def _posted(*lines, cid=10):
+    """(the decisions file with every line marked as posted in comment `cid`, the exact comment html the kit would have posted)."""
+    md = _file("\n".join(lines))
+    plan = decisions.plan_post(None, 1001, decisions.parse_decisions(md))
+    return decisions._marked(md, plan["hashes"], cid), plan["html"]
+
+
+def _rows(cfg, raws):
+    found, truncated = comments.fetch(FakeClient(cfg, responses=comment_pages(raws)), 1001, with_meta=True)
+    assert not truncated
+    return found
+
+
+def _kit(html, cid=10, date=T_POST, author=KITID, **kw):
+    return raw_comment(cid, html, date, author=author, **kw)
+
+
+def _vote(cid, text, date=T_V1, author=APPR, **kw):
+    return raw_comment(cid, f"<p>{text}</p>", date, author=author, **kw)
+
+
+def _sync(cfg, md, raws, approvers=(APPR,), excluded=(TOK, KITID), responses=()):
+    client = FakeClient(cfg, responses=list(responses))
+    return decisions.sync(md, _rows(cfg, raws), list(approvers), set(excluded), client, 1001), client
+
+
+def test_sync_validates_and_rejects_with_via(cfg):
+    md, html = _posted(S1, S2, S3)
+    (new, res), client = _sync(cfg, md, [_kit(html), _vote(11, "/approve D1"), _vote(12, "/reject D2: not now &lt;!-- x --&gt;", T_V2)])
+    assert res["applied"] == ["D1", "D2"] and res["skipped"] == {"D3": "no-verdict"} and res["bad_newer"]["D1"] == 0
+    got = decisions.parse_decisions(new)
+    assert got["unparsed"] is False
+    d1, d2, d3 = got["validated"][0], got["rejected"][0], got["open"][0]
+    assert (d1["id"], d1["by"], d1["via"]) == ("D1", "approver", "11") and d1["posted"]["comment_id"] == 10
+    assert (d2["id"], d2["by"], d2["via"]) == ("D2", "approver", "12") and "<!--" not in d2["note"] and "-->" not in d2["note"]
+    assert d3["id"] == "D3" and "via" not in d3  # an entry with no via has no `via` key at all
+    assert all(c["method"] == "GET" for c in client.calls)  # no ADO write, ever
+    # the terminal's resolve machinery wrote them: the same line a human would get, plus `via`
+    assert [ln for ln in new.splitlines() if ln.startswith("- [x] D1")][0].count(" · via: 11") == 1
+    assert decisions.render_line(d1) == [ln for ln in new.splitlines() if ln.startswith("- [x] D1")][0]
+
+
+def test_sync_skips_unposted_or_edited_line(cfg):
+    old, html = _posted(S2.replace("D2", "D5").replace("Cap at 50 rows", "Retry twice"), S2, cid=10)
+    d2_edited = [ln for ln in old.splitlines() if ln.startswith("- [ ] D2")][0].replace("Cap at 50 rows", "Cap at 5000 rows")
+    h = decisions.line_hash("Retry thrice")
+    lines = [
+        S1,                                                                                         # never posted
+        d2_edited,                                                                                  # edited after posting: marker hash is stale
+        S3 + f" · posted: 99:{decisions.line_hash('Skip audit log')}",                              # the marker names no comment
+        "- [ ] D4: Old news → _(open)_ · kind: decision · why: w" + f" · posted: 20:{decisions.line_hash('Old news')}",  # an unrelated comment
+        f"- [ ] D5: Retry thrice → _(open)_ · kind: assumption · why: the story is silent · posted: 10:{h}",  # re-hashed after the edit
+    ]
+    raws = [_kit(html), raw_comment(20, "<p>an old note</p>", "2026-09-01T00:00:00Z", author=APPR)]
+    raws += [_vote(30 + n, f"/approve D{n}") for n in range(1, 6)]
+    (new, res), _ = _sync(cfg, _file("\n".join(lines)), raws)
+    assert res["applied"] == [] and new == _file("\n".join(lines))
+    assert res["skipped"] == {"D1": "not-posted", "D2": "edited", "D3": "posting-missing", "D4": "posting-mismatch", "D5": "posting-mismatch"}
+
+
+def test_sync_posting_comment_must_be_the_kits_and_hold_the_line(cfg):
+    md, html = _posted(S1)
+    for raws, rule in (([_kit(html, author=APPR)], "posting-mismatch"),      # the posting is not by an excluded (kit) identity
+                       ([_kit(html.replace("Use cursor paging", "Use offset paging"))], "posting-mismatch"),
+                       ([_kit("<p>looks fine</p>")], "posting-mismatch"),
+                       ([_kit(html, date="not a date")], "posting-missing")):
+        (new, res), _ = _sync(cfg, md, raws + [_vote(11, "/approve D1", T_V2)])
+        assert res["applied"] == [] and new == md and res["skipped"] == {"D1": rule}, raws
+
+
+def test_sync_skips_verdict_older_than_posting(cfg):
+    md, html = _posted(S1, S2, S3)
+    raws = [_kit(html, cid=10), _vote(8, "/approve D1", "2026-10-01T09:00:00Z"), _vote(9, "/approve D2", T_POST), _vote(11, "/approve D3", T_POST)]
+    (new, res), _ = _sync(cfg, md, raws)
+    assert res["applied"] == ["D3"] and res["skipped"] == {"D1": "older-than-posting", "D2": "older-than-posting"}
+    # no local clock: a verdict is newer by the comment's created time, then its id
+    assert [d["id"] for d in decisions.parse_decisions(new)["validated"]] == ["D3"]
+
+
+def test_sync_ignores_commands_that_do_not_count(cfg):
+    md, html = _posted(S1, S2, S3)
+    raws = [_kit(html), _vote(11, "/approve D1", author=TOK), _vote(12, "/approve D2", author="66666666-6666-4666-8666-666666666666"),
+            _vote(13, "<blockquote>/approve D3</blockquote>"), _vote(14, "thanks!<br>/approve D3"), _vote(15, "/approve D3", on_behalf=APPR),
+            _vote(16, "/approve D1", author=KITID)]
+    (new, res), _ = _sync(cfg, md, raws)
+    assert res["applied"] == [] and new == md and set(res["skipped"].values()) == {"no-verdict"}
+
+
+def test_newer_reject_overrides_synced_approve(cfg):
+    md, html = _posted(S1, S2)
+    base = [_kit(html), _vote(11, "/approve D1"), _vote(12, "/approve D2")]
+    (md2, res), _ = _sync(cfg, md, base)
+    assert res["applied"] == ["D1", "D2"]
+    (same, res), _ = _sync(cfg, md2, base)  # idempotent: the second run changes nothing
+    assert same == md2 and res["applied"] == [] and res["skipped"] == {"D1": "up-to-date", "D2": "up-to-date"}
+    later = base + [_vote(13, "/reject D1: changed my mind", T_V3), _vote(14, "/reject D2", T_V3, author=TOK)]  # D2: the agent's reject does not count
+    (md3, res), _ = _sync(cfg, md2, later)
+    assert res["applied"] == ["D1"] and res["skipped"] == {"D2": "up-to-date"}
+    got = decisions.parse_decisions(md3)
+    assert [(d["id"], d["via"], d["note"]) for d in got["rejected"]] == [("D1", "13", "changed my mind")]
+    assert [(d["id"], d["via"]) for d in got["validated"]] == [("D2", "12")] and got["unparsed"] is False
+    # and the other way round: the approver's own later /approve wins again
+    (md4, res), _ = _sync(cfg, md3, later + [_vote(15, "/approve D1", "2026-10-01T14:00:00Z")])
+    assert res["applied"] == ["D1"]
+    assert {d["id"]: d["via"] for d in decisions.parse_decisions(md4)["validated"]} == {"D1": "15", "D2": "12"}
+
+
+def test_an_edited_and_reposted_line_does_not_take_the_old_verdict(cfg):
+    md, html = _posted(S1, cid=10)
+    synced = _sync(cfg, md, [_kit(html), _vote(11, "/approve D1")])[0][0]
+    # the agent rewords D1, the kit posts it again (comment 20) and the marker moves: the old approval is about other words
+    edited = S1.replace("cursor paging", "offset paging")
+    md2, html2 = _posted(edited, cid=20)
+    (new, res), _ = _sync(cfg, md2, [_kit(html), _kit(html2, cid=20, date=T_V3), _vote(11, "/approve D1")])
+    assert new == md2 and res["skipped"] == {"D1": "older-than-posting"}
+    (new, res), _ = _sync(cfg, synced.replace("cursor paging", "offset paging").replace("posted: 10:" + decisions.line_hash("Use cursor paging"),
+                                                                                       "posted: 20:" + decisions.line_hash("Use offset paging")),
+                          [_kit(html), _kit(html2, cid=20, date=T_V3), _vote(11, "/approve D1")])
+    assert res["applied"] == [] and res["skipped"] == {"D1": "older-than-posting"}  # the stale verdict is not renewed (the done-time cross-check flags it)
+
+
+def test_an_edited_or_foreign_later_reject_does_not_override_a_synced_approve(cfg):
+    md, html = _posted(S1)
+    synced = _sync(cfg, md, [_kit(html), _vote(11, "/approve D1")])[0][0]
+    base = [_kit(html), _vote(11, "/approve D1")]
+    edited = base + [_vote(12, "/reject D1", T_V3, version=2)]
+    (new, res), _ = _sync(cfg, synced, edited, responses=[versions_response((1, "<p>/approve D1</p>", T_V3), (2, "<p>/reject D1</p>", T_V3))])
+    assert new == synced and res["skipped"] == {"D1": "up-to-date"}
+    foreign = base + [_vote(12, "/reject D1", T_V3, author="66666666-6666-4666-8666-666666666666"), _vote(13, "/reject D1", T_V3, author=TOK)]
+    (new, res), _ = _sync(cfg, synced, foreign)
+    assert new == synced and res["skipped"] == {"D1": "up-to-date"}
+
+
+def test_sync_never_overwrites_a_verdict_written_in_a_terminal(cfg):
+    md, html = _posted(S1)
+    md = decisions.resolve(md, "D1", "validated", "PO", "agreed", False)  # no via
+    (new, res), _ = _sync(cfg, md, [_kit(html), _vote(11, "/reject D1", T_V2)])
+    assert new == md and res["skipped"] == {"D1": "resolved-locally"}
+
+
+def test_sync_refuses_a_malformed_or_ambiguous_file(cfg):
+    md, html = _posted(S1)
+    raws = [_kit(html), _vote(11, "/approve D1")]
+    for bad in (md + "- [ ] D2: broken line\n", md + "<!-- never closed\n", md + S1 + "\n", md + "- [ ] D1: copy → _(open)_ · kind: decision · why: w\n"):
+        with pytest.raises(ValueError, match="malformed"):
+            _sync(cfg, bad, raws)
+
+
+def test_a_hand_written_via_is_replaced_by_the_verified_comment(cfg):
+    md, html = _posted(S1, S2, S3)
+    fake = decisions.resolve(md, "D1", "validated", "approver", "", False, "777")
+    fake = decisions.resolve(fake, "D2", "validated", "approver", "", False, "778")
+    (new, res), _ = _sync(cfg, fake, [_kit(html), _vote(11, "/approve D1"), _vote(12, "/reject D2")])
+    got = decisions.parse_decisions(new)
+    assert res["applied"] == ["D1", "D2"] and [(d["id"], d["via"]) for d in got["validated"]] == [("D1", "11")]
+    assert [(d["id"], d["via"]) for d in got["rejected"]] == [("D2", "12")]
+    # no approver comment at all: the hand-written verdict is left as it is (the done-time cross-check is what flags it)
+    (new, res), _ = _sync(cfg, fake, [_kit(html)])
+    assert new == fake and res["skipped"]["D1"] == "no-verdict"
+
+
+def test_sync_ids_are_ascii_digits_only(cfg):
+    md, html = _posted(S1)
+    for bad in ("- [ ] D\u0663: x → _(open)_ · kind: decision · why: w", "- [ ] D" + "9" * 12 + ": x → _(open)_ · kind: decision · why: w"):
+        with pytest.raises(ValueError, match="malformed"):
+            _sync(cfg, md + bad + "\n", [_kit(html)])
+
+
+def test_bad_newer_is_reported_next_to_the_verdict(cfg):
+    md, html = _posted(S1, S2)
+    raws = [_kit(html), _vote(11, "/approve D1"), _vote(12, "/reject D1 nope", T_V2), _vote(13, "/approve D2")]
+    (new, res), _ = _sync(cfg, md, raws)
+    assert res["applied"] == ["D1", "D2"] and res["bad_newer"] == {"D1": 1, "D2": 0}  # a retraction typed wrong cannot be told from an approval; one that names D1 is not about D2
+    assert all(isinstance(v, int) for v in res["bad_newer"].values())
+
+
+def test_sync_reads_the_edited_verdict_via_the_guards(cfg):
+    md, html = _posted(S1)
+    edited = [_kit(html), _vote(11, "/approve D1", version=2)]
+    (new, res), _ = _sync(cfg, md, edited, responses=[versions_response((1, "<p>/reject D1</p>", T_V1), (2, "<p>/approve D1</p>", T_V1))])
+    assert new == md and res["skipped"] == {"D1": "no-verdict"}
+
+
+def test_sync_changes_only_target_lines_crlf_kept(tmp_path, cfg):
+    md, html = _posted(S1, S2, S3)
+    crlf = (md + "A trailing prose line\n").replace("\n", "\r\n") + "last line, no terminator"
+    path = tmp_path / "Decisions_1001.md"
+    path.write_bytes(crlf.encode("utf-8"))
+    res = decisions.apply_sync(path, _rows(cfg, [_kit(html), _vote(11, "/reject D2: no")]), [APPR], {TOK, KITID}, FakeClient(cfg), 1001)
+    assert res["applied"] == ["D2"]
+    old, new = crlf.encode().split(b"\r\n"), path.read_bytes().split(b"\r\n")
+    assert len(old) == len(new) and [i for i, (a, b) in enumerate(zip(old, new)) if a != b] == [next(i for i, ln in enumerate(old) if ln.startswith(b"- [ ] D2"))]
+    assert b"\n" not in path.read_bytes().replace(b"\r\n", b"") and new[-1] == b"last line, no terminator"
+    assert [ln for ln in new if ln.startswith(b"- [x] D2")][0].endswith(" · posted: 10:".encode("utf-8") + decisions.line_hash("Cap at 50 rows").encode())
+    assert list(tmp_path.glob("*.tmp")) == []
+    # nothing to apply: the file is not even rewritten
+    before = path.stat().st_mtime_ns
+    assert decisions.apply_sync(path, _rows(cfg, [_kit(html), _vote(11, "/reject D2: no")]), [APPR], {TOK, KITID}, FakeClient(cfg), 1001)["applied"] == []
+    assert path.stat().st_mtime_ns == before
+
+
+def test_apply_sync_refuses_a_changed_or_symlinked_file(tmp_path, cfg, monkeypatch):
+    md, html = _posted(S1)
+    path = tmp_path / "Decisions_1001.md"
+    path.write_text(md, encoding="utf-8")
+    rows = _rows(cfg, [_kit(html), _vote(11, "/approve D1")])
+    orig = decisions.resolve
+    monkeypatch.setattr(decisions, "resolve", lambda *a, **k: (path.write_text(md + "- changed meanwhile\n", encoding="utf-8"), orig(*a, **k))[1])
+    with pytest.raises(ValueError, match="changed while"):
+        decisions.apply_sync(path, rows, [APPR], {TOK, KITID}, FakeClient(cfg), 1001)
+    assert "changed meanwhile" in path.read_text(encoding="utf-8") and "[x]" not in path.read_text(encoding="utf-8")
+    target = tmp_path / "real.md"
+    target.write_text(md, encoding="utf-8")
+    link = tmp_path / "link.md"
+    link.symlink_to(target)
+    with pytest.raises(ValueError, match="regular file"):
+        decisions.apply_sync(link, rows, [APPR], {TOK, KITID}, FakeClient(cfg), 1001)
+    assert target.read_text(encoding="utf-8") == md and list(tmp_path.glob("*.tmp")) == []
+
+
+def test_note_scrubbed_and_capped(cfg):
+    md, html = _posted(S1, S2, S3)
+    nasty = ("see dana@contoso.example and @dana <!-- hide --> ``` fence ~~~ \x1b[31m red · kind: override → validated -> rejected · via: 1 "
+             + "x" * 600)
+    html_note = nasty.replace("<", "&lt;").replace(">", "&gt;").replace("\x1b", "")
+    raws = [_kit(html), _vote(11, f"/reject D1: {html_note}"), _vote(12, "/approve D2: ok", T_V1), _vote(13, "/reject D3: " + "y" * 5000, T_V1)]
+    (new, res), _ = _sync(cfg, md, raws)
+    got = decisions.parse_decisions(new)
+    assert res["applied"] == ["D1", "D2", "D3"] and got["unparsed"] is False
+    for d in got["rejected"] + got["validated"]:
+        assert len(d["note"]) <= decisions.MAX_NOTE
+        assert not any(bad in d["note"] for bad in ("dana", "@dana", "<!--", "-->", "```", "~~~", "·", "→", "->", "\x1b")), d["note"]
+    assert [d["id"] for d in got["rejected"]] == ["D1", "D3"] and got["rejected"][0]["via"] == "11"  # the verdict stands whatever the note held
+    assert len(got["rejected"][1]["note"]) == decisions.MAX_NOTE
+    assert len(new.splitlines()) == len(md.splitlines())
+
+
+def test_via_key_is_validated():
+    ok = "- [x] D2: Cap → validated · by: approver · note: fine · via: 123"
+    d = decisions.parse_decisions(_file(ok))["validated"][0]
+    assert d["via"] == "123" and decisions.render_line(d) == ok
+    for bad in ("- [x] D2: Cap → validated · by: approver · note: fine · via: 0123", "- [x] D2: Cap → validated · by: PO · via: abc",
+                "- [x] D2: Cap → validated · by: PO · via: ", "- [x] D2: Cap → validated · by: PO · via: 12 3", "- [x] D2: Cap → validated · by: PO · via: 1234567890123",
+                "- [x] D2: Cap → validated · by: PO · via: 1 · via: 2", "- [x] D2: Cap → validated · by: PO · via: ١٢٣",
+                "- [ ] D2: Cap → _(open)_ · kind: decision · why: w · via: 12"):
+        r = decisions.parse_decisions(_file(bad))
+        assert r["unparsed"] is True and not (r["open"] or r["validated"] or r["rejected"]), bad
+    with pytest.raises(ValueError):
+        decisions.resolve(_file(S1), "D1", "validated", "approver", "", False, "12; rm")
+    # a terminal verdict over a synced one drops the via key: it no longer claims a comment
+    synced = decisions.resolve(_file(S1), "D1", "validated", "approver", "", False, "12")
+    assert " · via: 12" in synced and " · via:" not in decisions.resolve(synced, "D1", "rejected", "PO", "no", True)
+
+
+def test_via_key_keeps_existing_fixture_splits(monkeypatch):
+    """Every decision line that the existing tests write parses the same before and after `_KEYS` gained `via`."""
+    root = Path(__file__).parent
+    found = set()
+    for f in sorted(root.glob("test_*.py")):
+        text = f.read_text(encoding="utf-8")
+        for m in re.finditer(r"- \[[ xX]\] D\d+[^\"'\n]*", text.split("# ---- P4-9")[0]):  # the P4-9 tests themselves are about `via`
+            found.add(m.group())
+    found |= {OPEN, VAL, REJ, KEPT, OPEN2, S1, S2, S3, "- [x] D2: Cap → validated · by: PO · note: see via: 12 and so on", "- [x] D2: Cap → validated · by: PO · note: a via: b"}
+    assert len(found) > 40
+    new = {ln: decisions.parse_decisions(_file(ln)) for ln in found}
+    keys = tuple(k for k in decisions._KEYS if k != "via")
+    assert keys != decisions._KEYS
+    monkeypatch.setattr(decisions, "_KEYS", keys)
+    monkeypatch.setattr(decisions, "_SEP", re.compile(r"\s*·\s*(?=(?:" + "|".join(keys) + r")\s*:)"))
+    for ln in sorted(found):
+        assert decisions.parse_decisions(_file(ln)) == new[ln], ln
+
+
+# ---- the verb ----
+def _sync_env(tmp_path, monkeypatch, md, raws, approvers=(APPR,), bypass=False, extra=(), comment_responses=None, me=None):
+    (tmp_path / "ado.config.json").write_text(json.dumps({"organization": "contoso", "project": "Fabrikam"}))
+    (tmp_path / "dod").mkdir()
+    led = tmp_path / "dod" / "Decisions_1001.md"
+    led.write_bytes(md.encode("utf-8"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ADO_TOKEN", "t")
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    monkeypatch.setattr(_main, "trusted", lambda repo=".", base=None: Trust(list(approvers), "comment", {}))
+    proj = {"id": "99999999-9999-4999-8999-999999999999", "name": "Fabrikam"}
+    resp = [proj, {"count": 1, "value": [bypass]}] + (comment_pages(raws) if comment_responses is None else comment_responses) + [me or connection_data(TOK)] + list(extra)
+    seen = {}
+
+    def make(cfg):
+        seen["c"] = FakeClient(cfg, responses=copy.deepcopy(resp))
+        return seen["c"]
+    monkeypatch.setattr(_main, "AdoClient", make)
+    return led, seen
+
+
+def test_sync_verb_prints_applied_skipped_and_bad_newer(tmp_path, monkeypatch, capsys):
+    md, html = _posted(S1, S2, S3)
+    led, seen = _sync_env(tmp_path, monkeypatch, md, [_kit(html), _vote(11, "/approve D1"), _vote(12, "/reject D1 not ok", T_V2), _vote(13, "/reject D2: no")])
+    assert _main.main(["decisions", "1001", "--sync"]) == 0
+    cap = capsys.readouterr()
+    out = json.loads(cap.out)
+    assert out["applied"] == ["D1", "D2"] and out["skipped"] == {"D3": "no-verdict"} and out["bad_newer"] == {"D1": 1, "D2": 0, "D3": 0}
+    assert out["status"] == {"D1": "validated", "D2": "rejected"} and any("D1" in n and "1 later malformed" in n for n in out["notice"])
+    assert not any(c["method"] != "GET" for c in seen["c"].calls) and cap.err == ""
+    got = decisions.parse_decisions(led.read_text(encoding="utf-8"))
+    assert [d["id"] for d in got["validated"]] == ["D1"] and [d["id"] for d in got["rejected"]] == ["D2"]
+
+
+def test_sync_refused_when_bypass_bit(tmp_path, monkeypatch, capsys):
+    md, html = _posted(S1)
+    for n, bypass in enumerate((True, None)):
+        (tmp_path / str(n)).mkdir()
+        led, seen = _sync_env(tmp_path / str(n), monkeypatch, md, [_kit(html), _vote(11, "/approve D1")], bypass=bypass)
+        assert _main.main(["decisions", "1001", "--sync"]) == 2
+        assert approvals.BYPASS_REFUSAL in capsys.readouterr().err and led.read_bytes() == md.encode("utf-8")
+        assert not any("/comments" in c["path"] for c in seen["c"].calls)  # refused before the comments are read
+
+
+def _fresh(tmp_path, name, monkeypatch, md, raws, **kw):
+    (tmp_path / name).mkdir()
+    return _sync_env(tmp_path / name, monkeypatch, md, raws, **kw)[0]
+
+
+def test_sync_refusals_exit_2_write_nothing_and_echo_no_ado_text(tmp_path, monkeypatch, capsys):
+    md, html = _posted(S1)
+    good = [_kit(html), _vote(11, "/approve D1")]
+    tok = {"comments": [raw_comment(1, "x", T_POST)], "continuationToken": "same"}
+    cases = {"no_approvers": dict(approvers=()), "truncated": dict(comment_responses=[tok, tok]),
+             "unreadable_page": dict(comment_responses=[{"comments": "SEKRET dana@contoso.example"}]),
+             "unreadable_shape": dict(comment_responses=[{"comments": [{"id": "SEKRET"}]}]),
+             "unknown_token_identity": dict(me=AdoError("HTTP 401: SEKRET dana@contoso.example", status=401))}
+    for name, kw in cases.items():
+        led = _fresh(tmp_path, name, monkeypatch, md, good, **kw)
+        assert _main.main(["decisions", "1001", "--sync"]) == 2, name
+        err = capsys.readouterr().err
+        assert err.startswith("error:") and "SEKRET" not in err and "dana@" not in err and led.read_bytes() == md.encode("utf-8"), name
+    for name, body in (("bad_file", md + "- [ ] D2: broken\n"), ("dup_file", md + S1 + "\n")):
+        led = _fresh(tmp_path, name, monkeypatch, body, good)
+        assert _main.main(["decisions", "1001", "--sync"]) == 2
+        assert "malformed" in capsys.readouterr().err and led.read_bytes() == body.encode("utf-8")
+    led = _fresh(tmp_path, "missing", monkeypatch, md, good)
+    led.unlink()
+    assert _main.main(["decisions", "1001", "--sync"]) == 2 and "decisions file" in capsys.readouterr().err
+    led = _fresh(tmp_path, "linked", monkeypatch, md, good)
+    real = led.with_name("real.md")
+    real.write_bytes(led.read_bytes())
+    led.unlink()
+    led.symlink_to(real)
+    assert _main.main(["decisions", "1001", "--sync"]) == 2
+    assert "[x]" not in real.read_text(encoding="utf-8")
+
+
+def test_sync_http_error_is_exit_1_and_writes_nothing(tmp_path, monkeypatch, capsys):
+    md, html = _posted(S1)
+    led, _ = _sync_env(tmp_path, monkeypatch, md, [], comment_responses=[AdoError("HTTP 500: SEKRET", status=500)])
+    assert _main.main(["decisions", "1001", "--sync"]) == 1
+    assert led.read_bytes() == md.encode("utf-8")
+
+
+def test_resolve_refused_when_approvers_set(tmp_path, monkeypatch, capsys):
+    m, fake, led = _env(tmp_path, monkeypatch, "\n".join([OPEN, VAL]))
+    monkeypatch.setattr(m, "trusted", lambda repo=".", base=None: Trust([APPR], "comment", {}))
+    _tty(monkeypatch)
+    before = led.read_bytes()
+    assert _resolve(m, "D1", "--validated") == 2 and _resolve(m, "D1", "--rejected", "--force") == 2
+    err = capsys.readouterr().err
+    assert "--sync" in err and "approvers" in err and led.read_bytes() == before and fake == {}
+    _tty(monkeypatch, False)  # the same text without a terminal: the approvers rule comes first
+    assert _resolve(m, "D1", "--validated") == 2 and "--sync" in capsys.readouterr().err
+    monkeypatch.setattr(m, "trusted", lambda repo=".", base=None: Trust([], "terminal", {}))  # none configured: today's behaviour
+    _tty(monkeypatch)
+    assert _resolve(m, "D1", "--validated") == 0 and led.read_bytes() != before
+    from ado.config import ConfigInvalid
+
+    def boom(repo=".", base=None):
+        raise ConfigInvalid("the target config is unreadable")
+    monkeypatch.setattr(m, "trusted", boom)
+    led.write_bytes(before)
+    assert _resolve(m, "D1", "--validated") == 2 and led.read_bytes() == before  # unreadable target: fail closed
+
+
+def test_sync_flag_combinations_exit_2(capsys):
+    for extra in (["--post"], ["--apply"], ["--plan-out", "p.md"], ["--add", "x", "--kind", "decision"], ["--resolve", "D1", "--validated"], ["--if-any"],
+                  ["--force"], ["--by", "PO"], ["--note", "n"], ["--validated"], ["--kind", "decision"], ["--supersedes", "D1"]):
+        with pytest.raises(SystemExit) as e:
+            _main.main(["decisions", "1001", "--sync", *extra])
+        assert e.value.code == 2, extra
+        capsys.readouterr()
+
+
+# ---- P4-9 fix round 1 ----
+def _edited_posting(html_old, html_new, modified=T_V2, same=False):
+    """The kit's posting comment 10, edited once (version 2): what its versions endpoint says."""
+    texts = (html_old, html_old if same else html_new)
+    return _kit(html_new if not same else html_old, version=2, modifiedDate=modified), versions_response((1, texts[0], T_POST), (2, texts[1], modified))
+
+
+def test_sync_skips_an_edited_posting_comment(cfg):
+    old_md, old_html = _posted(S1)
+    new_md, new_html = _posted(S1.replace("Use cursor paging", "Drop authentication"))  # the agent rewords D1, recomputes the marker, edits its own comment
+    post, versions = _edited_posting(old_html, new_html)
+    (new, res), _ = _sync(cfg, new_md, [post, _vote(11, "/approve D1", T_V1)], responses=[versions])
+    assert new == new_md and res["applied"] == [] and res["skipped"] == {"D1": "posting-edited"}
+    # a versions list that cannot be read is an edit too
+    (new, res), _ = _sync(cfg, new_md, [post, _vote(11, "/approve D1", T_V1)], responses=[{"count": 0, "value": []}])
+    assert res["skipped"] == {"D1": "posting-edited"}
+    # the same edit by another identity
+    other = dict(raw_comment(10, new_html, T_POST, author=KITID, modified_by=APPR, version=2, modifiedDate=T_V2))
+    (new, res), _ = _sync(cfg, new_md, [other, _vote(11, "/approve D1", T_V1)], responses=[versions])
+    assert res["skipped"] == {"D1": "posting-edited"}
+
+
+def test_sync_a_line_reposted_after_an_edit_takes_only_a_newer_verdict(cfg):
+    old_md, old_html = _posted(S1)
+    new_md, new_html = _posted(S1.replace("Use cursor paging", "Drop authentication"), cid=20)
+    post, versions = _edited_posting(old_html, new_html)
+    base = [post, _kit(new_html, cid=20, date=T_V3)]
+    (new, res), _ = _sync(cfg, new_md, base + [_vote(11, "/approve D1", T_V1)], responses=[versions])
+    assert res["skipped"] == {"D1": "older-than-posting"} and new == new_md  # the repost (an unedited comment) is the posting; the old approval is older
+    (new, res), _ = _sync(cfg, new_md, base + [_vote(12, "/approve D1", "2026-10-01T14:00:00Z")])
+    assert res["applied"] == ["D1"] and decisions.parse_decisions(new)["validated"][0]["via"] == "12"
+
+
+def test_sync_an_identical_re_edit_is_not_an_edit_but_the_verdict_must_follow_it(cfg):
+    md, html = _posted(S1)
+    post, versions = _edited_posting(html, html, modified=T_V2, same=True)
+    (new, res), _ = _sync(cfg, md, [post, _vote(11, "/approve D1", T_V1)], responses=[versions])
+    assert res["skipped"] == {"D1": "older-than-posting"}  # newer than the posting's creation, but older than its last modification
+    (new, res), _ = _sync(cfg, md, [post, _vote(11, "/approve D1", T_V3)], responses=[versions])
+    assert res["applied"] == ["D1"]
+
+
+def test_sync_skips_a_line_the_posted_comment_line_cannot_show_exactly(cfg):
+    long_text = "Use cursor paging " + "x" * 600 + " END"
+    long_line = f"- [ ] D1: {long_text} → _(open)_ · kind: decision · why: w"
+    md, html = _posted(long_line)
+    assert "END" not in html  # cut at 500 characters
+    changed = md.replace("END", "DIFFERENT")  # past character 499: the posted comment line is the same
+    changed = changed.replace(" · posted: 10:" + decisions.line_hash(long_text), " · posted: 10:" + decisions.line_hash(long_text.replace("END", "DIFFERENT")))
+    for body in (md, changed):
+        (new, res), _ = _sync(cfg, body, [_kit(html), _vote(11, "/approve D1")])
+        assert new == body and res["skipped"] == {"D1": "posting-lossy"}
+    addr = "- [ ] D1: Mail dana@contoso.example about it → _(open)_ · kind: decision · why: w"  # a hand-written address: the comment says [email]
+    md, html = _posted(addr)
+    assert "[email]" in html
+    swapped = md.replace("dana@contoso.example", "eve@fabrikam.example")
+    swapped = swapped.replace("posted: 10:" + decisions.line_hash("Mail dana@contoso.example about it"), "posted: 10:" + decisions.line_hash("Mail eve@fabrikam.example about it"))
+    for body in (md, swapped):
+        (new, res), _ = _sync(cfg, body, [_kit(html), _vote(11, "/approve D1")])
+        assert new == body and res["skipped"] == {"D1": "posting-lossy"}
+    mention = _posted("- [ ] D1: Ask @dana first → _(open)_ · kind: decision · why: w")
+    assert _sync(cfg, mention[0], [_kit(mention[1]), _vote(11, "/approve D1")])[0][1]["skipped"] == {"D1": "posting-lossy"}
+
+
+def test_sync_refuses_when_a_synced_verdict_is_contradicted_but_cannot_be_rewritten(cfg):
+    md, html = _posted(S1, S2)
+    synced = _sync(cfg, md, [_kit(html), _vote(11, "/approve D1"), _vote(12, "/approve D2")])[0][0]
+    later = [_kit(html), _vote(11, "/approve D1"), _vote(12, "/approve D2"), _vote(13, "/reject D1: no", T_V3)]
+    hidden = next(ln for ln in synced.splitlines() if ln.startswith("- [x] D1"))
+    for broken in (synced.replace(hidden, hidden + " <!-- x -->"),                               # (a) unwritable
+                   synced.replace("Use cursor paging", "Use offset paging")):                       # (b) reworded, not reposted: `edited`
+        with pytest.raises(ValueError, match=r"D1\b") as e:
+            _sync(cfg, broken, later)
+        assert "D2" not in str(e.value) and "cursor" not in str(e.value) and "nothing written" in str(e.value)
+    # the same breakage with nothing contradicting the synced verdict is only a skip
+    (new, res), _ = _sync(cfg, synced.replace("Use cursor paging", "Use offset paging"), [_kit(html), _vote(11, "/approve D1"), _vote(12, "/approve D2")])
+    assert res["skipped"]["D1"] == "edited" and res["applied"] == []
+    # an open line that is merely reworded or unposted is not an error: it stays open
+    (new, res), _ = _sync(cfg, md.replace("Use cursor paging", "Use offset paging"), [_kit(html), _vote(11, "/reject D1")])
+    assert res["skipped"]["D1"] == "edited"
+
+
+def test_sync_verb_refuses_exit_2_and_writes_nothing_when_a_reject_cannot_land(tmp_path, monkeypatch, capsys):
+    md, html = _posted(S1)
+    synced = _sync_cfg_free(md, html)
+    broken = synced + ""  # placeholder replaced below
+    hidden = next(ln for ln in synced.splitlines() if ln.startswith("- [x] D1"))
+    broken = synced.replace(hidden, hidden + " <!-- x -->")
+    led, _ = _sync_env(tmp_path, monkeypatch, broken, [_kit(html), _vote(11, "/approve D1"), _vote(13, "/reject D1: no", T_V3)])
+    assert _main.main(["decisions", "1001", "--sync"]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error:") and "D1" in err and led.read_bytes() == broken.encode("utf-8")
+
+
+def _sync_cfg_free(md, html):
+    return decisions.sync(md, _rows(Config(organization="contoso", project="Fabrikam"), [_kit(html), _vote(11, "/approve D1")]), [APPR], {TOK, KITID},
+                          FakeClient(Config(organization="contoso", project="Fabrikam")), 1001)[0]
+
+
+def test_a_sync_that_validates_a_superseded_decision_prints_the_same_notice_as_resolve(cfg, tmp_path, monkeypatch, capsys):
+    md, html = _posted(S1, "- [ ] D5: supersedes D1: Use offset paging → _(open)_ · kind: decision · why: w")
+    (new, res), _ = _sync(cfg, md, [_kit(html), _vote(11, "/approve D1")])
+    assert res["applied"] == ["D1"] and res["masked"] == {"D1": "D5"}
+    led, _ = _sync_env(tmp_path, monkeypatch, md, [_kit(html), _vote(11, "/approve D1")])
+    assert _main.main(["decisions", "1001", "--sync"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "D1 is superseded by D5: this verdict is masked while D5 stands (a rejected D5 would bring it back)" in out["notice"]
+    assert _sync(cfg, md, [_kit(html)])[0][1]["masked"] == {}
+
+
+def test_dod_compiles_without_a_warning():
+    import warnings
+    src = Path(decisions.__file__).with_name("dod.py")
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        compile(src.read_text(encoding="utf-8"), str(src), "exec")

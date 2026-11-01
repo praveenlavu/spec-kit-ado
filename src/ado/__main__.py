@@ -6,10 +6,10 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, attachments, branch, comments, decisions, dod, done, doctor, gate, kits, prs, push, questions, rules, stack, status, strict, tasks, workitems
+from . import __version__, approvals, attachments, branch, comments, decisions, dod, done, doctor, gate, kits, prs, push, questions, rules, stack, status, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
-from .config import Config, ConfigError, ConfigInvalid
+from .config import Config, ConfigError, ConfigInvalid, trusted
 from .setup_cmd import run_setup
 
 
@@ -285,6 +285,8 @@ def dispatch(client, args):
         if args.apply:
             questions.apply_post(client, args.id, plan)
         return {"id": args.id, "applied": args.apply, "action": plan["action"], "comment_id": plan["comment_id"]}
+    if args.command == "decisions" and args.sync:  # reads ADO (GET only), writes only the local decisions file
+        return _sync_decisions(client, args)
     if args.command == "decisions":  # read-only unless --post/--plan-out; only --apply writes (comment, then the file)
         path = _decisions_path(client.config.dod_path, args.id, args.if_any)  # None only with --if-any and no file
         try:
@@ -372,8 +374,38 @@ def _add_decision(args):
     return {"id": d_id, "file": str(path)}
 
 
+def _sync_decisions(client, args):
+    """`decisions --sync`: approvers' `/approve D<n>` and `/reject D<n>` comments become verdicts in the local decisions file (no ADO write, no gate:
+    `rules/hitl.md`, local write). Every refusal (exit 2, fixed text, nothing written) comes before anything is changed: no approvers on the target branch,
+    an unreadable decisions file, a token that can bypass rules (or whose permission cannot be read), comments that were cut off or cannot be trusted."""
+    approvers = trusted(".").approvers
+    if not approvers:
+        raise ValueError("--sync needs approvers on the target branch (`approvers` in ado.config.json there, see docs/configuration.md); none are configured")
+    path = decisions.decisions_file(client.config.dod_path, args.id)
+    if not os.path.lexists(path) or gate._read(path, ".", set()) is None:
+        raise ValueError("cannot read the decisions file (missing, a symlink, outside the working tree, over 1 MiB or not UTF-8); nothing written")
+    approvals.comment_mode_allowed(client)
+    try:
+        found, truncated = comments.fetch(client, args.id, with_meta=True)
+    except comments.CommentsUnreadable:
+        raise ValueError("the story's comments cannot be read reliably (an unexpected answer from ADO); nothing written") from None
+    if truncated:
+        raise ValueError("not every comment of the story was read (page limit or repeated page token), so a newer retraction could be missing; nothing written")
+    try:
+        excluded = approvals.excluded(client, found)
+    except ValueError:  # `questions._me` puts the client's error text into its message
+        raise ValueError("cannot tell which ADO identity this token is, so the comments cannot be attributed; nothing written") from None
+    report = decisions.apply_sync(path, found, approvers, excluded, client, args.id)
+    notice = [f"{i}: {n} later malformed command line(s) by an approver: check the thread" for i, n in report["bad_newer"].items() if n]
+    notice += [f"{i} is superseded by {m}: this verdict is masked while {m} stands (a rejected {m} would bring it back)" for i, m in report["masked"].items()]
+    return {"id": args.id, **report, **({"notice": notice} if notice else {})}
+
+
 def _resolve_decision(args):
     """`decisions --resolve`: the PO's verdict is recorded by a human. Tested before anything is read or written."""
+    if trusted(".").approvers:
+        raise ValueError("--resolve is refused: approvers are configured on the target branch, so verdicts come from their `/approve D<n>` and "
+                         "`/reject D<n>` comments: run `ado decisions <id> --sync`")
     if not (sys.stdin and sys.stdin.isatty()):
         raise ValueError("--resolve records the PO's verdict, which only a human may do: run it in your own terminal "
                          "(this shell has no terminal on stdin; a guard against accidents, not a security boundary)")
@@ -721,6 +753,8 @@ def main(argv=None):
                    "shell cannot do it by accident; this is not a security boundary, the strict gate and the git "
                    "history are the enforcement")
     p.add_argument("--force", action="store_true", help="with --resolve: overwrite the verdict of a resolved line")
+    p.add_argument("--sync", action="store_true", help="record the approvers' `/approve D<n>` and `/reject D<n>` comments of the story as verdicts in "
+                   "the decisions file (a local write, no ADO write; needs approvers on the target branch; with them, --resolve is refused)")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--validated", dest="verdict", action="store_const", const="validated")
     g.add_argument("--rejected", dest="verdict", action="store_const", const="rejected")
@@ -865,6 +899,10 @@ def main(argv=None):
             parser.error("--kind, --why and --supersedes need --add")
         if args.if_any and (args.add is not None or args.resolve or not (args.post or args.plan_out)):
             parser.error("--if-any needs --post or --plan-out and cannot be combined with --add or --resolve")
+        if args.sync and (args.post or args.apply or args.plan_out or args.expect_plan or args.if_any or args.add is not None or args.resolve or args.verdict
+                          or args.by is not None or args.note is not None or args.force or args.kind is not None or args.why is not None
+                          or args.supersedes is not None):
+            parser.error("--sync cannot be combined with any other decisions option")
         if args.resolve and (args.post or args.apply or args.plan_out or args.expect_plan):
             parser.error("--resolve cannot be combined with --post, --apply, --plan-out or --expect-plan")
         if args.resolve and not args.verdict:

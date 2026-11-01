@@ -6,20 +6,21 @@ import stat
 import tempfile
 from pathlib import Path
 
-from . import comments, workitems
+from . import approvals, comments, workitems
 from .dod import _esc, _text, _visible
 
 KINDS = ("decision", "assumption", "override")
 _OPEN = "_(open)_"
 # `- [ ] D1: <text> → _(open)_ · kind: <k> · why: <reason>`; `- [x] D1: <text> → validated|rejected · by: <role> · note: <text>`
-# (either also takes ` · posted: <comment id>:<hash8>` and ` · used: <date>`); lenient: spacing, `->`, `*`/`+` bullet.
+# (either also takes ` · posted: <comment id>:<hash8>` and ` · used: <date>`; a resolved one ` · via: <comment id>`, the approver's comment `--sync` took the verdict from); lenient: spacing, `->`, `*`/`+` bullet.
 _CAND = re.compile(r"^\s*(?:[-*+]\s+)?\[([ xX])\]\s*D(\d+)(.*)$")
 _COLON = re.compile(r"\s*:\s*(.*?)\s*$")
 _STATUS = re.compile(r"\s*(?:→|->)\s*(_\(open\)_|validated|rejected)(?=\s*(?:·|$))")
-_KEYS = ("kind", "why", "by", "note", "posted", "used")
+_KEYS = ("kind", "why", "by", "note", "posted", "used", "via")
 _SEP = re.compile(r"\s*·\s*(?=(?:" + "|".join(_KEYS) + r")\s*:)")
 MAX_LINE = 2000  # a longer D line is malformed: the regexes below backtrack quadratically over whitespace runs
 _POSTED = re.compile(r"(\d+):([0-9a-f]{8})")
+_VIA = re.compile(r"[1-9][0-9]{0,11}")  # a comment id: ASCII digits only, no leading zero
 _SUP = re.compile(r"supersedes D([0-9]{1,6}): ")  # the only place a supersedes relation is read from: the start of the text
 SUP_HIDDEN = re.compile(r"\bD\d+(?!\d)\s*:\s*supersedes\s+D\d")  # the same words on a line that is not a decision line
 
@@ -139,14 +140,15 @@ def _line(raw):
     posted = _POSTED.fullmatch(kv["posted"]) if "posted" in kv else None
     bad = (first.strip() or not text or kind not in KINDS or ("posted" in kv and not posted)
            or (not done and not (kv.get("kind") and kv.get("why")))
-           or (done and not kv.get("by")) or (not done and ("by" in kv or "note" in kv)))
+           or (done and not kv.get("by")) or (not done and ("by" in kv or "note" in kv or "via" in kv))
+           or ("via" in kv and not _VIA.fullmatch(kv["via"])))
     if bad:
         return None
     sup = _SUP.match(text)
     return {"id": f"D{m.group(2)}", "kind": kind, "text": text, "why": kv.get("why", ""),
             "status": "open" if not done else s.group(1), "by": kv.get("by", ""), "note": kv.get("note", ""),
             "posted": {"comment_id": int(posted.group(1)), "hash": posted.group(2)} if posted else None,
-            "used": kv.get("used", ""), **({"supersedes": f"D{sup.group(1)}"} if sup else {})}
+            "used": kv.get("used", ""), **({"supersedes": f"D{sup.group(1)}"} if sup else {}), **({"via": kv["via"]} if "via" in kv else {})}
 
 
 def has_decision_lines(md):
@@ -180,6 +182,8 @@ def render_line(d):
         parts = [f"- [ ] {d['id']}: {d['text']} → {_OPEN}", f"kind: {d['kind']}", f"why: {d['why']}"]
     else:
         parts = [f"- [x] {d['id']}: {d['text']} → {d['status']}", f"by: {d['by']}", f"note: {d['note']}".rstrip()]
+        if d.get("via"):
+            parts.append(f"via: {d['via']}")
         if d["kind"] != "decision":  # resolving must not lose that a line was an override or assumption
             parts.append(f"kind: {d['kind']}")
         if d["why"]:
@@ -210,9 +214,20 @@ def _scrub(text):
 def _comment_line(d):
     """(`D<n> (<kind>): <text> — why: <why>` scrubbed, control characters (ANSI escapes, line separators) turned into
     spaces, capped at MAX_COMMENT_LINE chars with …, was it cut)."""
-    text = _scrub(f"{d['id']} ({d['kind']}): {d['text']}" + (f" — why: {d['why']}" if d["why"] else ""))
-    text = _CTRL.sub(" ", text)
+    raw = _raw_line(d)
+    text = _CTRL.sub(" ", _scrub(raw))
     return (text[:MAX_COMMENT_LINE - 1] + "…", True) if len(text) > MAX_COMMENT_LINE else (text, False)
+
+
+def _raw_line(d):
+    return f"{d['id']} ({d['kind']}): {d['text']}" + (f" — why: {d['why']}" if d["why"] else "")
+
+
+def comment_line_is_lossy(d):
+    """Does the posted comment line differ from the file's words (cut at MAX_COMMENT_LINE, or an address, mention or control character replaced)?
+    Then a match between the file and the comment proves less than it seems: a changed tail or a swapped address would still match."""
+    raw = _raw_line(d)
+    return _comment_line(d)[1] or _CTRL.sub(" ", _scrub(raw)) != raw
 
 
 def plan_post(client, work_item_id, parsed):
@@ -312,12 +327,15 @@ def _ids(parsed):
     return {d["id"]: d["status"] for k in ("open", "validated", "rejected") for d in parsed[k]}
 
 
-def resolve(md, d_id, status, by, note, force=False):
+def resolve(md, d_id, status, by, note, force=False, via=None):
     """The file text with the first `d_id` line rewritten as validated|rejected; its kind, why, posted and used
-    markers and its line ending are kept, every other byte is unchanged. A line that is already resolved needs `force`.
+    markers and its line ending are kept, every other byte is unchanged. `via` (a comment id, digits only; `sync` passes the approver's
+    comment) is written as ` · via: <id>`; without it an old `via` is dropped, since the new verdict no longer comes from that comment. A line that is already resolved needs `force`.
     ValueError for a bad status, role or note, an unknown id, a line holding an inline comment, or a result that
     `parse_decisions` would not read back the same over the whole file."""
     by, note = by.strip(), note.strip()
+    if via is not None and not (isinstance(via, str) and _VIA.fullmatch(via)):
+        raise ValueError("via must be a comment id (digits only)")
     if status not in ("validated", "rejected"):
         raise ValueError("the status must be validated or rejected")
     if not _BY.fullmatch(by):
@@ -334,7 +352,7 @@ def resolve(md, d_id, status, by, note, force=False):
                 raise ValueError(f"{d_id} holds an inline <!-- --> comment or fence that a rewrite would drop; edit it by hand")
             if d["status"] != "open" and not force:
                 raise ValueError(f"{d_id} is already {d['status']} (by {d['by']}); pass --force to overwrite that verdict")
-            new = {**d, "status": status, "by": by, "note": note}
+            new = {**{k: v for k, v in d.items() if k != "via"}, "status": status, "by": by, "note": note, **({"via": via} if via else {})}
             line = render_line(new)
             if len(line) > MAX_LINE or _line(line) != new:  # over-long, or the note collides with the grammar
                 raise ValueError(f"the resolved line would be longer than {MAX_LINE} characters or would not read back "
@@ -369,6 +387,149 @@ def apply_resolve(file_path, d_id, status, by, note, force=False):
         _atomic_write(path, new)
     except (OSError, UnicodeError) as e:
         raise ValueError(f"cannot update the decisions file {path} ({e.__class__.__name__}: {e}); nothing written")
+
+
+# ---- `ado decisions <id> --sync`: an approver's `/approve D<n>` or `/reject D<n>` comment becomes the verdict (a local write) ---------------------------
+SYNC_RULES = ("not-posted", "edited", "posting-lossy", "posting-missing", "posting-mismatch", "posting-edited", "resolved-locally", "no-verdict", "older-than-posting",
+              "bad-comment-id", "up-to-date", "unwritable")  # why a line was left alone; fixed names, never ADO text
+SYNC_BY = "approver"  # the role written on a synced line (never a name)
+_VERDICT = {"approve": "validated", "reject": "rejected"}
+_MAX_FILE = 1 << 20
+
+
+def _sync_note(text):
+    """A comment's note as a safe `note:` value: addresses and mentions replaced, control characters, `<!--`, `-->`, fences and the grammar's own
+    separators (`·`, `→`, `->`) turned into blanks or dashes, whitespace collapsed, cut to MAX_NOTE. Never refused: the verdict must land with or without it."""
+    t = _scrub(text.replace("·", "-").replace("→", "-").replace("->", "-"))
+    return " ".join(_MARKUP.sub(" ", _CTRL.sub(" ", t)).split())[:MAX_NOTE]
+
+
+def _posting_rule(d, rows, excluded, client, story_id, edits):
+    """(rule, posting row): why the verdict on `d` cannot be read yet, else (None, the comment that posted it). The `posted:` marker is a claim in a
+    PR-controlled file: the comment it names must exist, start with the decisions marker, be by a kit identity (`excluded`), hold `d`'s line as it
+    reads NOW (so a line edited after posting, with its marker hash recomputed, is not the line the approver read) and be UNEDITED
+    (`approvals._edited`, the rule that applies to an approver's comment; `edits` caches it per comment): the agent can rewrite its own comment.
+    A line the comment cannot show exactly (`comment_line_is_lossy`) is `posting-lossy`."""
+    if not d["posted"]:
+        return "not-posted", None
+    if d["posted"]["hash"] != marker_hash(d):
+        return "edited", None
+    if comment_line_is_lossy(d):
+        return "posting-lossy", None
+    c = rows.get(str(d["posted"]["comment_id"]))
+    if c is None or approvals._order(c) is None:
+        return "posting-missing", None
+    lines = {" ".join(x.split()) for x in str(c.get("text") or "").splitlines()}
+    if (not str(c.get("text") or "").lstrip().startswith(MARKER) or str(c.get("author")) not in excluded
+            or " ".join(_comment_line(d)[0].split()) not in lines):
+        return "posting-mismatch", None
+    if str(c["id"]) not in edits:
+        edits[str(c["id"])] = approvals._edited(client, story_id, c)
+    return ("posting-edited", None) if edits[str(c["id"])] else (None, c)
+
+
+def _posting_key(post):
+    """The (created, id) key a verdict must beat: the posting's creation, or its last modification when that is later (an identical re-edit). None when
+    the modification date is present but unreadable."""
+    key, mod = approvals._order(post), post.get("modified")
+    if not mod:
+        return key
+    when = approvals._when(mod)
+    if when is None:
+        return None
+    return (when, (2, 0)) if when > key[0] else key
+
+
+def sync(md, comment_rows, approvers, excluded, client, story_id):
+    """(the new decisions file text, {"applied": [ids], "skipped": {id: rule}, "status": {id: validated|rejected}, "bad_newer": {id: n}}).
+    `comment_rows` is `comments.fetch(..., with_meta=True)` output (the caller refused a truncated or unreadable read); `approvers` and `excluded` are
+    lowercase identity GUIDs (`excluded`: `approvals.excluded`). For every `D<n>` line the newest VALID `/approve|/reject D<n>` (`approvals.newest`: the
+    guards and the grammar) is taken when
+    - the line's current text is the posted one (`_posting_rule`: the posting comment exists, is unedited, holds the line exactly) and the verdict
+      comment is NEWER than the posting comment (than its last modification when that is later), by created time then id (the server's, never the local clock);
+    - the line is open, or was itself written by a sync (it has `via`): a verdict a human wrote in a terminal is never overwritten, and a later valid
+      `/reject` overrides an earlier synced approve (and the other way round) through `resolve(..., via=<comment id>)`.
+    Every other line is listed in `skipped` with the rule (SYNC_RULES). `bad_newer[id]` counts malformed command lines by an approver newer than the
+    verdict (`newest`): the caller must show it next to the verdict; `masked` names the standing superseder of a decision the sync answered. A file that
+    does not parse, has an unclosed fence or comment or repeats an id raises ValueError (nothing is returned); so does an approver's valid verdict that
+    differs from the file's and cannot be written (the line has `via` but its evidence is gone: edited, posting-*; or the rewrite itself fails). Only the target lines change. No request except the guards' GETs."""
+    parsed = parse_decisions(md)
+    ids = [f"D{m.group(2)}" for ln in _visible(md)[0].splitlines() if (m := _CAND.match(ln))]
+    if parsed["unparsed"] or len(ids) != len(set(ids)) or not all(re.fullmatch(r"D[0-9]{1,9}", i) for i in ids):  # ids are printed: ASCII digits only
+        raise ValueError("the decisions file is malformed (a line that breaks the grammar, an unclosed fence or comment, or a repeated id); nothing written")
+    rows, skip, edits = {str(c.get("id")): c for c in comment_rows}, {str(e).lower() for e in excluded}, {}
+    applied, skipped, status, bad_newer, blocked, out = [], {}, {}, {}, [], md
+    for d in sorted((d for k in _STATES for d in parsed[k]), key=lambda d: int(d["id"][1:])):
+        i = d["id"]
+        rule, post = _posting_rule(d, rows, skip, client, story_id, edits)
+        if rule is None and d["status"] != "open" and not d.get("via"):
+            rule = "resolved-locally"
+        tally = {}
+        if rule:
+            skipped[i] = rule
+            if d.get("via"):  # a verdict a sync wrote stands on evidence that can no longer be read: a newer opposite command must not be dropped silently
+                win = approvals.newest(client, story_id, comment_rows, i, approvers, excluded, tally=tally)
+                bad_newer[i] = tally.get("bad_newer", 0)
+                if win is not None and _VERDICT.get(win["verb"]) not in (None, d["status"]):
+                    blocked.append(i)
+            continue
+        win = approvals.newest(client, story_id, comment_rows, i, approvers, excluded, tally=tally)
+        bad_newer[i] = tally.get("bad_newer", 0)
+        if win is None or win["verb"] not in _VERDICT:
+            skipped[i] = "no-verdict"
+            continue
+        key, cid, pkey = approvals._order({"date": win["created"], "id": win["id"]}), str(win["id"]), _posting_key(post)
+        if pkey is None:
+            skipped[i] = "posting-edited"
+        elif key is None or key <= pkey:
+            skipped[i] = "older-than-posting"
+        elif not _VIA.fullmatch(cid):
+            skipped[i] = "bad-comment-id"
+        elif d["status"] == _VERDICT[win["verb"]] and d.get("via") == cid:  # same verdict, same comment; a `via` that names another comment is rewritten
+            skipped[i] = "up-to-date"
+        else:
+            for note in (_sync_note(win["text"]), ""):  # a note that collides with the grammar must not stop the verdict
+                try:
+                    out = resolve(out, i, _VERDICT[win["verb"]], SYNC_BY, note, True, cid)
+                    applied.append(i)
+                    status[i] = _VERDICT[win["verb"]]
+                    break
+                except ValueError:
+                    continue
+            else:
+                skipped[i] = "unwritable"
+                blocked.append(i)  # an approver's verdict that cannot land is an error, never a quiet skip
+    if blocked:
+        raise ValueError(f"an approver's newer verdict cannot be written to the decisions file for {', '.join(blocked)}, so the earlier verdict would stand; "
+                         "fix the line (see docs/configuration.md, `ado decisions --sync`) and run it again; nothing written")
+    a, b = md.splitlines(keepends=True), out.splitlines(keepends=True)
+    if len(a) != len(b) or sum(x != y for x, y in zip(a, b)) != len(applied):
+        raise ValueError("the sync would change more than the target lines; nothing written")
+    after = parse_decisions(out)
+    return out, {"applied": applied, "skipped": skipped, "status": status, "bad_newer": bad_newer,
+                 "masked": {i: m for i in applied if (m := masked_by(after, i))}}
+
+
+def apply_sync(file_path, comment_rows, approvers, excluded, client, story_id):
+    """Run `sync` over the decisions file and write the result in place (unique temp file + os.replace, only when something changed). Refuses (ValueError,
+    nothing written) for a symlink, a file that is not a regular file or is over 1 MiB, a file that changed while the guards ran, or one that does not read
+    back as written (the old text is then put back). Returns the `sync` report."""
+    path = Path(file_path)
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > _MAX_FILE:
+            raise ValueError("the decisions file must be a regular file of at most 1 MiB, not a symlink; nothing written")
+        md = _read(path)
+        new, report = sync(md, comment_rows, approvers, excluded, client, story_id)
+        if new != md:
+            if _read(path) != md:
+                raise ValueError("the decisions file changed while syncing; nothing written, run it again")
+            _atomic_write(path, new)
+            if _read(path) != new:
+                _atomic_write(path, md)
+                raise ValueError("the decisions file did not read back as written; nothing recorded")
+    except (OSError, UnicodeError) as e:
+        raise ValueError(f"cannot update the decisions file ({e.__class__.__name__}); nothing written")
+    return report
 
 
 MAX_TEXT = 1500

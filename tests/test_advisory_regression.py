@@ -138,8 +138,16 @@ def compare(tmp_path):
         which argparse widens the option column (the `-h` and `--out` lines). Everything else is still compared byte for byte."""
         return (t.replace(" [--author-ids]", "").replace("  -h, --help    show", "  -h, --help  show").replace("  --out PATH    markdown", "  --out PATH  markdown")
                 .replace("  --author-ids  print `date | author id | first 40 scrubbed characters` per\n                comment (to find an approver's identity id); writes nothing\n", ""))
+    def decisions_help(t):
+        """P4-9 adds `--sync` to `decisions`. Remove exactly what it adds: its usage token (argparse re-wraps the two usage lines it sits in) and its four help
+        lines. Everything else is still compared byte for byte."""
+        return (t.replace("[--resolve D<n>] [--force] [--sync]\n                     [--validated | --rejected] [--by BY] [--note NOTE]",
+                          "[--resolve D<n>] [--force] [--validated | --rejected]\n                     [--by BY] [--note NOTE]")
+                .replace("  --sync              record the approvers' `/approve D<n>` and `/reject D<n>`\n                      comments of the story as verdicts in the decisions file\n"
+                         "                      (a local write, no ADO write; needs approvers on the\n                      target branch; with them, --resolve is refused)\n", ""))
     new = [(a, rc, usage(o), usage(e)) for a, rc, o, e in new]
     new = [(a, rc, comments_help(o), e) if a == ["comments", "--help"] else (a, rc, o, e) for a, rc, o, e in new]
+    new = [(a, rc, decisions_help(o), e) if a == ["decisions", "--help"] else (a, rc, o, e) for a, rc, o, e in new]
     diffs = [f"{a[0]}: rc {a[1]}->{b[1]}, stdout same {a[2] == b[2]}, stderr same {a[3] == b[3]}" for a, b in zip(old, new) if a != b]
     return len(argvs), diffs, old
 

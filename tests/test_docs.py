@@ -2385,7 +2385,7 @@ GLOSSARY = [
     ("Business rules", "opt-in"), ("Rules file", "opt-in"), ("Rules from:", "opt-in"), ("Rules reviewed:", "opt-in"),
     ("Workflow", "opt-in"),
     ("Approver", "team"), ("Approval mode", "opt-in"), ("Unattended", "opt-in"),
-    ("Approve and reject commands", "opt-in"), ("Approval comment", "opt-in"),
+    ("Approve and reject commands", "opt-in"), ("Approval comment", "opt-in"), ("Sync", "opt-in"),
 ]
 _GLOSSARY_ROW = re.compile(r"^\| \*\*(?P<c>[^*|]+)\*\* \| (?P<p>starter|team|strict|opt-in) \| (?P<d>[^|]+) \|$", re.M)
 
@@ -2488,3 +2488,22 @@ def test_comment_grammar_and_guards_are_documented():
         assert "createdOnBehalfOf" in _flat(doc) and "bypass" in _flat(doc).lower(), doc
     assert "(P4-8)" in _flat("CHANGELOG.md") and "`comment_mode_allowed(client)`" in _flat("CHANGELOG.md")
     assert "docs/configuration.md" in approvals.BYPASS_REFUSAL
+
+
+def test_decisions_sync_is_documented():
+    """P4-9: `ado decisions <id> --sync` and the `via` key are named where the approvers and the verdicts are, and `--resolve` says it is refused."""
+    from ado import decisions
+    cfg, readme, agents, hitl, log = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "CHANGELOG.md"))
+    for doc in (cfg, readme, agents, hitl, log):
+        assert "`ado decisions <id> --sync`" in doc or "`decisions <id> --sync`" in doc
+    for rule in decisions.SYNC_RULES:
+        assert f"`{rule}`" in cfg and f"`{rule}`" in readme and f"`{rule}`" in log, rule
+    for needle in ("local write only", "no preview and no gate", "never by the local clock", "bad_newer", "via: <comment id>", "refuses", "is **refused** (exit 2)",
+                   "resolved-locally", "capped at 300 characters", "Residuals", "`CommentsUnreadable`", "is **unedited**", "than its last modification",
+                   "naming only decision ids", "same notice as `--resolve`", "is now malformed"):
+        assert needle in cfg, needle
+    assert "local write" in hitl and "Free" in hitl and "Refused (exit 2) when `approvers` are configured" in hitl and "`bad_newer`" in hitl
+    assert "`--resolve` is refused" in agents and "`bad_newer`" in agents
+    assert "Refused (exit 2) when `approvers` are configured on the target branch" in readme and "(P4-9)" in log
+    assert "| **Sync** |" in _flat("docs/glossary.md")
+    assert "come later" not in agents.split("`ado decisions <id> --sync` acts on it")[0][-200:]
