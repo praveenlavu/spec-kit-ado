@@ -2385,6 +2385,7 @@ GLOSSARY = [
     ("Business rules", "opt-in"), ("Rules file", "opt-in"), ("Rules from:", "opt-in"), ("Rules reviewed:", "opt-in"),
     ("Workflow", "opt-in"),
     ("Approver", "team"), ("Approval mode", "opt-in"), ("Unattended", "opt-in"),
+    ("Approve and reject commands", "opt-in"), ("Approval comment", "opt-in"),
 ]
 _GLOSSARY_ROW = re.compile(r"^\| \*\*(?P<c>[^*|]+)\*\* \| (?P<p>starter|team|strict|opt-in) \| (?P<d>[^|]+) \|$", re.M)
 
@@ -2471,3 +2472,19 @@ def test_author_ids_is_documented_everywhere_the_approvers_are():
     for doc in ("README.md", "docs/configuration.md"):
         assert "typed" in _flat(doc) and "error: comments unreadable (<reason>)" in _flat(doc), doc
     assert "`comments.CommentsUnreadable`" in _flat("CHANGELOG.md") and "`comments.scrub_emails`" in _flat("CHANGELOG.md")
+
+
+def test_comment_grammar_and_guards_are_documented():
+    """P4-8: the command grammar, the guard names and the bypass refusal are named where the approvers are."""
+    from ado import approvals
+    cfg = _flat("docs/configuration.md")
+    for needle in ("/approve D<n>", "/reject D<n>: note", "/answer Q<n>: text", "<gate-id> <64 lowercase hex>", "first non-empty line", "cut to 300 characters",
+                   "createdOnBehalfOf", "System.AuthorizedAs", "Bypass rules on work item updates", "or when that cannot be read", "not tested with a second user",
+                   "a later invalid comment never cancels an earlier valid approval", "bad_newer", "capped, never refused", "exactly 1 to n"):
+        assert needle in cfg, needle
+    for rule in ("on-behalf", "excluded-author", "not-approver", "edited", "forged"):
+        assert f"`{rule}`" in cfg and f"`{rule}`" in _flat("CHANGELOG.md"), rule
+    for doc in ("README.md", "AGENTS.md", "rules/hitl.md"):
+        assert "createdOnBehalfOf" in _flat(doc) and "bypass" in _flat(doc).lower(), doc
+    assert "(P4-8)" in _flat("CHANGELOG.md") and "`comment_mode_allowed(client)`" in _flat("CHANGELOG.md")
+    assert "docs/configuration.md" in approvals.BYPASS_REFUSAL

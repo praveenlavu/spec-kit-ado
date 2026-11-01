@@ -382,7 +382,9 @@ In short:
   changes nothing until it is merged. The agent never runs as an admin or approver: it runs as a Contributor without the "Bypass rules on work item updates"
   permission, approvers are separate human identities (a separate account, no approver PAT in the agent's environment) and the CI service
   identity is never an approver. `ado doctor` fails when an approver is the token's own identity. In this build the keys are validated and
-  checked; the verbs that act on comment mode arrive later in 0.3.0. Details and residuals: [configuration](docs/configuration.md#approvers-and-comment-mode-the-recommended-setup).
+  checked, and the comment reader exists (`/approve D<n>`, `/reject D<n>: note`, `/answer Q<n>: text` or `/approve <gate> <64 hex>` as the first
+  non-empty line of an approver's unedited comment; quoted text, the agent's own comments and comments carrying `createdOnBehalfOf` never count; comment mode
+  is refused while the token identity can bypass rules or that cannot be read); the verbs that act on comment mode arrive later in 0.3.0. Details and residuals: [configuration](docs/configuration.md#approvers-and-comment-mode-the-recommended-setup).
 
 Three layers enforce this: `type: gate` steps in the `ado-lifecycle` workflow (preview,
 gate, apply for every board change and PR; command steps make no ADO writes there), dry-run-by-default batch verbs in the CLI, and the

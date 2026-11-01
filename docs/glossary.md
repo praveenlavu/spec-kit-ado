@@ -4,7 +4,7 @@ One sentence for every concept you meet, and the first setup profile that needs 
 `ado setup --profile`: `starter` (advisory, nothing blocks), `team` (the gate and the review can block) and `strict` (tests
 proven red before green, a verification record, refusals). `opt-in` marks a feature you switch on yourself in any profile.
 The 10-minute path is the [quickstart](quickstart.md); the keys are in [configuration](configuration.md). The keys for approvers and
-approval by a comment on the story exist; the verbs that act on them are added to the tool during 0.3.0.
+approval by a comment on the story exist, and so does the rule for which comment counts; the verbs that act on them are added to the tool during 0.3.0.
 
 | Concept | First needed in | What it is |
 |---|---|---|
@@ -39,5 +39,7 @@ approval by a comment on the story exist; the verbs that act on them are added t
 | **Rules reviewed:** | opt-in | The ledger header line, written by `ado rules <id> --confirm`, that records the fingerprint of each rule a human has confirmed. |
 | **Approver** | team | An ADO identity (a GUID) listed in `approvers` on the target branch, a separate human who is never the agent's token, the CI service identity or a kit posting identity. |
 | **Approval mode** | opt-in | `"approval": "comment"` on the target branch: gates and verdicts need a comment from an approver instead of a keypress at the terminal, while `"terminal"` stays the default. |
+| **Approve and reject commands** | opt-in | The first non-empty line of an approver's comment, such as `/approve D3` or `/reject D3: reason`, which counts only when the comment is unedited, unquoted and written by an approver in person. |
+| **Approval comment** | opt-in | A comment that counts as an approval because its author is in `approvers`, so the agent's own comments, quoted text and edited comments never do. |
 | **Unattended** | opt-in | The `unattended` object on the target branch, with `assume_after_hours` and `approval_requests`, for runs with nobody at a terminal. |
 | **Workflow** | opt-in | `ado-lifecycle`, the Spec Kit workflow that runs the whole lifecycle with a human gate before every ADO write. |

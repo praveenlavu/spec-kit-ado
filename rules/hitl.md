@@ -41,8 +41,10 @@ never from the working tree or a pull request: an edit in a branch changes nothi
 runs as an admin or approver: it runs as a Contributor without the "Bypass rules on work item updates" permission, approvers are separate human identities (no approver PAT in
 the agent's environment), and the CI service identity is never an approver. The agent never adds a token identity (its own or CI's) to
 `approvers` and never approves anything on a human's behalf. `ado doctor` fails when an approver is the identity of the token it runs with. In
-this build only the keys, `config.trusted`, the doctor row and the `ado setup --profile team|strict` prompt exist; the verbs that act on
-`approval: "comment"` come later in 0.3.0. See [docs/configuration.md](../docs/configuration.md#approvers-and-comment-mode-the-recommended-setup) for the setup and residuals.
+this build the keys, `config.trusted`, the doctor row, the `ado setup --profile team|strict` prompt and the comment reader (`ado.approvals`: the
+`/approve`, `/reject` and `/answer` grammar on the first non-empty line, quoted text ignored, and the guards that make a comment from the agent's token
+identity, a kit posting identity, a non-approver, an edited comment or one carrying `createdOnBehalfOf` count for nothing) exist; the verbs that act on
+`approval: "comment"` come later in 0.3.0. Comment mode is refused while the token identity can bypass work item rules, or when that cannot be read. See [docs/configuration.md](../docs/configuration.md#approvers-and-comment-mode-the-recommended-setup) for the setup and residuals.
 
 ## How to preview
 
