@@ -1020,6 +1020,42 @@ def test_sync_posting_comment_must_be_the_kits_and_hold_the_line(cfg):
         assert res["applied"] == [] and new == md and res["skipped"] == {"D1": rule}, raws
 
 
+def _hidden(html, line, wrap):
+    """The kit's comment with `line` (an escaped piece between `<br>`) wrapped in `wrap`."""
+    assert line in html
+    return html.replace(line, wrap.format(line))
+
+
+def test_sync_posting_markup_hides_nothing(cfg):
+    """P4-9c: a line the PO could not see (hidden in markup) never validates; a wrapper tag fails closed; only `<br>`-split lines are compared."""
+    md, html = _posted(S1)
+    line = html.split("<br>")[2]
+    for bad in (_hidden(html, line, '<span style="display:none">{}</span>'), f"<div>{html}</div>", f"<p>{html}</p>", f"<b>{html}</b>",
+                html + '<script>x</script>', html.replace("<br>", "<BR/>", 1) + "<i></i>"):
+        (new, res), _ = _sync(cfg, md, [_kit(bad), _vote(11, "/approve D1", T_V2)])
+        assert res["applied"] == [] and new == md and res["skipped"] == {"D1": "posting-markup"}, bad
+    # a plain `<br>` comment (any case, `<br/>`) still applies
+    for ok in (html, html.replace("<br>", "<BR/>"), html.replace("<br>", "<br />")):
+        (new, res), _ = _sync(cfg, md, [_kit(ok), _vote(11, "/approve D1", T_V2)])
+        assert res["applied"] == ["D1"], ok
+
+
+def test_sync_posting_lines_are_split_at_br_only(cfg):
+    md, html = _posted(S1)
+    line = html.split("<br>")[2]
+    marker, head = html.split("<br>")[:2]
+    fake = {
+        "newline-entity": "<br>".join([marker, head, "see&#10;" + line]),                # one piece, two lines when rendered
+        "raw-newline": "<br>".join([marker, head, "see\n" + line]),
+        "marker-not-first": "<br>".join([head, marker, line]),
+        "look-alike-marker": "<br>".join([marker.replace("decisions", "questions"), head, line]),
+        "marker-text-first": "<br>".join(["x " + marker, head, line]),
+    }
+    for name, bad in fake.items():
+        (new, res), _ = _sync(cfg, md, [_kit(bad), _vote(11, "/approve D1", T_V2)])
+        assert res["applied"] == [] and new == md and res["skipped"] == {"D1": "posting-mismatch"}, name
+
+
 def test_sync_skips_verdict_older_than_posting(cfg):
     md, html = _posted(S1, S2, S3)
     raws = [_kit(html, cid=10), _vote(8, "/approve D1", "2026-10-01T09:00:00Z"), _vote(9, "/approve D2", T_POST), _vote(11, "/approve D3", T_POST)]

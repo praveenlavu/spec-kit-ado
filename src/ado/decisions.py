@@ -390,7 +390,7 @@ def apply_resolve(file_path, d_id, status, by, note, force=False):
 
 
 # ---- `ado decisions <id> --sync`: an approver's `/approve D<n>` or `/reject D<n>` comment becomes the verdict (a local write) ---------------------------
-SYNC_RULES = ("not-posted", "edited", "posting-lossy", "posting-missing", "posting-mismatch", "posting-edited", "resolved-locally", "no-verdict", "older-than-posting",
+SYNC_RULES = ("not-posted", "edited", "posting-lossy", "posting-missing", "posting-mismatch", "posting-markup", "posting-edited", "resolved-locally", "no-verdict", "older-than-posting",
               "bad-comment-id", "up-to-date", "unwritable")  # why a line was left alone; fixed names, never ADO text
 SYNC_BY = "approver"  # the role written on a synced line (never a name)
 _VERDICT = {"approve": "validated", "reject": "rejected"}
@@ -409,7 +409,8 @@ def _posting_rule(d, rows, excluded, client, story_id, edits):
     PR-controlled file: the comment it names must exist, start with the decisions marker, be by a kit identity (`excluded`), hold `d`'s line as it
     reads NOW (so a line edited after posting, with its marker hash recomputed, is not the line the approver read) and be UNEDITED
     (`approvals._edited`, the rule that applies to an approver's comment; `edits` caches it per comment): the agent can rewrite its own comment.
-    A line the comment cannot show exactly (`comment_line_is_lossy`) is `posting-lossy`."""
+    A line the comment cannot show exactly (`comment_line_is_lossy`) is `posting-lossy`. The comment's RAW html is read with `comments.kit_lines` (the rule
+    questions use): any tag but `<br>` is `posting-markup`, and only `<br>`-split lines are compared."""
     if not d["posted"]:
         return "not-posted", None
     if d["posted"]["hash"] != marker_hash(d):
@@ -419,9 +420,12 @@ def _posting_rule(d, rows, excluded, client, story_id, edits):
     c = rows.get(str(d["posted"]["comment_id"]))
     if c is None or approvals._order(c) is None:
         return "posting-missing", None
-    lines = {" ".join(x.split()) for x in str(c.get("text") or "").splitlines()}
-    if (not str(c.get("text") or "").lstrip().startswith(MARKER) or str(c.get("author")) not in excluded
-            or " ".join(_comment_line(d)[0].split()) not in lines):
+    if not str(c.get("text") or "").lstrip().startswith(MARKER) or str(c.get("author")) not in excluded:
+        return "posting-mismatch", None
+    lines = {" ".join(x.split()) for x in comments.kit_lines(str(c.get("html") or ""), MARKER)}
+    if not lines:  # markup other than `<br>` (a line the PO may not see), a wrapper, a huge text: fail closed
+        return "posting-markup", None
+    if " ".join(_comment_line(d)[0].split()) not in lines:
         return "posting-mismatch", None
     if str(c["id"]) not in edits:
         edits[str(c["id"])] = approvals._edited(client, story_id, c)

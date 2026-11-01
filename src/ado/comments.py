@@ -263,3 +263,21 @@ def warn_unless_ignored(path):
         ignored = False
     if not ignored:
         print(f"warning: {path} is not under a gitignored directory; do not commit it", file=sys.stderr)
+
+
+MAX_KIT_TEXT = 1 << 18
+_TAGS = re.compile(r"<(?!br\s*/?>)", re.I)  # anything but `<br>`: the kit's own comment holds nothing else (`html.escape` does the rest)
+_BR = re.compile(r"<br\s*/?>", re.I)
+
+
+def kit_lines(raw, marker):
+    """The lines of one version of a comment the kit posted, or none: the lines are what lies between the kit's own `<br>`; any other markup (a line
+    hidden in a tag, a style or a script, which the PO would not see) makes the version count for nothing, a version whose first line does not start with
+    `marker` is not the kit's comment, a huge version is not read, and a piece of text that breaks into two lines by itself (`&#10;`, a raw newline)
+    is not a line (it would show as one line to the PO). The one rule for every kit comment read back (questions ages, decisions postings, the done-time check)."""
+    if len(raw) > MAX_KIT_TEXT or _TAGS.search(raw):
+        return frozenset()
+    parts = [dod._text(x).strip() for x in _BR.split(raw)]
+    if not parts[0].startswith(marker):
+        return frozenset()
+    return frozenset(x for x in parts if "\n" not in x)

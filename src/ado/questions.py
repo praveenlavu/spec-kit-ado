@@ -151,7 +151,7 @@ def apply_post(client, work_item_id, plan):
 SYNC_RULES = ("has-answer", "posting-lossy", "not-posted", "no-answer", "older-than-posting", "bad-comment-id")  # why an open question was left alone; fixed names
 MAX_LEDGER_LINE = 2000  # a question line longer than this is malformed: `_LINE` backtracks quadratically over a long blank run
 MAX_ANSWER = 500
-MAX_VERSIONS, MAX_VERSION_TEXT = 500, 1 << 18
+MAX_VERSIONS = 500
 E_MALFORMED = ("the ledger's section 2 is malformed (a missing section, an unclosed fence or comment, a repeated or non-ASCII question id, or a question line "
                f"over {MAX_LEDGER_LINE} characters); nothing written")
 E_AGE = "question age cannot be established from the server"
@@ -159,7 +159,6 @@ E_TIME = "the server time cannot be established, so no question can be due under
 _CAND = re.compile(r"\s*(?:[-*+]\s+)?\[[ xX]\]\s*Q\d")
 _CID = re.compile(r"[1-9][0-9]{0,11}")  # a comment id: ASCII digits only, no leading zero
 _ID = re.compile(r"Q[0-9]{1,9}")
-_TAGS = re.compile(r"<(?!br\s*/?>)", re.I)  # anything but `<br>`: the kit's own comment holds nothing else (`html.escape` does the rest)
 _SYNCED = re.compile(r"\(PO comment ([0-9]+)\)$")  # the provenance a sync writes at the end of an answer
 _PO_COMMENT = re.compile(r"\bPO\s+comment\b", re.I)
 _SEPARATORS = re.compile(r"->|[·|→]")
@@ -179,22 +178,6 @@ def check_ledger(md):
     if parsed["unparsed"] or len(ids) != len(set(ids)) or not all(_ID.fullmatch(i) for i in ids):
         raise ValueError(E_MALFORMED)
     return parsed
-
-
-_BR = re.compile(r"<br\s*/?>", re.I)
-
-
-def _kit_lines(raw):
-    """The lines of one version of the kit's questions comment, or none: the lines are what lies between the kit's own `<br>`; any other markup (a line
-    hidden in a tag, a style or a script, which the PO would not see) makes the version count for nothing, a version whose first line does not start with the
-    questions marker is not the kit's comment, a huge version is not read, and a piece of text that breaks into two lines by itself (`&#10;`, a raw newline)
-    is not a line (it would show as one line to the PO)."""
-    if len(raw) > MAX_VERSION_TEXT or _TAGS.search(raw):
-        return frozenset()
-    parts = [_text(x).strip() for x in _BR.split(raw)]
-    if not parts[0].startswith(MARKER):
-        return frozenset()
-    return frozenset(x for x in parts if "\n" not in x)
 
 
 def ages(client, story_id, open_questions, rows):
@@ -242,7 +225,7 @@ def ages(client, story_id, open_questions, rows):
         raise fail("versions-shape") from None
     if not 1 <= len(vs) <= MAX_VERSIONS or [v["version"] for v in vs] != list(range(1, len(vs) + 1)) or comment.get("version") != len(vs):
         raise fail("versions-shape")
-    held = [_kit_lines(v["text"]) for v in vs]
+    held = [comments.kit_lines(v["text"], MARKER) for v in vs]
     out = {}
     for qid, line in want.items():
         i = len(vs)

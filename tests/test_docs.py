@@ -2507,6 +2507,7 @@ def test_decisions_sync_is_documented():
     assert "Refused (exit 2) when `approvers` are configured on the target branch" in readme and "(P4-9)" in log
     assert "| **Sync** |" in _flat("docs/glossary.md")
     assert "come later" not in agents.split("`ado decisions <id> --sync` acts on it")[0][-200:]
+    assert "`posting-markup`" in cfg and "comments.kit_lines" in cfg and "`posting-markup`" in log and "P4-9c" in log and "same helper" in log
 
 
 def test_questions_sync_is_documented():
