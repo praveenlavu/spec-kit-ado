@@ -772,7 +772,7 @@ def test_gate_open_decisions_documented():
     assert "`open_decisions` | present only when `Decisions_<id>.md` exists and has at least one `D<n>` line" in gate
     assert "The `- open decisions:` line is written only when the story has decisions in `Decisions_<id>.md`" in gate
     assert gate.split("### Gate — <YYYY-MM-DD>", 1)[1].count("- open decisions: <none | D ids>") == 1
-    assert "Valid names are exactly the six below" in cfg and "`open_decisions` — the story's decisions file `<dod_path>/Decisions_<id>.md`" in cfg
+    assert "Valid names are exactly the seven below" in cfg and "`open_decisions` — the story's decisions file `<dod_path>/Decisions_<id>.md`" in cfg
     assert "**only when that file has at least one `D<n>` line**" in cfg
     for f in ("README.md", "docs/configuration.md"):
         assert "`commits_without_story`, `open_decisions`" in _flat(f), f
@@ -1856,7 +1856,7 @@ def test_confirming_rules_doc_pins():
                  "never rule text", "`not confirmed: nothing was approved`", "Input typed before the prompt is discarded", "read again and the code recomputed",
                  "the file's own line terminator (LF or CRLF, taken from its first line) is kept", "atomic rename", "a symlinked or hard-linked ledger", "`written: false`",
                  "Process enforcement, not a security boundary", "can read the code and type it", "can edit or delete the `Rules reviewed:` line by hand",
-                 "the ledger diff in the pull request is the only visible trace", "arrives with the gate task (P3-8)"):
+                 "the ledger diff in the pull request is the only visible trace", "`rule_coverage` check compares the recorded hashes with the files"):
         assert word in text, word
     hitl = _flat("rules/hitl.md")
     for word in ("`ado rules <id> --confirm`", "Re-confirming is human only", "unless stdin and stdout are both terminals", "never the rule text",
@@ -1865,3 +1865,24 @@ def test_confirming_rules_doc_pins():
     assert "`rules <id> --confirm` is local only" in _flat("README.md") and "docs/business-rules.md#confirming-rules" in _flat("README.md")
     assert _flat("README.md").count("See [business rules](docs/business-rules.md#pulling-rules) and [confirming rules]") == 1
     assert "Never run it for the human" in _flat("AGENTS.md") and "`ado rules <story id> --confirm` (P3-7)" in _flat("CHANGELOG.md")
+
+
+def test_gate_rule_coverage_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("## The gate check", "`rule_coverage`", "`--offline` changes nothing", "no rules file is read", "In CI with `--base REF` the config (rules included) comes from the target branch",
+                 "still judged with rules enabled", "it is part of the floor", "blocks only when you list it", "process enforcement, not a security boundary",
+                 "A row with an absent test never covers, even when another row is mapped", "every one of its rows has a found test", "an extra row (`AC-99`, `AC-0`)",
+                 "one `?` for every malformed `BR-` token", "only the count is shown", "not confirmed yet", "an excluded rule included", "the level comes from the fixed key",
+                 "`header`: `rules-from`", "`ado dod <story id> --refresh`", "`missing`: a work item id on `Rules from:`", "`format`: a work item id whose file has another `rules-format`",
+                 "never rule text, never the text of a tag or a problem line", "its own line (not the AC drift line)", "`rule_drift`", "later tasks",
+                 "a local `ado gate` reads your working tree (uncommitted edits included), and the CI gate reads what its checkout holds",
+                 "(offline limits)", "edits a rule's text in its file, the heading hash and the recorded `Rules reviewed:` hash together passes this check",
+                 "trimming `Rules from:` and dropping the tags passes too (also P3-9)", "recorded ids whose work item has left `Rules from:` are not judged"):
+        assert word in text, word
+    cfg = _flat("docs/configuration.md")
+    for word in ("`rule_coverage` — business rules (`rules.enabled`)", "part of the floor", "in advisory mode it blocks only when listed here", "`open_decisions`, `rule_coverage`)"):
+        assert word in cfg, word
+    for f in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
+        assert "`Business rules` line" in _flat(f) and "`rule_coverage`" in _flat(f), f
+    assert "`rule_coverage`" in _flat("README.md") and "`rules` (only when `rules.enabled`" in _flat("AGENTS.md")
+    assert "Gate check `rule_coverage` (P3-8)" in _flat("CHANGELOG.md")

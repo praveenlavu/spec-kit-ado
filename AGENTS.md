@@ -98,7 +98,7 @@ By hand, one command at a time (the primary path):
    `describe > it`), the commit or PR as evidence, and red → green status. Every AC needs
    at least one real, asserting, passing test.
 7. `speckit.ado.gate` and `speckit.ado.review` (eight planes; the AC fidelity plane runs only in strict mode) — results go to ledger section 4. The gate
-   also reports `open_questions`, `open_decisions` (only when `Decisions_<id>.md` has `D<n>` lines) and `commits_without_story` (commits in `<base>..HEAD` without `AB#<id>`;
+   also reports `open_questions`, `open_decisions` (only when `Decisions_<id>.md` has `D<n>` lines), `rules` (only when `rules.enabled`: the `rule_coverage` check, local) and `commits_without_story` (commits in `<base>..HEAD` without `AB#<id>`;
    `--base` bounds it).
 8. `speckit.ado.pr` — PR body with `AB#<id>`; opens after a yes. It is refused while `tasks.md` has
    unticked tasks; only if the human says yes to a draft does it carry `--allow-incomplete`. On Azure Repos,

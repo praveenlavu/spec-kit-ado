@@ -119,7 +119,7 @@ Secrets: `ADO_TOKEN` (required), `TOOLKIT_READ_TOKEN` (optional; falls back to
 
 - To make the gate block a PR, list checks in `gate.block` in `ado.config.json` and mark
   the `gate` job as a required status check. Without `gate.block` it only comments. Valid names are listed in
-  [configuration.md](configuration.md); the comment gains an `Open decisions` line when `Decisions_<id>.md` has `D<n>` decision lines.
+  [configuration.md](configuration.md); the comment gains an `Open decisions` line when `Decisions_<id>.md` has `D<n>` decision lines, and a `Business rules` line when `rules.enabled` is true and the `rule_coverage` check has findings (rule ids, work item ids and counts only; local, so it needs no extra token scope). With `--base` the target branch's strict config decides whether rules are enabled, so a PR cannot switch the check off.
 - PR titles, bodies and branch names reach the scripts only through environment
   variables, never interpolated into the script text.
 - The PR comment is the markdown that `ado gate --summary-out gate.md` writes: blocking

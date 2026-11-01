@@ -1,9 +1,11 @@
 import re
+import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from ado.config import Config
 from ado.dod import SECTION2, ac_hash, render_dod
 from ado.gate import (DEFAULT_TESTS, check_commits, check_drift, check_traceability, discover_tests,
                       missing_evidence, parse_section3, render_summary, run_gate, scan_assertions,
@@ -920,3 +922,337 @@ def test_open_decisions_use_the_effective_set_and_fail_closed_on_a_bad_supersede
     bad = _gd("- [ ] D1: supersedes D2: x → _(open)_ · kind: decision · why: w", _D_REJ.replace("D3", "D2"), block=["open_decisions"])
     assert "?" in bad["open_decisions"] and bad["blocking"] is True  # a lower-id superseder is invalid: fail closed
     assert "?" in _gd("- [ ] D5: supersedes D9: x → _(open)_ · kind: decision · why: w")["open_decisions"]
+
+
+# ---- P3-8: the `rule_coverage` check (local, from committed files); the JSON key exists only when rules are enabled ----
+from ado import decisions, dod, rules  # noqa: E402
+
+_AC3 = "<ul><li>earn points</li><li>gift cards earn nothing</li><li>show the balance</li></ul>"
+_ROW0 = "| AC-1 | _(what it must do)_ | _(test IDs, …)_ | _(commit / PR)_ | _(red→green)_ |"
+
+
+def _rules_md(wid, *specs, extra=""):
+    """A rules file as `ado rules` writes it: (n, status) per rule, every label present (no warnings)."""
+    html = "<p>Business rules</p>" + "".join(
+        f"<p>Rule {n}: Customers earn {n} points.</p><p>Why: w</p><p>Example: e</p><p>Owner: Loyalty product owner</p><p>Status: {s}</p>"
+        for n, s in specs) + extra
+    lines, probs = rules.normalise(html)
+    return rules.render_file({"id": wid, "fields": {"System.Title": "Points", "System.WorkItemType": "Feature"}},
+                             rules.parse(lines, wid, probs), "contoso", "Fabrikam", "2026-11-03", "0.3.0")
+
+
+F1201 = _rules_md(1201, (1, "approved"), (2, "approved"), (3, "draft"), (4, "retired"))
+F1200 = _rules_md(1200, (1, "approved"))
+H = {r: v["hash"] for md, w in ((F1201, 1201), (F1200, 1200)) for r, v in rules.parse_file(md, w)["rules"].items()}
+ALL = f"BR-1200-1@{H['BR-1200-1']}, BR-1201-1@{H['BR-1201-1']}, BR-1201-2@{H['BR-1201-2']}"
+
+
+def _files(**md):
+    return {int(k[1:]): rules.parse_file(v, int(k[1:])) for k, v in md.items() if v is not None}
+
+
+def _gl(*rows, frm=(1201,), reviewed="", ac=_AC3):
+    """A ledger: three AC lines, the given section 3 rows, the header lines `Rules from:` (None: absent) and `Rules reviewed:`."""
+    md = render_dod(_wi(ac), "contoso", "Fabrikam", synced="2026-07-14", rules_from=None if frm is None else list(frm), rules_reviewed=reviewed)
+    assert _ROW0 in md
+    return md.replace(_ROW0, "\n".join(rows))
+
+
+ROWS = ("| AC-1 | earn points [BR-1201-1] | FooTest.testX | abc | green |",
+        "| AC-2 | gift cards earn nothing [BR-1201-2] | FooTest.testX | | green |",
+        "| AC-3 | show the balance | FooTest.testX | | green |")
+
+
+def _cov(ledger, files=None, decisions_md="", phase="pr", sources=SOURCES):
+    return rules.coverage(ledger, sources, _files(f1201=F1201, f1200=F1200) if files is None else files,
+                          dod.ledger_rules_from(ledger), dod.ledger_rules_reviewed(ledger), decisions.parse_decisions(decisions_md), phase)
+
+
+def _clean():
+    return _gl(*ROWS, reviewed=ALL.replace(f", BR-1200-1@{H['BR-1200-1']}", "").replace(f"BR-1200-1@{H['BR-1200-1']}, ", ""))
+
+
+def test_coverage_keys_and_a_clean_story():
+    c = _cov(_clean())
+    assert list(c) == ["in_scope", "covered", "excluded", "uncovered", "unknown", "changed", "problems", "missing", "format", "header"]
+    assert c["in_scope"] == c["covered"] == ["BR-1201-1", "BR-1201-2"]  # the draft and the retired rule are never in scope
+    assert not any(c[k] for k in ("excluded", "uncovered", "unknown", "changed", "problems", "missing", "format", "header"))
+
+
+def test_uncovered_rule_untagged_or_tagged_on_an_ac_with_no_present_test():
+    c = _cov(_gl(ROWS[0], "| AC-2 | gift cards earn nothing | FooTest.testX | | |", ROWS[2], reviewed=_clean().split("reviewed:** ")[1].split("\n")[0]))
+    assert c["covered"] == ["BR-1201-1"] and c["uncovered"] == ["BR-1201-2"]
+    gone = _cov(_gl(ROWS[0], "| AC-2 | gift cards [BR-1201-2] | Gone.test | | |", ROWS[2], reviewed=ALL.split(", BR-1201-2")[0] + f", BR-1201-2@{H['BR-1201-2']}"))
+    assert gone["uncovered"] == ["BR-1201-2"]
+    empty = _cov(_gl(ROWS[0], "| AC-2 | gift cards [BR-1201-2] |  | | |", ROWS[2]))
+    assert "BR-1201-2" in empty["uncovered"]
+
+
+def test_extra_ac_row_does_not_cover():
+    c = _cov(_gl(ROWS[0], "| AC-99 | extra [BR-1201-2] | FooTest.testX | | |", ROWS[2], "| AC-0 | zero [BR-1201-2] | FooTest.testX | | |",
+                 "| AC-4 | beyond the three [BR-1201-2] | FooTest.testX | | |", "| AC-01 | not AC-1 [BR-1201-2] | FooTest.testX | | |"))
+    assert c["covered"] == ["BR-1201-1"] and c["uncovered"] == ["BR-1201-2"]
+    assert not c["unknown"]  # a known id cited on a row that does not count is not an unknown id
+
+
+def test_row_with_absent_test_does_not_cover_even_if_other_row_mapped():
+    # AC-2 is mapped but carries no tag; the tag sits on AC-3 whose test does not exist
+    c = _cov(_gl(ROWS[0], "| AC-2 | y | FooTest.testX | | |", "| AC-3 | z [BR-1201-2] | Gone.test | | |"))
+    assert c["uncovered"] == ["BR-1201-2"]
+    # a duplicate AC-1 row: the tag is on the row whose test is absent; the other AC-1 row is mapped. tags() merges the two rows, so any absent duplicate disqualifies
+    dup = _cov(_gl("| AC-1 | a | FooTest.testX | | |", "| AC-1 | a [BR-1201-1] [BR-1201-2] | Gone.test | | |", "| AC-2 | b | FooTest.testX | | |"))
+    assert dup["uncovered"] == ["BR-1201-1", "BR-1201-2"]
+    # one of several tests present is enough for a row
+    ok = _cov(_gl("| AC-1 | a [BR-1201-1] | Gone.test, FooTest.testX | | |", "| AC-2 | b [BR-1201-2] | FooTest.testX | | |"))
+    assert ok["covered"] == ["BR-1201-1", "BR-1201-2"]
+
+
+def test_rule_in_a_fence_or_comment_row_is_not_cited():
+    led = _gl(ROWS[0], "```", "| AC-2 | hidden [BR-1201-2] | FooTest.testX | | |", "```", "<!--", "| AC-3 | c [BR-1201-2] | FooTest.testX | | |", "-->")
+    assert _cov(led)["uncovered"] == ["BR-1201-2"]
+
+
+def test_unknown_ids_are_ids_or_a_question_mark_never_the_token_text():
+    c = _cov(_gl(ROWS[0], "| AC-2 | b [BR-1201-2] [BR-1201-9] [BR-777-1] [BR-1201-0] xBR-1-1y | FooTest.testX | | |", ROWS[2]))
+    assert c["unknown"] == ["BR-777-1", "BR-1201-9", "?", "?"]  # ids by (work item, number), then one `?` per malformed token
+    assert "BR-1201-0" not in repr(c) and "xBR" not in repr(c)
+    # draft and retired rules exist in the file: citing them is not an unknown id, and not a coverage claim
+    d = _cov(_gl(ROWS[0], ROWS[1], "| AC-3 | c [BR-1201-3] [BR-1201-4] | FooTest.testX | | |"))
+    assert d["unknown"] == [] and d["in_scope"] == ["BR-1201-1", "BR-1201-2"]
+
+
+def test_changed_unconfirmed_and_recorded_hash_differs():
+    c = _cov(_gl(*ROWS))  # no Rules reviewed: line: no confirmed hash at all
+    assert c["changed"] == ["BR-1201-1", "BR-1201-2"]
+    other = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}, BR-1201-2@deadbeef"))
+    assert other["changed"] == ["BR-1201-2"]
+    none = _cov(_gl(*ROWS, reviewed="none"))
+    assert none["changed"] == ["BR-1201-1", "BR-1201-2"]
+    part = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}"))
+    assert part["changed"] == ["BR-1201-2"]  # a rule in scope with no recorded hash is unconfirmed
+
+
+def test_changed_judges_every_recorded_id_that_is_still_approved_in_scope_or_not():
+    ex = decisions.render_file(1001) + _excl("BR-1201-2") + "\n"
+    led = _gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}, BR-1201-2@deadbeef")
+    c = _cov(led, decisions_md=ex)
+    assert c["excluded"] == ["BR-1201-2"] and "BR-1201-2" not in c["in_scope"]
+    assert c["changed"] == ["BR-1201-2"]  # excluded, but its recorded hash differs from the approved rule in the file
+    ok = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}, BR-1201-2@{H['BR-1201-2']}"), decisions_md=ex)
+    assert ok["changed"] == []
+    # a recorded id whose rule is a draft in the file now is not judged here (a status change is the live drift check's)
+    drafted = _cov(_gl(*ROWS, reviewed=f"BR-1201-1@{H['BR-1201-1']}, BR-1201-3@deadbeef"))
+    assert "BR-1201-3" not in drafted["changed"]
+
+
+def _excl(*ids, status="open", posted=True, n=3):
+    d = {"id": f"D{n}", "kind": "decision", "text": "out of scope: " + ", ".join(ids), "why": "the Loyalty product owner agreed", "status": status,
+         "by": "" if status == "open" else "Loyalty product owner", "note": "", "posted": None, "used": ""}
+    if posted:
+        d["posted"] = {"comment_id": 7, "hash": decisions.marker_hash(d)}
+    return decisions.render_line(d)
+
+
+def test_exclusions_count_only_when_posted_and_not_rejected_and_phase_fits():
+    led = _gl(ROWS[0], ROWS[2], reviewed=f"BR-1201-1@{H['BR-1201-1']}, BR-1201-2@{H['BR-1201-2']}")
+    dec = lambda *lines: decisions.render_file(1001) + "\n".join(lines) + "\n"  # noqa: E731
+    posted = _cov(led, decisions_md=dec(_excl("BR-1201-2")))
+    assert posted["excluded"] == ["BR-1201-2"] and posted["uncovered"] == [] and posted["in_scope"] == ["BR-1201-1"]
+    assert _cov(led, decisions_md=dec(_excl("BR-1201-2", posted=False)))["uncovered"] == ["BR-1201-2"]  # unposted: not counted
+    assert _cov(led, decisions_md=dec(_excl("BR-1201-2", status="rejected")))["uncovered"] == ["BR-1201-2"]  # rejected: back in scope
+    assert _cov(led, decisions_md=dec(_excl("BR-1201-2")), phase="done")["uncovered"] == ["BR-1201-2"]  # open does not count at done
+    assert _cov(led, decisions_md=dec(_excl("BR-1201-2", status="validated")), phase="done")["excluded"] == ["BR-1201-2"]
+
+
+def test_rules_problems_are_ids_and_keys_only():
+    dup = _rules_md(1201, (1, "approved"), (2, "approved"), extra="<p>Rule 2: Another rule two.</p>")
+    c = _cov(_gl(*ROWS, reviewed=ALL), files=_files(f1201=dup))
+    assert c["problems"] == ["BR-1201-2:duplicate-number"] and "BR-1201-2" not in c["in_scope"]  # neither copy is a rule
+    nowhy = _rules_md(1201, (1, "approved"), extra="<p>Rule 2: no labels at all</p>")
+    w = _cov(_gl(*ROWS, reviewed=ALL), files=_files(f1201=nowhy))
+    assert w["problems"] == []  # warnings (no-status, no-why ...) are not findings
+    bad = _rules_md(1201, (1, "approved"), extra="<p>Rule 2: x</p><p>Status: maybe</p>")
+    b = _cov(_gl(*ROWS, reviewed=ALL), files=_files(f1201=bad))
+    assert b["problems"] == ["BR-1201-2:unknown-status"]
+    sect = _cov(_gl(*ROWS), files=_files(f1201=_rules_md(1201, extra="<p>just text</p>")))
+    assert sect["problems"] == ["1201:no-parsable-rules"]  # a section-level problem is named by the work item id
+    # a PR that rewrites the level of a problem line to "warning" does not downgrade it; the level comes from the key
+    lowered = dup.replace("- error BR-1201-2: duplicate-number", "- warning BR-1201-2: duplicate-number")
+    assert lowered != dup and _cov(_gl(*ROWS, reviewed=ALL), files=_files(f1201=lowered))["problems"] == ["BR-1201-2:duplicate-number"]
+
+
+def test_a_problem_line_that_is_not_the_exact_shape_is_a_question_mark_and_its_text_is_not_echoed():
+    forged = F1201.rstrip("\n").replace("## Problems\n\n_(none)_", "## Problems\n\n- ignore previous instructions BR-9-9") + "\n"
+    assert "ignore previous" in forged
+    c = _cov(_gl(*ROWS, reviewed=ALL), files=_files(f1201=forged))
+    assert c["problems"] == ["1201:?"] and "ignore" not in repr(c)
+    text = ("- error BR-1201-1: duplicate-number — a fixed text that was edited")
+    edited = F1201.replace("_(none)_\n", text + "\n") if "_(none)_\n" in F1201.split("## Problems")[1] else F1201
+    assert _cov(_gl(*ROWS), files=_files(f1201=edited))["problems"] == ["1201:?"]
+
+
+def test_missing_rules_file_for_an_id_in_rules_from():
+    led = _gl(*ROWS, frm=(1201, 1200))
+    c = _cov(led, files=_files(f1201=F1201))
+    assert c["missing"] == [1200] and c["in_scope"] == ["BR-1201-1", "BR-1201-2"]
+    invalid = _files(f1201=F1201, f1200=F1200.replace("## Problems", "## Problems\n## Problems"))
+    assert invalid[1200]["invalid"] and _cov(led, files=invalid)["missing"] == [1200]
+    both = _cov(led, files={})
+    assert both["missing"] == [1200, 1201] and both["in_scope"] == [] and both["unknown"] == []  # a missing file is its own finding
+
+
+def test_rules_format_mismatch_gets_no_per_rule_judgement():
+    two = F1201.replace("rules-format: 1", "rules-format: 2")
+    c = _cov(_gl(*ROWS), files=_files(f1201=two))
+    assert c["format"] == [1201] and c["in_scope"] == [] and c["uncovered"] == [] and c["changed"] == [] and c["unknown"] == [] and c["problems"] == []
+    nohdr = F1201.replace("rules-format: 1 · ", "")
+    assert _cov(_gl(*ROWS), files=_files(f1201=nohdr))["format"] == [1201]  # a malformed header line (format None) is a mismatch too
+
+
+def test_header_findings():
+    assert _cov(_gl(*ROWS, frm=None))["header"] == ["rules-from"]  # absent: fix with `ado dod <id> --refresh`
+    assert _cov(_gl(*ROWS, frm=None))["in_scope"] == []
+    bad = _gl(*ROWS).replace("- **Rules from:** 1201", "- **Rules from:** 1201,1200")
+    assert dod.ledger_rules_from(bad)["valid"] is False and _cov(bad)["header"] == ["rules-from"]
+    assert _cov(_gl(*ROWS, frm=()))["header"] == []  # `none` is valid: the story has no ancestors with rules
+    badrev = _gl(*ROWS, reviewed=ALL).replace("@" + H["BR-1201-1"], "@XYZ")
+    assert _cov(badrev)["header"] == ["rules-reviewed"]
+    both = _gl(*ROWS, frm=None, reviewed=ALL).replace("- **Rules reviewed:** ", "- **Rules reviewed:**  ")
+    assert _cov(both)["header"] == ["rules-from", "rules-reviewed"]
+
+
+def test_hostile_files_and_ledger_fail_closed_not_open():
+    # body edited under an unchanged heading: the rule stays in scope and is `changed`
+    edited = F1201.replace("- Rule: Customers earn 1 points.", "- Rule: Customers earn nothing.")
+    assert edited != F1201
+    c = _cov(_gl(*ROWS, reviewed=ALL), files=_files(f1201=edited))
+    assert c["changed"] == ["BR-1201-1"] and "BR-1201-1" in c["in_scope"]
+    # status edited to draft under the old hash: still in scope, still reported
+    down = F1201.replace(f"### BR-1201-2 · approved · {H['BR-1201-2']}", f"### BR-1201-2 · draft · {H['BR-1201-2']}")
+    d = _cov(_gl(*ROWS, reviewed=ALL), files=_files(f1201=down))
+    assert d["changed"] == ["BR-1201-2"] and "BR-1201-2" in d["in_scope"]
+
+
+# ---- run_gate: the JSON key, the finding list, the summary line ----
+def _rg(ledger, files=None, block=(), decisions_md=None, **kw):
+    return run_gate(ledger, SOURCES, {}, None, block=block, decisions_md=decisions_md,
+                    rules_ctx={"files": _files(f1201=F1201, f1200=F1200) if files is None else files}, **kw)
+
+
+def test_rules_key_and_findings_only_with_a_rules_ctx():
+    led = _clean()
+    off = run_gate(led, SOURCES, {}, None)
+    assert set(off) == V02_KEYS and "rules" not in off
+    on = _rg(led)
+    assert set(on) == V02_KEYS | {"rules"} and on["rules"] == _cov(led) and on["blocking"] is False  # advisory: reported, not blocking
+    assert on["rules"]["covered"] == ["BR-1201-1", "BR-1201-2"]
+
+
+def test_disabled_gate_json_key_set_equals_baseline():
+    led = _gl(*ROWS, frm=None)  # a header problem exists, but rules are not enabled: no key, no line, no question
+    asked = []
+
+    class _Block:
+        def __contains__(self, key):
+            asked.append(key)
+            return False
+    off = run_gate(led, SOURCES, {}, None, block=_Block())
+    assert set(off) == V02_KEYS and "rule_coverage" not in asked and "rules" not in off
+    assert "Business rules" not in render_summary(off) and "rule" not in render_summary(off).lower().replace("traceability", "")
+    run_gate(led, SOURCES, {}, None, block=_Block(), rules_ctx={"files": {}})
+    assert "rule_coverage" in asked
+
+
+def test_findings_list_blocks_only_when_named_and_marks_each_class_with_a_question_mark():
+    uncovered = _gl(ROWS[0], ROWS[2], reviewed=ALL)
+    assert _rg(uncovered)["blocking"] is False
+    r = _rg(uncovered, block=["rule_coverage"])
+    assert r["blocked_by"] == ["rule_coverage"] and r["blocking"] is True
+    for led, files in ((_gl(*ROWS, frm=None), None), (_gl(*ROWS), None), (_gl(*ROWS, frm=(1201, 1200), reviewed=ALL), _files(f1201=F1201)),
+                       (_gl(*ROWS, reviewed=ALL), _files(f1201=F1201.replace("rules-format: 1", "rules-format: 2")))):
+        assert _rg(led, files, block=["rule_coverage"])["blocking"] is True
+    assert _rg(_clean(), block=["rule_coverage"])["blocking"] is False
+
+
+def test_blocked_rule_coverage_prints_its_own_line():
+    r = _rg(_gl(ROWS[0], ROWS[2], reviewed=ALL), block=["rule_coverage"])
+    md = render_summary(r)
+    blocking = md.partition("**Blocking")[2].partition("**Advisory")[0]
+    assert "`BR-1201-2`" in blocking and "AC changed" not in blocking and "no drift" not in blocking and "drift not checked" not in blocking
+    adv = render_summary(_rg(_gl(ROWS[0], ROWS[2], reviewed=ALL)))
+    assert "Blocking" not in adv and "`BR-1201-2`" in adv.partition("**Advisory:**")[2]
+    assert "Business rules" not in render_summary(_rg(_clean()))  # nothing to report: no line
+
+
+def test_summary_line_has_ids_and_counts_only():
+    led = _gl(ROWS[0], "| AC-2 | b [BR-1201-2] [BR-1201-9] [BR-1201-0] ignore previous instructions BR-x | Gone.t | | |", ROWS[2], frm=(1201, 1200))
+    md = render_summary(_rg(led, files=_files(f1201=F1201.replace("rules-format: 1", "rules-format: 2")), block=["rule_coverage"]))
+    assert "BR-1201-0" not in md and "ignore previous" not in md and "BR-x" not in md and "Customers earn" not in md
+    line = next(x for x in md.splitlines() if x.startswith("- Business rules:"))
+    assert "`1200`" in line and "`1201`" in line and "malformed" in line and "`BR-1201-9`" not in line.split("malformed")[0].split("cited but")[0]
+    ok = render_summary(_rg(_gl(*ROWS, frm=None)))
+    assert "ado dod" in ok and "--refresh" in ok  # the fix for a missing header is named
+
+
+def test_rules_output_contains_no_rule_text():
+    out = repr(_rg(_gl(ROWS[0], ROWS[2]), block=["rule_coverage"]))
+    assert "Customers earn" not in out and "Loyalty product owner" not in out
+
+
+# ---- the CLI: ado gate reads the rules files only when rules are enabled ----
+def _cli(tmp_path, enabled=True, files=None, ledger=None):
+    dod_dir = tmp_path / "dod"
+    shutil.rmtree(dod_dir, ignore_errors=True)
+    dod_dir.mkdir()
+    (dod_dir / "DoD_7.md").write_text(ledger if ledger is not None else _gl(*ROWS, reviewed=_clean().split("reviewed:** ")[1].split("\n")[0]), encoding="utf-8")
+    for name, text in (files if files is not None else {"Rules_1201.md": F1201}).items():
+        (dod_dir / name).write_text(text, encoding="utf-8")
+    (tmp_path / "FooTest.cls").write_text(APEX)
+    c = Config(organization="contoso", project="Fabrikam", dod_path=str(dod_dir), rules={"enabled": enabled})
+    return c
+
+
+def test_gate_cli_rules_enabled_reads_the_files_and_makes_no_request(tmp_path, monkeypatch):
+    from ado.__main__ import dispatch
+    monkeypatch.chdir(tmp_path)
+    c = _cli(tmp_path)
+    client = FakeClient(c)
+    out = dispatch(client, _args(src=str(tmp_path), offline=True))
+    assert client.calls == [] and out["rules"]["covered"] == ["BR-1201-1", "BR-1201-2"] and out["rules"]["missing"] == []
+    # no rules file: `missing`, not a crash
+    out = dispatch(FakeClient(_cli(tmp_path, files={})), _args(src=str(tmp_path), offline=True))
+    assert out["rules"]["missing"] == [1201]
+    # a symlinked rules file is never read, even to a harmless file (counted as missing)
+    (tmp_path / "dod" / "Rules_1201.md").symlink_to(tmp_path / "elsewhere.md")
+    (tmp_path / "elsewhere.md").write_text(F1201)
+    out = dispatch(FakeClient(_cli(tmp_path, files={})), _args(src=str(tmp_path), offline=True))
+    assert out["rules"]["missing"] == [1201]
+
+
+def test_gate_cli_rules_disabled_or_absent_reads_nothing_and_adds_nothing(tmp_path, monkeypatch):
+    from ado.__main__ import dispatch
+    monkeypatch.chdir(tmp_path)
+    for enabled in (False, None):
+        c = _cli(tmp_path, enabled=bool(enabled))
+        if enabled is None:
+            c.rules = Config(organization="o", project="p").rules  # the default: rules absent
+        out = dispatch(FakeClient(c), _args(src=str(tmp_path), offline=True))
+        assert "rules" not in out and set(out) - {"commits_note"} == V02_KEYS  # commits_note: the temp dir is no git repository
+
+
+def test_gate_cli_rules_ledger_without_header_is_a_header_finding(tmp_path, monkeypatch):
+    from ado.__main__ import dispatch
+    monkeypatch.chdir(tmp_path)
+    c = _cli(tmp_path, ledger=_gl(*ROWS, frm=None))
+    c.gate["block"] = ["rule_coverage"]
+    out = dispatch(FakeClient(c), _args(src=str(tmp_path), offline=True))
+    assert out["rules"]["header"] == ["rules-from"] and out["blocking"] is True
+
+
+def test_gate_cli_ids_in_the_ledger_never_build_a_path(tmp_path, monkeypatch):
+    from ado.__main__ import dispatch
+    monkeypatch.chdir(tmp_path)
+    led = _gl(*ROWS).replace("- **Rules from:** 1201", "- **Rules from:** ../../etc/passwd")
+    c = _cli(tmp_path, ledger=led)
+    out = dispatch(FakeClient(c), _args(src=str(tmp_path), offline=True))
+    assert out["rules"]["header"] == ["rules-from"] and out["rules"]["missing"] == []

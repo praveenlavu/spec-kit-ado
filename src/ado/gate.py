@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import ConfigInvalid
 from .decisions import effective, has_decision_lines, parse_decisions, supersede_problem
-from .dod import _visible, ac_hash, ac_lines, ledger_ac_hash, section, unclosed
+from .dod import _visible, ac_hash, ac_lines, ledger_ac_hash, ledger_rules_from, ledger_rules_reviewed, section, unclosed
 from .prs import _AB_REF, _GIT_ENV
 from .questions import UNPARSED_NOTE, parse_questions
 
@@ -323,13 +323,22 @@ LEDGER_UNCLOSED_NOTE = "the ledger has an unclosed code fence or comment — sec
 
 # Every check run_gate can report. config.py rejects gate.block names outside this set, and
 # tests/test_config.py pins it to run_gate's output keys, so a new check must be added here too.
-GATE_CHECKS = ("ac_traceability", "assertion", "ac_drift", "open_questions", "commits_without_story", "open_decisions")
+GATE_CHECKS = ("ac_traceability", "assertion", "ac_drift", "open_questions", "commits_without_story", "open_decisions", "rule_coverage")
+
+
+def rule_findings(cov):
+    """What `rule_coverage` reports for a `rules.coverage` result: the uncovered, unknown and changed ids, then one `?` for each of
+    problems / missing / format / header that is not empty. Empty is a pass."""
+    return [*cov["uncovered"], *cov["unknown"], *cov["changed"], *("?" for k in ("problems", "missing", "format", "header") if cov[k])]
 
 
 def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, reason=UNREACHABLE, commits=None,
-             skipped=0, decisions_md=None, decisions_unreadable=False):
+             skipped=0, decisions_md=None, decisions_unreadable=False, rules_ctx=None):
     """`decisions_md`: text of Decisions_<id>.md, or None when there is no such file; `decisions_unreadable`: the file
-    exists but could not be read (symlink, outside --src, oversize, not UTF-8): counted as unresolved, never skipped."""
+    exists but could not be read (symlink, outside --src, oversize, not UTF-8): counted as unresolved, never skipped.
+    `rules_ctx`: None when business rules are off (no `rules` key, no `rule_coverage` question: the v0.2 output exactly); else
+    `{"files": {work item id: rules.parse_file result}}` for the files `Rules from:` names that could be read, and the result gains
+    `rules` = `rules.coverage(...)` at phase `pr`."""
     rows = parse_section3(ledger_md)
     trace = check_traceability(rows, sources, len(ac_lines(ledger_md)))
     gaps = scan_assertions(changed, DEFAULT_TESTS if tests is None else tests)
@@ -347,10 +356,16 @@ def run_gate(ledger_md, sources, changed, work_item=None, block=(), tests=None, 
     open_ledger = unclosed(ledger_md)  # fail closed: counts as an open-questions finding, so `gate.block` can stop on it
     found = {"ac_traceability": trace["unmapped"], "assertion": gaps, "ac_drift": drift["drift"],
              "open_questions": open_q or open_ledger, "commits_without_story": no_story, "open_decisions": open_d}
+    cov = None
+    if rules_ctx is not None:
+        from . import rules  # lazy: rules imports this module
+        cov = rules.coverage(ledger_md, sources, rules_ctx["files"], ledger_rules_from(ledger_md), ledger_rules_reviewed(ledger_md), ds, "pr", trace)
+        found["rule_coverage"] = rule_findings(cov)
     blocked_by = [k for k in found if k in block and found[k]]
     return {"traceability": trace, "assertion_gaps": gaps, "assertion_notes": notes, "drift": drift,
             "missing_evidence": missing_evidence(rows), "open_questions": open_q,
             "commits_without_story": no_story, **({"open_decisions": open_d} if open_d or has_decision_lines(decisions_md or "") else {}),
+            **({"rules": cov} if cov is not None else {}),
             **({"commits_note": commits_note} if commits_note else {}),
             **({"skipped_note": SKIPPED_NOTE.format(skipped)} if skipped else {}),
             **({"open_questions_note": UNPARSED_NOTE} if qs["unparsed"] else {}),
@@ -372,6 +387,26 @@ IGNORED_ROOTS_NOTE = re.compile(r"[0-9]{1,6} detected root\(s\) cannot be named 
 def ignored_roots_note(n):
     """The one fixed warning for `n` detected roots a profile cannot name (a count, never a path); `render_summary` prints it only in this shape."""
     return f"{n} detected root(s) cannot be named in a profile and are not covered by it: review them as code"
+
+
+def _ids(values, cap=20):
+    more = [f"…and {len(values) - cap} more"] if len(values) > cap else []
+    return ", ".join([*map(_code, values[:cap]), *more])
+
+
+def _rules_line(rl):
+    """The one summary line for a `rule_coverage` result: rule ids, work item ids and counts, with fixed words (never file or ledger text)."""
+    unknown = [x for x in rl["unknown"] if x != "?"]
+    parts = [(rl["uncovered"], lambda v: "not cited by an AC row whose test exists: " + _ids(v)),
+             (unknown, lambda v: "cited but in no rules file: " + _ids(v)),
+             (["?"] * (len(rl["unknown"]) - len(unknown)), lambda v: f"{len(v)} malformed `BR-` tag(s) in section 3"),
+             (rl["changed"], lambda v: "changed since confirmed, or not confirmed (read the rule, then `ado rules <story id> --confirm`): " + _ids(v)),
+             (rl["problems"], lambda v: "error problem(s) in a rules file: " + _ids(v)),
+             (rl["missing"], lambda v: "no usable rules file for work item " + _ids(v) + " (`ado rules <story id>`)"),
+             (rl["format"], lambda v: "a rules file in another format for work item " + _ids(v) + " (re-pull with `ado rules <story id>`)"),
+             (["rules-from"] if "rules-from" in rl["header"] else [], lambda v: "the ledger has no valid `Rules from:` line (`ado dod <story id> --refresh`)"),
+             (["rules-reviewed"] if "rules-reviewed" in rl["header"] else [], lambda v: "the ledger's `Rules reviewed:` line is malformed (fix it by hand)")]
+    return "- Business rules: " + "; ".join(f(v) for v, f in parts if v)
 
 
 def render_summary(result):
@@ -398,6 +433,8 @@ def render_summary(result):
         more = [f"…and {len(cs) - 20} more"] if len(cs) > 20 else []
         found["commits_without_story"] = ("- Commits without the story's `AB#<id>` reference: "
                                           + ", ".join([*map(_code, cs[:20]), *more]))
+    if isinstance(result.get("rules"), dict) and rule_findings(result["rules"]):
+        found["rule_coverage"] = _rules_line(result["rules"])
     if note := result.get("ledger_unclosed"):  # stands in for the open-questions line when that list is empty
         found["open_questions" if "open_questions" not in found else "ledger_unclosed"] = f"- {_code(note)}"
     if not trace["evaluated"]:

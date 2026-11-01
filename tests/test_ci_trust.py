@@ -75,6 +75,27 @@ def test_head_cannot_lower_gate_block(tmp_path, monkeypatch, capsys, git_env):
     assert rc == 0 and out["blocked_by"] == []
 
 
+def test_pr_disabling_rules_still_judged_enabled(tmp_path, monkeypatch, capsys, git_env):
+    """R§13 AC 2: the strict target enables rules; the PR's own config switches them off (or drops the key). The target's config judges
+    the run: the `rules` result is there and `rule_coverage` is in the floor, so the missing `Rules from:` line blocks."""
+    target = {**STRICT, "rules": {"enabled": True}}
+    for n, head in enumerate(({**ORG, "rules": {"enabled": False}}, ORG)):
+        repo = tmp_path / f"r{n}"
+        repo.mkdir()
+        summary = _gate_pr(repo, monkeypatch, git_env, target, head)
+        rc, out = _gate(capsys, summary, "--base", "origin/main")
+        assert rc == 1 and out["config"] == "target branch (strict)", head
+        assert out["rules"]["header"] == ["rules-from"] and "rule_coverage" in out["blocked_by"]
+        assert "Business rules" in _md(summary) and "ado dod" in _md(summary)
+        rc, out = _gate(capsys, summary)  # no --base: the PR's own config, rules disabled, v0.2 output
+        assert rc == 0 and "rules" not in out
+    repo = tmp_path / "advisory-target"  # a target that does not enable rules cannot be made to by an advisory PR: its own config applies
+    repo.mkdir()
+    summary = _gate_pr(repo, monkeypatch, git_env, {**STRICT, "rules": {"enabled": False}}, {**ORG, "rules": {"enabled": True}})
+    rc, out = _gate(capsys, summary, "--base", "origin/main")
+    assert "rules" not in out  # the strict target says disabled; the PR cannot enable rules for itself
+
+
 def test_target_missing_or_advisory_uses_head(tmp_path, monkeypatch, capsys, git_env):
     head = {**ORG, "gate": {"block": ["ac_traceability"]}}
     for target in (None, ORG, {**ORG, "mode": "advisory", "gate": {"block": []}}):

@@ -325,14 +325,29 @@ def dispatch(client, args):
                 work_item = workitems.get(client, args.id)
             except (AdoError, AuthError):
                 pass  # missing info (no story, no token) never blocks: drift is simply not checked
+        rules_ctx = _gate_rules_ctx(client.config, ledger_md, args.src)
         skipped = set()
         sources = gate.discover_tests(args.src, tests, skipped)
         changed = {f: t for f in (args.changed or []) if (t := gate._read(f, args.src, skipped)) is not None}
         return gate.run_gate(ledger_md, sources, changed, work_item, skipped=len(skipped),
                              block=client.config.effective_gate_block(), tests=tests, reason=reason,
                              commits=gate.check_commits(args.src, args.id, _gate_base(client.config, args)),
-                             decisions_md=decisions_md, decisions_unreadable=unreadable)
+                             decisions_md=decisions_md, decisions_unreadable=unreadable, rules_ctx=rules_ctx)
     raise SystemExit(2)
+
+
+def _gate_rules_ctx(cfg, ledger_md, src):
+    """None when rules are off (nothing is read: the v0.2 gate exactly). Else the parsed rules files that the ledger's `Rules from:` names (only
+    digits-only ids from a well-formed header line ever build a path), each read as confined as the ledger (`rules.read_file`: no symlink, no hard
+    link, a regular file of at most 1 MiB under `dod_path` and `--src`); an unreadable one is simply absent, and the gate reports it as missing."""
+    if not cfg.rules["enabled"]:
+        return None
+    frm, files = dod.ledger_rules_from(ledger_md), {}
+    for wid in frm["ids"] if frm["valid"] else []:
+        text = rules.read_file(rules.rules_file(cfg.dod_path, wid), src, cfg.dod_path)
+        if text is not None:
+            files[wid] = rules.parse_file(text, wid)
+    return {"files": files}
 
 
 def _gate_base(cfg, args):

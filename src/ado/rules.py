@@ -700,6 +700,85 @@ def scope(files, rules_from, decisions_parsed, phase):
             "bad_exclusions": sorted(set(bad), key=lambda i: int(i[1:]))}
 
 
+# ---- coverage: the local half of the gate's `rule_coverage` (P3-8); pure over PR-controlled files, ids and fixed keys out ----
+
+_AC_CANON = re.compile(r"AC-([1-9][0-9]{0,8})")  # the one spelling of a row that counts as AC-<n> (not `AC-01`, not fullwidth digits)
+_PROBLEM_LINE = re.compile(r"- (?:error|warning) (section|BR-[0-9]+-[0-9]+): ([a-z-]+) \u2014 (.*)")
+_COPY_LINE = re.compile(r"- copy of (BR-[0-9]+-[0-9]+) \u00b7 [0-9a-f]{8}: ")
+
+
+def _file_problems(wid, lines):
+    """`<rule id|work item id>:<key>` for each error problem line of a rules file, in order, once each. The level comes from the KEY (a PR
+    cannot lower an error by editing the word in the line), the text must be the fixed one, and a line of any other shape is `<wid>:?`:
+    nothing from the line is ever echoed."""
+    out = []
+    for x in lines:
+        m, c = _PROBLEM_LINE.fullmatch(x), _COPY_LINE.match(x)
+        if m and m.group(2) in ISSUES and m.group(3) == ISSUES[m.group(2)] and (m.group(1) == "section" or TAG_RE.fullmatch(m.group(1))):
+            item = None if m.group(2) in _WARNINGS else f"{wid if m.group(1) == 'section' else m.group(1)}:{m.group(2)}"
+        elif c and TAG_RE.fullmatch(c.group(1)):
+            item = f"{c.group(1)}:duplicate-number"
+        else:
+            item = f"{wid}:?"
+        if item and item not in out:
+            out.append(item)
+    return out
+
+
+def coverage(ledger_md, sources, files, rules_from, reviewed, decisions_parsed, phase, trace=None):
+    """The local findings of a story's business rules: `{"in_scope", "covered", "excluded", "uncovered", "unknown", "changed", "problems",
+    "missing", "format", "header"}`, every value a list of rule ids, work item ids or fixed keys (never file or ledger text).
+    `files`: `{work item id (int): parse_file result}` for the files that could be read; `rules_from` / `reviewed` are the results of
+    `dod.ledger_rules_from` / `dod.ledger_rules_reviewed`; `decisions_parsed` is `decisions.parse_decisions`; `phase` is `pr` or `done`.
+    - `missing`: an id of `Rules from:` with no usable file (absent, unreadable or `invalid`); `format`: a file whose `rules-format` is not
+      this kit's (re-pull); both get no per-rule judgement. `header`: `rules-from` when `Rules from:` is absent or malformed (fix:
+      `ado dod <id> --refresh`), `rules-reviewed` when `Rules reviewed:` is malformed.
+    - `in_scope` / `excluded`: `scope(...)`. `covered`: an in-scope rule cited in a row `AC-<n>` (1 <= n <= the AC lines of section 1) whose
+      tests include one that is present; an AC with several rows counts only when EVERY one of its rows has a present test (`tags` merges
+      duplicate rows, so one row with an absent test must not be hidden by another). `uncovered`: in scope and not covered.
+    - `unknown`: a cited well-formed id found in no readable file (ids of `missing` / `format` files are left to those findings), and
+      one `?` per malformed `BR-` token in the table (a count: the token is PR text and is not repeated).
+    - `changed`: an in-scope rule whose heading hash is not the one in `Rules reviewed:` (or has none: unconfirmed, or whose file text no
+      longer matches its heading hash), and any recorded id that is still `approved` in a file and has another hash, in scope or not.
+      A recorded id that left the files or is no longer approved is not judged here (the live drift check sees it).
+    - `problems`: `_file_problems` over the readable files. Warnings are not findings.
+    `trace`: the `gate.check_traceability` result for this ledger and these sources when the caller already has it (the gate does), so each
+    test is looked up once; else it is computed here."""
+    from . import gate  # lazy: gate imports this module
+    ids = rules_from["ids"] if rules_from["valid"] else []
+    good, missing, fmt = {}, [], []
+    for w in ids:
+        f = files.get(w)
+        if not isinstance(f, dict) or f.get("invalid"):
+            missing.append(w)
+        elif f.get("format") != FORMAT:
+            fmt.append(w)
+        else:
+            good[w] = f
+    header = (["rules-from"] if not (rules_from["present"] and rules_from["valid"]) else []) + (
+        ["rules-reviewed"] if reviewed["present"] and not reviewed["valid"] else [])
+    sc = scope(good, list(good), decisions_parsed, phase)
+    rule = {r: v for f in good.values() for r, v in f["rules"].items()}
+    tagged, ac_count = tags(ledger_md), len(dod.ac_lines(ledger_md))
+    trace = trace or gate.check_traceability(gate.parse_section3(ledger_md), sources, ac_count)
+    tested = {ac: ac not in trace["unmapped"] for ac in trace["mapped"]}  # an AC with a row that has no found test is in `unmapped`
+    cited = set()
+    for ac, ids_ in tagged["rows"].items():
+        m = _AC_CANON.fullmatch(ac)
+        if m and int(m.group(1)) <= ac_count and tested.get(ac):
+            cited.update(ids_)
+    left = set(missing) | set(fmt)
+    seen = {r for ids_ in tagged["rows"].values() for r in ids_}
+    unknown = sorted((r for r in seen if r not in rule and _key(r)[0] not in left), key=_key) + ["?"] * len(tagged["unknown"])
+    recorded = reviewed["hashes"]
+    judged = set(sc["in_scope"]) | {r for r in recorded if r in rule and rule[r]["status"] == "approved"}
+    changed = sorted((r for r in judged if recorded.get(r) != rule[r]["hash"] or rule[r].get("body_hash") != rule[r]["hash"]), key=_key)
+    return {"in_scope": sc["in_scope"], "covered": [r for r in sc["in_scope"] if r in cited], "excluded": sc["excluded"],
+            "uncovered": [r for r in sc["in_scope"] if r not in cited], "unknown": unknown, "changed": changed,
+            "problems": [p for w in sorted(good) for p in _file_problems(w, good[w]["problems"])],
+            "missing": sorted(missing), "format": sorted(fmt), "header": header}
+
+
 # ---- `ado rules <id> --confirm` (P3-7): the rule hashes a human reviewed go into the ledger header; local only, no network ----
 
 CONFIRM_NO_LEDGER = "there is no ledger for this story; run `ado dod <story id>` first"

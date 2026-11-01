@@ -231,7 +231,7 @@ def test_review_block_on_must_be_list_of_strings(tmp_path, bad):
 
 
 @pytest.mark.parametrize("name", ["ac_traceability", "assertion", "ac_drift", "open_questions",
-                                  "commits_without_story", "open_decisions"])
+                                  "commits_without_story", "open_decisions", "rule_coverage"])
 def test_known_gate_block_name_accepted(tmp_path, name):
     assert _write(tmp_path, gate={"block": [name]}).gate["block"] == [name]
 
@@ -245,6 +245,12 @@ def test_unknown_gate_block_name_is_config_error_listing_valid_set(tmp_path):
         _write(tmp_path, gate={"block": ["assertion", "bogus_check"]})
     assert "gate.block[1]: unknown check (valid: " in str(e.value) and "bogus_check" not in str(e.value)
     assert "(valid: " + ", ".join(GATE_CHECKS) + ")" in str(e.value)
+
+
+def test_invalid_gate_block_message_lists_new_name(tmp_path):
+    with pytest.raises(ConfigError) as e:
+        _write(tmp_path, gate={"block": ["bogus_check"]})
+    assert "open_decisions, rule_coverage)" in str(e.value) and GATE_CHECKS[-1] == "rule_coverage"
 
 
 def test_gate_block_names_are_case_sensitive(tmp_path):
@@ -284,7 +290,7 @@ def test_gate_checks_match_run_gate_output_keys(tmp_path):
               "## 3. AC → tests (traceability)\n| AC | acceptance criterion | tests | commit/PR | status |\n"
               "|---|---|---|---|---|\n| AC-1 | does X | Gone.testX |  | red |\n## 4. Gate log\n")
     r = run_gate(ledger, {}, {"BTest.cls": "class BTest {}"}, _wi("new"), block=block,
-                 commits=(["abc1234"], None),
+                 commits=(["abc1234"], None), rules_ctx={"files": {}},  # an enabled rules context: no `Rules from:` line is a finding
                  decisions_md="- [ ] D1: use paging → _(open)_ · kind: decision · why: unspecified\n")
     assert block.asked == set(GATE_CHECKS)
     assert sorted(r["blocked_by"]) == sorted(GATE_CHECKS)
@@ -424,6 +430,18 @@ def test_effective_lists_unchanged_in_advisory(tmp_path):
     assert cfg.effective_review_block_on() == ["minor"]
     cfg.effective_gate_block().append("x")
     assert cfg.effective_gate_block() == []
+
+
+def test_floor_only_when_enabled_and_strict(tmp_path):
+    floor = list(STRICT_GATE_BLOCK)
+    assert _load(tmp_path, mode="strict", rules={"enabled": True}).effective_gate_block() == floor + ["rule_coverage"]
+    assert _load(tmp_path, mode="strict", rules={"enabled": False}).effective_gate_block() == floor
+    assert _load(tmp_path, mode="strict").effective_gate_block() == floor  # rules absent
+    assert _load(tmp_path, mode="advisory", rules={"enabled": True}).effective_gate_block() == []  # advisory reports, never floors
+    assert _load(tmp_path, rules={"enabled": True}, gate={"block": ["rule_coverage"]}).effective_gate_block() == ["rule_coverage"]
+    both = _load(tmp_path, mode="strict", rules={"enabled": True}, gate={"block": ["rule_coverage", "assertion"]})
+    assert both.effective_gate_block() == ["rule_coverage", "assertion", "ac_traceability", "open_questions", "commits_without_story"]
+    assert "rule_coverage" not in STRICT_GATE_BLOCK  # the strict-without-rules floor is unchanged
 
 
 def test_strict_gate_block_names_are_valid_checks():

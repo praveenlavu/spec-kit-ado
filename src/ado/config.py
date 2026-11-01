@@ -9,6 +9,7 @@ ORG_RE = re.compile(r"^[A-Za-z0-9_-][A-Za-z0-9._-]*$")  # organization goes into
 REVIEW_SEVERITIES = ("blocker", "major", "minor")  # review_block_on entries (case-sensitive)
 MODES = ("advisory", "strict")
 STRICT_GATE_BLOCK = ("ac_traceability", "assertion", "open_questions", "commits_without_story")  # gate.block floor in strict mode
+STRICT_RULES_GATE_BLOCK = ("rule_coverage",)  # added to that floor when rules are enabled
 STRICT_REVIEW_BLOCK = ("blocker",)  # review_block_on floor in strict mode
 STRICT_DEFAULTS = {"test_command": None, "test_timeout": 300}
 RULES_DEFAULTS = {"enabled": False, "types": ["Epic", "Feature"]}  # business rules (R§ config); off = baseline
@@ -110,8 +111,8 @@ class Config:
         return out
 
     def effective_gate_block(self):
-        """gate.block in force: the project's list, plus the strict floor when mode is strict."""
-        return self._effective(self.gate["block"], STRICT_GATE_BLOCK)
+        """gate.block in force: the project's list, plus the strict floor when mode is strict (and `rule_coverage` when rules are enabled)."""
+        return self._effective(self.gate["block"], STRICT_GATE_BLOCK + (STRICT_RULES_GATE_BLOCK if self.rules["enabled"] else ()))
 
     def effective_review_block_on(self):
         """review_block_on in force: the project's list, plus the strict floor when mode is strict."""
