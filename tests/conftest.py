@@ -296,6 +296,8 @@ def speckit_template(tmp_path_factory):
     def run(*cmd):
         subprocess.run(cmd, cwd=repo, env=env, check=True, capture_output=True, timeout=120)
     run("git", "init", "-q", "-b", "main")
+    run("git", "config", "gc.auto", "0")  # no background repack while tests copy this template (objects vanished mid-copytree: intermittent setup error)
+    run("git", "config", "maintenance.auto", "false")
     run(specify, "init", "--here", "--force", "--non-interactive", "--integration", "claude", "--script", "sh")
     run(specify, "extension", "add", "--dev", str(ext_src))
     run(specify, "extension", "add", "--dev", str(kit_src))
