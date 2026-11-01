@@ -118,28 +118,7 @@ def _mentions(s):
     return comments._MENTION.sub("@user", s[:last.end()]) + s[last.end():]
 
 
-_LOCAL = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._%+'-")  # the local-part class of comments._EMAIL
-
-
-def _emails(s):
-    """`comments._EMAIL` matched once per `@`, anchored where the local part starts (at most 64 characters back) and ending at most
-    255 after: each character is looked at a bounded number of times, whatever the input. shortcut: an address longer than the RFC
-    limits is cut there and its first characters stay; widen if that matters."""
-    out, i = [], 0
-    for at in re.finditer("@", s):
-        p = at.start()
-        if p < i or p == 0 or s[p - 1] not in _LOCAL or s.find(".", p, p + 256) < 0:
-            continue  # cheap rejects: no address character before, no dot in the host window
-        lo = p
-        while lo > i and p - lo < 64 and s[lo - 1] in _LOCAL:
-            lo -= 1
-        m = comments._EMAIL.match(s, lo, min(len(s), p + 256))
-        if m and m.end() > p:
-            out.append(s[i:lo])
-            out.append("[email]")
-            i = m.end()
-    out.append(s[i:])
-    return "".join(out)
+_emails = comments.scrub_emails  # linear, one match per `@`; lives in comments (`ado comments --author-ids` needs it too)
 
 
 def normalise(html):

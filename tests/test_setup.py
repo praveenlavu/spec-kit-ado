@@ -489,7 +489,7 @@ def test_team_and_strict_profiles_ask_for_approvers(monkeypatch, tmp_path, capsy
     assert setup_cmd.run_setup(input_fn=lambda p: prompts.append(p) or next(answers), getpass_fn=lambda _p: "pat", out_path=out, profile=name) == 0
     assert _json.loads(out.read_text())["approvers"] == [A1, A2, A1.replace("1", "3")]  # lowercased, in the order typed
     ask = [p for p in prompts if "pprover" in p]
-    assert len(ask) == 1 and "blank to skip" in ask[0] and "--author-ids" not in ask[0]  # that flag ships with P4-7b
+    assert len(ask) == 1 and "blank to skip" in ask[0] and "`ado comments <story id> --author-ids`" in ask[0]  # how to find the ids
     assert "target branch" in capsys.readouterr().out  # says where they are read from
     assert not list(tmp_path.glob("*.tmp"))
 

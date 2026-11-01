@@ -195,7 +195,7 @@ def render_line(d):
 MARKER = "[spec-kit-ado:decisions]"
 _HEAD = "Decisions and assumptions made during development; please validate or reject:"
 MAX_COMMENT_LINE = 500
-_AT = re.compile(r"(?<![\w@])@\w[\w.-]*")  # a typed `@name`; comments only knows the anchor form
+_AT = comments._AT  # a typed `@name`
 _CTRL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
 _MARK = re.compile(r"\s*·\s*posted\s*:\s*\d+:[0-9a-f]{8}(?=\s*(?:·|$))")
 
@@ -204,7 +204,7 @@ def _scrub(text):
     """Same replacements as `ado comments`: mention anchors and typed `@name` -> `@user`, addresses -> `[email]`.
     An address or @mention typed in a decision is replaced, never refused. Free-text names cannot be detected:
     the preview shows the exact comment before anything is posted."""
-    return _AT.sub("@user", comments._EMAIL.sub("[email]", comments._MENTION.sub("@user", text)))
+    return _AT.sub("@user", comments.scrub_emails(comments._MENTION.sub("@user", text)))
 
 
 def _comment_line(d):

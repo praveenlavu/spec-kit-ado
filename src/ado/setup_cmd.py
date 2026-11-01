@@ -137,7 +137,8 @@ def _approvers(profile, data, input_fn):
     if profile not in ("team", "strict") or "approvers" in data:
         return []
     print("approvers are read only from the target branch: the list takes effect once this file is merged there.")
-    typed = input_fn("Approver identity ids (GUIDs), comma-separated; they must not be the agent's own identity; blank to skip: ")
+    typed = input_fn("Approver identity ids (GUIDs), comma-separated; they must not be the agent's own identity; "
+                    "`ado comments <story id> --author-ids` lists the ids of a story's commenters; blank to skip: ")
     return [t.lower() for t in typed.replace(",", " ").split()]
 
 

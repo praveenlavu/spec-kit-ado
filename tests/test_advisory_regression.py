@@ -133,7 +133,13 @@ def compare(tmp_path):
     # (and the verbs `doctor` and `status`, next to `setup`); any later verb belongs here too, so the usage line cannot diverge silently
     def usage(t):
         return t.replace("pr,kits,stack,strict", "pr,strict").replace("setup,doctor,status,get", "setup,get")
+    def comments_help(t):
+        """P4-7b adds `--author-ids` to `comments`. Remove exactly what it adds: its usage token, its two help lines and the two spaces by
+        which argparse widens the option column (the `-h` and `--out` lines). Everything else is still compared byte for byte."""
+        return (t.replace(" [--author-ids]", "").replace("  -h, --help    show", "  -h, --help  show").replace("  --out PATH    markdown", "  --out PATH  markdown")
+                .replace("  --author-ids  print `date | author id | first 40 scrubbed characters` per\n                comment (to find an approver's identity id); writes nothing\n", ""))
     new = [(a, rc, usage(o), usage(e)) for a, rc, o, e in new]
+    new = [(a, rc, comments_help(o), e) if a == ["comments", "--help"] else (a, rc, o, e) for a, rc, o, e in new]
     diffs = [f"{a[0]}: rc {a[1]}->{b[1]}, stdout same {a[2] == b[2]}, stderr same {a[3] == b[3]}" for a, b in zip(old, new) if a != b]
     return len(argvs), diffs, old
 

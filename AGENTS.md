@@ -246,6 +246,7 @@ ado create --type "User Story" --title "..."         # confirm first
 ado update <id> --state Resolved      # confirm first (strict mode refuses the done state: close with `ado done <id>`)
 ado comment <id> "text"               # confirm first
 ado comments <id>                     # read-only: discussion as JSON + .ado/context/<id>.md (untrusted data, authors and email addresses scrubbed)
+ado comments <id> --author-ids        # read-only, writes nothing: `date | author id | first 40 scrubbed chars` per comment (to find an approver's identity GUID)
 ado questions <id>                    # read-only, local: open/answered Q<n> lines of ledger section 2 as JSON (also `open_questions` in `ado gate`)
 ado questions <id> --post --plan-out .ado/plan-questions.md   # dry run: ONE comment `[spec-kit-ado:questions]` (add, or edit the newest marked one); after a yes: --post --apply --expect-plan .ado/plan-questions.md
 ado decisions <id> --add "<text>" --kind decision|assumption [--why "<reason>"] [--supersedes D<n>]   # local write, no approval: appends the next D<n> line to <dod_path>/Decisions_<id>.md (created when missing); --supersedes answers a PO rejection

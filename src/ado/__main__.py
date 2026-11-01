@@ -651,6 +651,8 @@ def main(argv=None):
     p = sub.add_parser("comments", help="Read a story's discussion (authors scrubbed); writes .ado/context/<id>.md")
     p.add_argument("id", type=int)
     p.add_argument("--out", metavar="PATH", help="markdown file (default: .ado/context/<id>.md)")
+    p.add_argument("--author-ids", action="store_true",
+                   help="print `date | author id | first 40 scrubbed characters` per comment (to find an approver's identity id); writes nothing")
     p = sub.add_parser("link", help="Link to another work item, a parent, or a URL")
     p.add_argument("id", type=int)
     g = p.add_mutually_exclusive_group()
@@ -869,6 +871,8 @@ def main(argv=None):
             parser.error("--resolve needs --validated or --rejected")
         if not args.resolve and (args.verdict or args.by is not None or args.note is not None or args.force):
             parser.error("--validated, --rejected, --by, --note and --force need --resolve")
+    if args.command == "comments" and args.author_ids and args.out is not None:
+        parser.error("--author-ids writes nothing and takes no --out")
     if getattr(args, "dir", None) and args.command == "attachments" and not args.download:
         parser.error("--dir needs --download")
     if args.command == "stack" and args.stack_command == "init":
@@ -912,6 +916,12 @@ def main(argv=None):
             out = _resolve_decision(args)
         elif args.command == "rules" and args.confirm:  # local only: no token, no request
             out = _rules_confirm(args)
+        elif args.command == "comments" and args.author_ids:  # reads only; stdout lines, no file
+            lines, truncated = comments.author_id_lines(AdoClient(_config(args)), args.id)
+            print("\n".join(lines), end="\n" if lines else "")
+            if truncated:
+                print("note: not every comment was read (page limit or repeated page token)", file=sys.stderr)
+            return 0
         elif args.command == "kits":  # local only: no token, no request, no config
             return _kits_pin(args) if args.kits_command == "pin" else _kits_verify(args)
         elif args.command == "stack" and args.stack_command == "show":  # local only: no token, no request
@@ -947,6 +957,8 @@ def main(argv=None):
                     out["trust_note"] = gate.TRUST_NOTE
                 if kits_note:
                     out["kits_trust_note"] = gate.KITS_TRUST_NOTE
+    except comments.CommentsUnreadable as e:  # `--author-ids`: a fixed reason key, exit 1, no traceback
+        err, code = e, 1
     except (ConfigError, AuthError, dod.DodExists, ValueError) as e:
         # 3 (invalid config) lets CI fail closed: `gate`, and `branch --id-from` (the Azure gate reads its story id with it)
         fail_closed = args.command == "gate" or (args.command == "branch" and args.id_from is not None) or (

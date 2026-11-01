@@ -56,6 +56,40 @@ class FakeClient:
         return self.request("PATCH", path, body, **kw)
 
 
+# ---- ADO comment fixtures (raw REST shapes; ids are made-up GUIDs, names fictional) ----
+_FICTIONAL = {"displayName": "Dana Fictional", "uniqueName": "dana@contoso.example", "url": "https://contoso.example/u"}
+
+
+def raw_comment(cid, text, date, author="11111111-1111-4111-8111-111111111111", modified_by=None, version=1, on_behalf=None, **extra):
+    """One comment as the comments endpoint returns it. `on_behalf` (an identity id, or {} / None to test an empty one) adds the
+    `createdOnBehalfOf` key, which a bypassRules-forged comment carries; left as the default it is absent. `author` None drops createdBy."""
+    c = {"id": cid, "text": text, "createdDate": date, "modifiedDate": date, "version": version, "format": "html", "mentions": [],
+         "url": "https://dev.azure.com/contoso/_apis/x", **extra}
+    if author is not None:
+        c["createdBy"] = {**_FICTIONAL, "id": author}
+    c["modifiedBy"] = {**_FICTIONAL, "id": modified_by or author}
+    if on_behalf is not None:
+        c["createdOnBehalfOf"] = {**_FICTIONAL, "id": on_behalf} if isinstance(on_behalf, str) else on_behalf
+    return c
+
+
+def comment_pages(raw, per_page=1, token_for=lambda n: f"tok{n}"):
+    """`raw` comments split into queued responses with continuation tokens (the last page has none)."""
+    chunks = [raw[i:i + per_page] for i in range(0, len(raw), per_page)] or [[]]
+    return [{"comments": c, **({"continuationToken": token_for(n)} if n < len(chunks) - 1 else {})} for n, c in enumerate(chunks)]
+
+
+def versions_response(*oldest_first):
+    """The versions endpoint's answer: `{count, value}` NEWEST first (live-verified). Each item is (version, text, modified)."""
+    value = [{"id": 1, "version": v, "text": t, "modifiedDate": m, "createdBy": _FICTIONAL, "modifiedBy": _FICTIONAL}
+             for v, t, m in reversed(oldest_first)]
+    return {"count": len(value), "value": value}
+
+
+def connection_data(identity_id, descriptor="aad.fictional"):
+    return {"authenticatedUser": {"id": identity_id, "descriptor": descriptor}}
+
+
 @pytest.fixture
 def cfg():
     return Config(organization="contoso", project="Fabrikam")

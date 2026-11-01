@@ -2455,3 +2455,19 @@ def test_trust_keys_doc_pins():
     for c in ("Approver", "Approval mode", "Unattended"):
         assert f"| **{c}** |" in glossary, c
     assert "Approvers and the approval of gates" not in glossary  # the "not part of this version yet" sentence is gone
+
+
+def test_author_ids_is_documented_everywhere_the_approvers_are():
+    """P4-7b: `ado comments ID --author-ids` is how an approver's GUID is found; setup's prompt and the docs name it."""
+    from ado import setup_cmd
+    prompts = []
+    setup_cmd._approvers("team", {}, lambda p: prompts.append(p) or "")
+    assert "`ado comments <story id> --author-ids`" in prompts[0]
+    for doc in ("README.md", "AGENTS.md", "docs/configuration.md", "CHANGELOG.md"):
+        assert "--author-ids" in _flat(doc), doc
+    assert "writes nothing" in _flat("README.md") and "writes no file" in _flat("docs/configuration.md")
+    assert "api-version=7.1-preview.1" in _flat("CHANGELOG.md") and "(P4-7b)" in _flat("CHANGELOG.md")
+    assert "verify it against that person's user page" in _flat("docs/configuration.md") and "check the GUID against the user's page" in _flat("README.md")
+    for doc in ("README.md", "docs/configuration.md"):
+        assert "typed" in _flat(doc) and "error: comments unreadable (<reason>)" in _flat(doc), doc
+    assert "`comments.CommentsUnreadable`" in _flat("CHANGELOG.md") and "`comments.scrub_emails`" in _flat("CHANGELOG.md")
