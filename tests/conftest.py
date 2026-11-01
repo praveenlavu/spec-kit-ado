@@ -282,7 +282,10 @@ def speckit_template(tmp_path_factory):
     here = Path(__file__).resolve().parent.parent
     for part in _EXT_PARTS:
         (shutil.copytree if (here / part).is_dir() else shutil.copy)(here / part, ext_src / part)
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "NO_COLOR": "1",
+    home = root / "home"  # a private HOME per worker: parallel workers running `specify` share ~/.specify/ caches and raced (intermittent setup error)
+    home.mkdir()
+    env = {**os.environ, "HOME": str(home), "XDG_CACHE_HOME": str(home / ".cache"), "XDG_CONFIG_HOME": str(home / ".config"),
+           "XDG_DATA_HOME": str(home / ".local" / "share"), "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "NO_COLOR": "1",
            **{f"GIT_{k}_{f}": v for k in ("AUTHOR", "COMMITTER") for f, v in (("NAME", "Test"), ("EMAIL", "test@example.invalid"))}}
 
     def run(*cmd):
