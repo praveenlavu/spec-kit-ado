@@ -19,7 +19,7 @@ import unicodedata
 from datetime import date
 from pathlib import Path
 
-from . import decisions, dod, gate, kits, prs, push, questions, rules, stack, tasks
+from . import approvals, comments, decisions, dod, gate, kits, prs, push, questions, rules, stack, tasks
 from .auth import AuthError
 from .client import AdoError
 from .config import Config, ConfigInvalid, _has_control
@@ -1024,6 +1024,129 @@ def _decisions_done(c):
     return [_finding("decision-open", f"decision(s) the PO has not validated or rejected yet: {_ids_detail(still)}",
                      "wait for the PO's reply (`ado comments`); a human records it with `ado decisions "
                      f"{c.id} --resolve D<n> --validated|--rejected`")]
+
+
+# ---- done-time cross-check (D§4.4, P4-11): with approvers configured, every verdict of the PR-controlled decisions file must be what `--sync` would write now ----
+_XC_LINE = re.compile(r"D([0-9]{1,9}) \((?:decision|assumption|override)\): ")  # a decision line of a posted comment: the id, digits only
+_XC_ORDER = ("marker", "dropped", "verdict")
+
+
+def _xc_is_posting(text):
+    """Does a comment look like a decisions posting, or try to? The marker among the first 64 characters once whitespace and invisible format
+    characters (zero-width space and joiners, bidi marks) are removed: a posting that starts with one is invalid (`-marker`), never ignored."""
+    clean = "".join(ch for ch in str(text or "") if not ch.isspace() and unicodedata.category(ch) != "Cf")
+    return decisions.MARKER in clean[:64]
+
+
+def _xc_text(sid):
+    """(detail, fix) per rule: fixed texts, ids only; nothing of the file or of ADO is ever echoed."""
+    return {
+        "marker": ("a `posted:` marker names a comment that is missing, not the kit's, edited, altered, hidden in markup or that no longer holds the "
+                   "line as it reads now, or a decisions comment cannot be read as plain lines",
+                   f"re-post the lines the PO must see with a non-approver identity (the agent token, never an approver: a poster becomes a kit author and is excluded): `ado decisions {sid} --post` (preview, yes, then --apply); the approvers then answer the new comment"),
+        "dropped": ("a decision a posted comment lists is missing from the decisions file, a line points at an older posting than the newest one, "
+                    "a verdict line lost its `via`, or the file cannot be read line by line",
+                    "restore the line from git history; never delete or re-word a posted decision, record a change as a new decision"),
+        "verdict": ("a validated or rejected line has no approver comment behind it that `ado decisions --sync` would take now (no `via`, a `via` that "
+                    "is not the newest valid command for that decision, the other verb, older than the posting, not an approver's, or a later malformed command)",
+                    f"an approver comments `/approve D<n>` or `/reject D<n>`, then `ado decisions {sid} --sync`; with approvers configured a hand-written verdict is not accepted"),
+        "truncated": ("not every comment of the story was read (page limit or repeated page token), so a missing approval or an edit cannot be ruled out",
+                      "run it again; the cross-check needs the whole comment list"),
+        "unreachable": ("ADO could not be read for the cross-check (a request failed, an answer was malformed, or the token identity can bypass work item "
+                        "rules, or that could not be checked)",
+                        "check access with `ado doctor`, then run it again: with approvers configured, done needs the story's comments"),
+    }
+
+
+def _xc_out(rule, sid, ids=()):
+    detail, fix = _xc_text(sid)[rule]
+    shown = _ids([f"D{n}" for n in sorted(ids) if n])
+    return _finding(f"decisions-xcheck-{rule}", f"{detail}: {shown}" if shown else detail, fix)
+
+
+def _xc_hits(md, rows, approvers, excluded, client, story_id):
+    """{rule: {decision numbers (0: no decision)}} (AdoError, ValueError propagate: the caller fails closed)."""
+    hits, edits = {}, {}
+    hit = lambda rule, n: hits.setdefault(rule, set()).add(n)  # noqa: E731
+    parsed = decisions.parse_decisions(md)
+    ids = [f"D{m.group(2)}" for ln in dod._visible(md)[0].splitlines() if (m := decisions._CAND.match(ln))]
+    if parsed["unparsed"] or len(ids) != len(set(ids)) or not all(re.fullmatch(r"D[0-9]{1,9}", i) for i in ids):
+        return {"dropped": {0}}  # hidden or repeated lines: nothing else can be judged
+    skip, byid, newest_post = {str(e).lower() for e in excluded}, {str(c.get("id")): c for c in rows}, {}
+    for c in rows:  # every decisions comment of the story: its lines must still be in the file
+        if not _xc_is_posting(c.get("text")):
+            continue
+        lines, key = comments.kit_lines(str(c.get("html") or ""), decisions.MARKER), approvals._order(c)
+        if str(c["id"]) not in edits:
+            edits[str(c["id"])] = approvals._edited(client, story_id, c)
+        if not lines or key is None or edits[str(c["id"])]:  # markup, a huge text, an unreadable time or an edit: the lines it held cannot be told
+            hit("marker", 0)
+            continue
+        for ln in lines:
+            m = _XC_LINE.match(ln)
+            if m:
+                n = int(m.group(1))
+                newest_post[n] = max(newest_post.get(n, key), key)
+    for n in newest_post:
+        if f"D{n}" not in ids:
+            hit("dropped", n)
+    for d in sorted((d for k in ("open", "validated", "rejected") for d in parsed[k]), key=lambda d: int(d["id"][1:])):
+        n, resolved = int(d["id"][1:]), d["status"] != "open"
+        rule, post = decisions._posting_rule(d, byid, skip, client, story_id, edits)
+        if rule == "not-posted":
+            if resolved:  # never shown to the PO: no verdict on it can be an approver's
+                hit("verdict", n)
+            continue
+        if rule:
+            hit("marker", n)
+            continue
+        if newest_post.get(n, approvals._order(post)) > approvals._order(post):  # the line was set back to an older posting
+            hit("dropped", n)
+        if not resolved:
+            continue
+        tally = {}
+        win = approvals.newest(client, story_id, rows, d["id"], approvers, excluded, tally=tally)
+        verdict = decisions._VERDICT.get(win["verb"]) if win else None
+        if not d.get("via"):
+            hit("verdict", n)
+            if verdict == d["status"]:  # an approver's verdict exists: the line was synced and its `via` taken away
+                hit("dropped", n)
+            continue
+        key, pkey = (approvals._order({"date": win["created"], "id": win["id"]}) if win else None), decisions._posting_key(post)
+        if (verdict != d["status"] or str(win["id"]) != d["via"] or tally.get("bad_newer") or key is None or pkey is None or key <= pkey
+                or d["by"] != decisions.SYNC_BY or d["note"] not in (decisions._sync_note(win["text"]), "")):
+            hit("verdict", n)
+    return hits
+
+
+def xcheck(md, comment_rows, truncated, approvers, excluded, client, story_id):
+    """Findings (`decisions-xcheck-marker|dropped|verdict|truncated|unreachable`, ids only) for the decisions file text `md` against the story's comments
+    (`comments.fetch(..., with_meta=True)`; `truncated` is its flag), the TARGET branch's `approvers` and `excluded` (`approvals.excluded`, the token identity,
+    the kit's authors and the CI identity). Marker: every `posted:` marker names an unedited, non-lossy, plain `<br>` comment of the kit that holds the line as
+    it reads now (`decisions._posting_rule`). Dropped: every `D<n>` a decisions comment lists is in the file, pointing at its newest posting. Verdict: every
+    resolved line is what `decisions.sync` would write now (`via` = the newest valid command of an approver for that decision, the matching verb, newer
+    than the unedited posting). A hand-written ledger ANSWER is not checked (accepted residual). An error from ADO, or an unreadable answer, is a finding: fail closed."""
+    if truncated:
+        return [_xc_out("truncated", story_id)]
+    try:
+        hits = _xc_hits(md, comment_rows, approvers, excluded, client, story_id)
+    except (AdoError, AuthError, ValueError):
+        return [_xc_out("unreachable", story_id)]
+    return [_xc_out(rule, story_id, hits[rule]) for rule in _XC_ORDER if hits.get(rule)]
+
+
+def xcheck_run(client, story_id, md, approvers, ci_identity=None):
+    """`xcheck` over a fresh read: refused while the token identity can bypass rules (or that is unreadable), the comments fetched once. The CI token
+    identity is the client's own in CI (`approvals.excluded` adds it); `ci_identity` adds another one. Any failure is the `-unreachable` finding."""
+    try:
+        approvals.comment_mode_allowed(client)
+        rows, truncated = comments.fetch(client, story_id, with_meta=True)
+        if truncated:
+            return [_xc_out("truncated", story_id)]
+        excluded = approvals.excluded(client, rows, ci_identity)
+    except (AdoError, AuthError, ValueError):
+        return [_xc_out("unreachable", story_id)]
+    return xcheck(md, rows, False, approvers, excluded, client, story_id)
 
 
 # ---- business rules (R§7, P3-10): `rules.coverage` over the PR's own files, offline; none of these can be overridden (not in _COVERS) ----

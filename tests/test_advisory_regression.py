@@ -152,7 +152,14 @@ def compare(tmp_path):
                 .replace("  --sync              record the approvers' `/answer Q<n>: text` comments of\n                      the story as the PO's answers in the ledger and list the\n"
                          "                      questions due under unattended.assume_after_hours (a\n                      local write, no ADO write; needs approvers on the target\n"
                          "                      branch)\n", ""))
+    def done_help(t):
+        """P4-11 adds `--base` to `done` (the pre-merge target the approvers are read from). Remove exactly what it adds: its usage token (argparse re-wraps the
+        usage) and its three help lines. Everything else is still compared byte for byte."""
+        return (t.replace("[--expect-plan PATH]\n                [--base REF]\n                id", "[--expect-plan PATH] id")
+                .replace("  --base REF          CI: the pre-merge target branch (a full commit id or a\n                      ref) the approvers are read from, never the merged\n"
+                         "                      commit's own config; default origin/HEAD\n", ""))
     new = [(a, rc, usage(o), usage(e)) for a, rc, o, e in new]
+    new = [(a, rc, done_help(o), done_help(e)) if a[0] == "done" else (a, rc, o, e) for a, rc, o, e in new]
     new = [(a, rc, comments_help(o), e) if a == ["comments", "--help"] else (a, rc, o, e) for a, rc, o, e in new]
     new = [(a, rc, decisions_help(o), e) if a == ["decisions", "--help"] else (a, rc, o, e) for a, rc, o, e in new]
     new = [(a, rc, questions_help(o), e) if a == ["questions", "--help"] else (a, rc, o, e) for a, rc, o, e in new]

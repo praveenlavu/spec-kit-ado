@@ -83,7 +83,23 @@ def _stamp_used(client, args, ids):
         decisions.apply_stamp(decisions.decisions_file(client.config.dod_path, args.id), args.id, ids)
 
 
+def _xcheck(client, args, dec):
+    """(findings, blocking) of `done`'s cross-check (D§4.4): none unless the TARGET branch (`--base`, else origin/HEAD) configures approvers; an unreadable
+    target config raises (exit 2: nothing is believed). It blocks when either this config or the target's is strict: a PR that sets `mode: advisory` in
+    the same change must not turn its own cross-check into a warning. The decisions file `dec` was already confined and read by the caller."""
+    approvers = trusted(".", base=args.base).approvers
+    if not approvers:
+        return [], False
+    base = args.base or strict.default_base(".")
+    target = Config.load_from_ref(base, repo=".") if base else None
+    blocking = client.config.mode == "strict" or (target is not None and target.mode == "strict")
+    md = (gate._read(dec, ".", set()) or "") if os.path.lexists(dec) else ""
+    return strict.xcheck_run(client, args.id, md, approvers), blocking
+
+
 def _done(client, args):
+    if args.base is not None and not args.base:
+        raise ValueError("--base must not be empty")  # an empty base would fall back to origin/HEAD, the merged branch, whose config the PR wrote
     used = strict.require(strict.check(client, args.id, "done"))["overrides_used"] if client.config.mode == "strict" else []
     path = dod.dod_file(client.config.dod_path, args.id)
     # both files are uploaded: read them as confined as the gate does (no symlink, real path under the working tree, 1 MiB)
@@ -95,6 +111,9 @@ def _done(client, args):
     if os.path.lexists(dec) and gate._read(dec, ".", set()) is None:
         raise ValueError("the decisions file is not a regular file inside the working tree "
                          "(a symlink, outside it, a directory, over 1 MiB or not UTF-8); refusing to attach it")
+    xf, blocking = _xcheck(client, args, dec)
+    if xf and blocking:
+        raise strict.Refused({"phase": "done", "mode": "strict", "ok": False, "findings": xf, "overrides_used": []})
     chk = done.check(ledger_md)
     work_item = None
     if chk["ready"] or not args.apply:  # one read-only GET drives the preview, the idempotent apply and `already_done` (CI must not move a done story)
@@ -110,7 +129,7 @@ def _done(client, args):
         _stamp_used(client, args, used)
     result = done.apply(client, args.id, path, work_item, dec) if args.apply and chk["ready"] else {}
     return {"id": args.id, "applied": bool(args.apply and chk["ready"]), **chk, **known,
-            **({"decisions_file": str(dec)} if dec else {}), **result}
+            **({"decisions_file": str(dec)} if dec else {}), **({"warnings": [f"{f['rule']}: {f['detail']}" for f in xf]} if xf else {}), **result}
 
 
 def _read_body(path):
@@ -829,6 +848,8 @@ def main(argv=None):
     p.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here")
     p.add_argument("--expect-plan", metavar="PATH",
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
+    p.add_argument("--base", metavar="REF", help="CI: the pre-merge target branch (a full commit id or a ref) the approvers are read from, never the merged "
+                   "commit's own config; default origin/HEAD")
 
     p = sub.add_parser("pr", help="Open/comment on a pull request (GitHub via gh, or Azure Repos)")
     psub = p.add_subparsers(dest="pr_command", required=True)

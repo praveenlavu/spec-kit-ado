@@ -2385,7 +2385,7 @@ GLOSSARY = [
     ("Business rules", "opt-in"), ("Rules file", "opt-in"), ("Rules from:", "opt-in"), ("Rules reviewed:", "opt-in"),
     ("Workflow", "opt-in"),
     ("Approver", "team"), ("Approval mode", "opt-in"), ("Unattended", "opt-in"),
-    ("Approve and reject commands", "opt-in"), ("Approval comment", "opt-in"), ("Sync", "opt-in"),
+    ("Approve and reject commands", "opt-in"), ("Approval comment", "opt-in"), ("Sync", "opt-in"), ("Done-time cross-check", "opt-in"),
 ]
 _GLOSSARY_ROW = re.compile(r"^\| \*\*(?P<c>[^*|]+)\*\* \| (?P<p>starter|team|strict|opt-in) \| (?P<d>[^|]+) \|$", re.M)
 
@@ -2529,3 +2529,37 @@ def test_questions_sync_is_documented():
     assert "never closes one" in agents and "`bad_newer`" in agents and "assumed" in agents
     assert "Combines with no other `questions` option" in readme and "(P4-10)" in log and "server_now()" in log
     assert "`ado questions <id> --sync`" in _flat("docs/glossary.md") and "`ado questions <id> --sync`" in _flat("commands/plan.md")
+
+
+def test_done_time_cross_check_is_documented():
+    """P4-11: the `decisions-xcheck-*` rules, `done --base`, the CI inputs and the residuals are named where the approvers and `done` are."""
+    cfg, readme, agents, hitl, log = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "CHANGELOG.md"))
+    gh, az, azr, ci_gh, ci_az = (_flat(n) for n in (".github/workflows/ado-link-on-merge.yml", "pipelines/ado-link-on-merge.yml", "pipelines/README.md",
+                                                   "docs/ci-github.md", "docs/ci-azure-pipelines.md"))
+    for rule in ("marker", "dropped", "verdict", "truncated", "unreachable"):
+        for doc in (cfg, readme, log, _flat("docs/glossary.md")):
+            assert f"decisions-xcheck-{rule}" in doc or f"`-{rule}`" in doc, (rule, doc[:40])
+    assert "decisions-xcheck-" in agents and "decisions-xcheck-" in hitl
+    for needle in ("Done-time cross-check: `decisions-xcheck-*`", "no-op without `approvers`", "It blocks in strict mode", "warns in advisory mode",
+                   "github.event.pull_request.base.sha", "an empty `--base` is refused", "ci_identity=", "A hand-written ledger ANSWER", "accepted residual",
+                   "denial of service on the close", "but **not** after \"Rebase and fast-forward\"", "`lastMergeTargetCommit`", "`ado doctor` cannot check the merge-type policy", "limit the merge types of the target branch's policy", "an approver removed after `base.sha` still counts", "an approver the PR adds itself never counts", "(revocation lag)", "decisions._posting_rule", "comments.kit_lines",
+                   "also blocks when the **target** branch's config is strict", "rule ids"):
+        assert needle in cfg, needle
+    assert "`done --help` text gains only `--base`" in log and "(P4-11" in log
+    assert "--base \"$BASE_SHA\"" in ci_gh and "HEAD^1" in ci_az and "HEAD^1" in azr and "decisions-xcheck-unreachable" in ci_gh and "decisions-xcheck-unreachable" in ci_az
+    assert "BASE_SHA: ${{ github.event.pull_request.base.sha }}" in gh and "HEAD^1^{commit}" in az
+    # fix round 1: the Azure rebase / fast-forward bypass is named, the merge-type limit is required, the claim "never the merged config" is gone
+    for doc in (cfg, hitl, ci_az, azr):
+        assert "Merge (no fast-forward)" in doc and "Squash" in doc, doc[:40]
+    assert "required" in cfg.lower() and "close refused" in cfg and "last 50" in cfg and "close refused" in ci_az and "last 50" in azr
+    assert "never the merged config" not in azr and "a commit of the PR itself" in azr
+    assert "lastMergeTargetCommit" in ci_az and "v0.3.1" in cfg and "v0.3.1" in log and "REQUIRED" in log
+    assert "an approver the PR itself adds never counts" in ci_gh and "revocation lag" in ci_gh and "fails closed" in ci_gh
+    assert "non-approver identity (the agent token" in _flat("src/ado/strict.py") and "first 64 characters" in log
+    assert "configuration.md), Without" not in _flat("docs/business-rules-reference.md")
+    # fix round 2: `mode` is guarded too, the backstop's two bypasses and the invisible-prefix limits are named, the merge-type limit is the control
+    assert "`approvers`, `approval`, `unattended` or `mode`" in cfg and "or mode changed in the last 50 commits" in cfg and "shallow" in cfg
+    assert "Known bypasses of the backstop" in cfg and "Padding" in cfg and "Rebase and fast-forward" in cfg and "a backstop, not the control" in cfg
+    assert "padding" in ci_az and "backstop" in ci_az and "backstop" in azr and "the merge-type limit is the control" in azr
+    assert "Hangul fillers" in cfg and "variation-selector" in cfg and "first 64 characters" in cfg and "variation-selector" in log
+    assert "on Azure after a rebase / fast-forward merge see the next row" in cfg

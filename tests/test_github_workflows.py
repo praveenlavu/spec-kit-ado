@@ -719,7 +719,7 @@ def _merge7_ado(plan, apply_json, apply_rc=0):
     """fake `ado`: logs every call, answers the dry run and the apply of story 7."""
     return ('echo "$*" >> calls.log\n'
             f'case "$*" in\n *--plan-out*) echo \'{plan}\'; exit 0;;\n'
-            f' "done 7 --apply") echo \'{apply_json}\'; exit {apply_rc};;\nesac\nexit 0\n')
+            f' "done 7 --apply"*) echo \'{apply_json}\'; exit {apply_rc};;\nesac\nexit 0\n')
 
 
 READY = '{"ready": true}'
@@ -779,7 +779,7 @@ def test_link_on_merge_never_transitions_to_the_done_state_before_done_ran(tmp_p
     rc, out = _run_snippet(tmp_path, snippet, "main", ado_body=_merge7_ado(READY, CLOSED))
     assert rc == 0, out
     calls = (tmp_path / "calls.log").read_text().splitlines()
-    assert "done 7 --apply" in calls and not any(c.startswith("update ") for c in calls), calls
+    assert any(c.startswith("done 7 --apply") for c in calls) and not any(c.startswith("update ") for c in calls), calls
 
 
 @pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
@@ -1190,7 +1190,7 @@ def test_link_on_merge_a_refusal_does_not_stop_the_other_stories_from_closing(tm
     ado = ('echo "$*" >> calls.log\ncase "$*" in\n'
            ' "done 7 --plan-out"*) cat refusal.json; exit 2;;\n'
            ' "done 8 --plan-out"*) echo \'{"ready": true}\'; exit 0;;\n'
-           ' "done 8 --apply") echo \'{"attached": [{"path": "p"}], "failed": [], "state": "Done"}\'; exit 0;;\nesac\nexit 0\n')
+           ' "done 8 --apply"*) echo \'{"attached": [{"path": "p"}], "failed": [], "state": "Done"}\'; exit 0;;\nesac\nexit 0\n')
     (tmp_path / "refusal.json").write_text(json.dumps(FINDINGS))
     (tmp_path / "dod").mkdir()
     (tmp_path / "dod" / "DoD_8.md").write_text("x")
@@ -1574,3 +1574,213 @@ def test_github_post_step_strict_target_missing_gate_verdict_fails(tmp_path, she
     (tmp_path / "rt" / "gate.md").write_text("x\n")  # no gate.code: the gate step did not finish
     rc, out = _gh_run(tmp_path, _gh("ado-gate", STEP_POST), {"GH_TOKEN": "t", "PR_NUM": "7", "MODE": "strict"}, gh="exit 0\n")
     assert rc == 1 and "::error::" in out, out
+
+
+# ---- P4-11: the close step reads `approvers` from the PRE-merge target (never the merged commit's own config) and logs the cross-check by rule id only ----
+XC_BASE = "0123456789abcdef0123456789abcdef01234567"
+XC_DOC = {"phase": "done", "mode": "strict", "ok": False,
+          "findings": [{"rule": "decisions-xcheck-verdict", "detail": "HOSTILE-DETAIL ::error::x", "fix": "f"}, {"rule": "decisions-xcheck-marker", "detail": "d", "fix": "f"}]}
+
+
+def test_github_link_on_merge_passes_the_pre_merge_base_sha_through_env_to_both_done_calls():
+    step = next(s for s in steps(load("ado-link-on-merge")) if "ado done" in s.get("run", ""))
+    assert step["env"]["BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
+    calls = re.findall(r"ado done \"\$id\"[^\n]*", step["run"])
+    assert len(calls) == 2 and all(' --base "$BASE_SHA" ' in c for c in calls), calls
+    assert "${{" not in step["run"] and "merge_commit_sha" not in step["run"]  # the base is never derived from the merged commit
+
+
+def test_azure_link_on_merge_uses_the_first_parent_of_the_merged_commit_as_base():
+    script = next(s["script"] for s in yaml.safe_load(AZ_LINK.read_text())["steps"] if "ado done" in s.get("script", ""))
+    assert "base_sha=$(git rev-parse --verify --quiet 'HEAD^1^{commit}' 2>/dev/null || true)" in script
+    calls = re.findall(r"ado done \"\$id\"[^\n]*", script)
+    assert len(calls) == 2 and all(' --base "$base_sha" ' in c for c in calls), calls
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_calls_done_with_the_base(tmp_path, path, monkeypatch):
+    _link_with_ledger(tmp_path)
+    for k in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
+        monkeypatch.setenv(k, "t")
+    for k in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
+        monkeypatch.setenv(k, "t@example.invalid")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "base"], cwd=tmp_path, check=True)
+    first = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True, check=True).stdout.strip()
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "merged AB#7"], cwd=tmp_path, check=True)
+    snippet = (f"export IDS=7 CLOSE_STORY=true STATE= PR_NUM=1 PR_URL=u BRANCH=main SOURCE_VERSION=abcdef123456 BASE_SHA={XC_BASE}\n" + _link_snippet(path))
+    rc, out = _run_snippet(tmp_path, snippet, "main", ado_body=_merge7_ado(READY, CLOSED))
+    assert rc == 0, out
+    done_calls = [c for c in _calls(tmp_path) if c.startswith("done 7")]
+    expected = XC_BASE if path.parent.name != "pipelines" else first
+    assert [c.rsplit(" ", 2)[-2:] for c in done_calls] == [["--base", expected]] * 2, done_calls
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_logs_the_cross_check_by_rule_id_only(tmp_path, path, shell_flags):
+    family = "azure" if path.parent.name == "pipelines" else "github"
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path, doc=XC_DOC), ids="7")
+    assert rc == 1 and "7: strict done refused: decisions-xcheck-verdict decisions-xcheck-marker" in out and "HOSTILE-DETAIL" not in out, out
+    # advisory: the dry run succeeds with warnings; only the matching rule ids are logged, whatever else a warning holds
+    doc = {"ready": True, "warnings": ["decisions-xcheck-verdict: HOSTILE ::error::pwn ##vso[task.complete result=Succeeded]", "decisions-xcheck-dropped: x", "other note"]}
+    ado = _merge7_ado(json.dumps(doc), CLOSED)
+    rc, out = _link_run(tmp_path, path, ado, ids="7")
+    assert rc == 0, out
+    (line,) = [l for l in out.splitlines() if "done cross-check" in l]
+    prefix = "::warning::" if family == "github" else "##vso[task.logissue type=warning]"
+    assert line == f"{prefix}7: done cross-check: decisions-xcheck-dropped decisions-xcheck-verdict", out
+    assert "HOSTILE" not in out and "DoD complete" in out  # advisory: the story still closes
+    # no warnings: no line
+    rc, out = _link_run(tmp_path, path, _merge7_ado(READY, CLOSED), ids="7")
+    assert rc == 0 and "cross-check" not in out
+
+
+# ---- P4-11 fix round: Azure HEAD^1 is the pre-merge target only for a merge commit or a squash; a one-parent HEAD with changed trust keys is refused ----
+TGT_CFG = '{"organization": "contoso", "project": "Fabrikam", "approvers": ["55555555-5555-4555-8555-555555555555"]}'
+PR_CFG = '{"organization": "contoso", "project": "Fabrikam"}'  # a PR that drops the approvers
+
+
+def _topo(tmp_path, monkeypatch, kind, pr_changes_trust, older=0, tgt=TGT_CFG, pr=PR_CFG):
+    """A repo whose last commit is the merge result of a 1- or 2-commit PR by `kind` (merge, squash, rebase-ff, rebase-1): the target had `approvers`;
+    `older` further commits sit between the target's trust change and the merge."""
+    for k, v in (("GIT_AUTHOR_NAME", "t"), ("GIT_COMMITTER_NAME", "t"), ("GIT_AUTHOR_EMAIL", "t@example.invalid"), ("GIT_COMMITTER_EMAIL", "t@example.invalid")):
+        monkeypatch.setenv(k, v)
+
+    def git(*a):
+        subprocess.run(["git", "-c", "commit.gpgsign=false", *a], cwd=tmp_path, check=True, capture_output=True)
+
+    def write(name, text):
+        (tmp_path / name).write_text(text)
+        git("add", "-A", "--", name)
+    git("init", "-q", "-b", "main")
+    write("ado.config.json", tgt)
+    git("commit", "-q", "-m", "main: approvers configured")
+    for n in range(older):
+        write("older", str(n))
+        git("commit", "-q", "-m", f"older {n}")
+    write("g", "main moves on")
+    git("commit", "-q", "-m", "main moves on")
+    git("checkout", "-q", "-b", "pr", "HEAD~1")
+    if kind == "rebase-1":
+        if pr_changes_trust:
+            write("ado.config.json", pr)
+        write("f", "all")
+        git("commit", "-q", "-m", "AB#7 all in one")
+    else:
+        if pr_changes_trust:
+            write("ado.config.json", pr)
+        write("e", "first")
+        git("commit", "-q", "-m", "first")
+        write("f", "AB#7")
+        git("commit", "-q", "-m", "AB#7 done")
+    git("checkout", "-q", "main")
+    if kind == "merge":
+        git("merge", "-q", "--no-ff", "pr", "-m", "Merged PR 7: AB#7")
+    elif kind == "squash":
+        git("merge", "-q", "--squash", "pr")
+        git("commit", "-q", "-m", "Merged PR 7: AB#7")
+    else:
+        git("checkout", "-q", "pr")
+        git("rebase", "-q", "main")
+        git("checkout", "-q", "main")
+        git("merge", "-q", "--ff-only", "pr")
+
+
+def _az_close(tmp_path, flags):
+    (tmp_path / "dod").mkdir(exist_ok=True)
+    (tmp_path / "dod" / "DoD_7.md").write_text("x")
+    snippet = "export IDS=7 CLOSE_STORY=true STATE= PR_NUM=1 PR_URL=u BRANCH=main SOURCE_VERSION=abcdef123456\n" + _link_snippet(AZ_LINK)
+    rc, out = _run_snippet(tmp_path, snippet, "main", ado_body=_merge7_ado(READY, CLOSED), flags=flags)
+    return rc, out, _calls(tmp_path)
+
+
+TOPOLOGIES = [  # kind, the PR changes the trust keys, refused
+    ("merge", True, False), ("merge", False, False),
+    ("squash", False, False), ("squash", True, True),
+    ("rebase-ff", False, False), ("rebase-ff", True, True),
+    ("rebase-1", False, False), ("rebase-1", True, True),
+]
+
+
+@pytest.mark.parametrize("kind,changes,refused", TOPOLOGIES, ids=[f"{k}-{'trust-change' if c else 'no-change'}" for k, c, _ in TOPOLOGIES])
+def test_azure_link_on_merge_refuses_to_close_when_the_pre_merge_target_cannot_be_told(tmp_path, monkeypatch, shell_flags, kind, changes, refused):
+    _topo(tmp_path, monkeypatch, kind, changes)
+    parents = subprocess.run(["git", "rev-list", "--parents", "-n", "1", "HEAD"], cwd=tmp_path, capture_output=True, text=True).stdout.split()[1:]
+    assert len(parents) == (2 if kind == "merge" else 1)
+    rc, out, calls = _az_close(tmp_path, shell_flags)
+    done = [c for c in calls if c.startswith("done 7")]
+    if refused:
+        assert rc == 1 and not done, (out, calls)
+        assert "##vso[task.logissue type=error]7: close refused: approvers, approval, unattended or mode changed in the last 50 commits" in out and "ado done 7 locally" in out
+    else:
+        assert rc == 0 and len(done) == 2 and "close refused" not in out, (out, calls)
+        assert all(c.endswith(f"--base {parents[0]}") for c in done), (done, parents)  # the first parent: the real target tip for a merge commit and a squash
+
+
+@pytest.mark.parametrize("older,refused", [(10, True), (60, False)])
+def test_azure_trust_change_window_is_the_last_50_first_parent_commits_documented_residual(tmp_path, monkeypatch, older, refused):
+    # PINS THE DOCUMENTED RESIDUAL (padding): the target's trust keys were last changed `older` commits before a squash that changed nothing itself; only a
+    # change inside the 50-commit window refuses, so a PR that drops `approvers` and then adds 50 more commits gets past the guard (the merge-type limit is the control)
+    _topo(tmp_path, monkeypatch, "squash", False, older=0)
+    (tmp_path / "ado.config.json").write_text(PR_CFG)
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "-am", "approvers dropped"], cwd=tmp_path, check=True, capture_output=True)
+    for n in range(older):
+        (tmp_path / "pad").write_text(str(n))
+        subprocess.run(["git", "add", "-A", "--", "pad"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "-m", f"pad {n}"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "f").write_text("AB#7 again")
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "-am", "Merged PR 8: AB#7"], cwd=tmp_path, check=True, capture_output=True)
+    rc, out, calls = _az_close(tmp_path, ["-e"])
+    assert ("close refused" in out) == refused and (rc == 1) == refused, out
+    assert bool([c for c in calls if c.startswith("done 7")]) != refused
+
+
+def test_azure_one_parent_check_tolerates_an_invalid_or_missing_config(tmp_path, monkeypatch):
+    _topo(tmp_path, monkeypatch, "squash", False)
+    (tmp_path / "ado.config.json").write_text("{not json")  # a version that cannot be read differs from the others: refused
+    subprocess.run(["git", "-c", "commit.gpgsign=false", "commit", "-q", "-am", "Merged PR 9: AB#7"], cwd=tmp_path, check=True, capture_output=True)
+    rc, out, calls = _az_close(tmp_path, ["-eo", "pipefail"])
+    assert rc == 1 and "close refused" in out and not [c for c in calls if c.startswith("done 7")]
+
+
+STRICT_CFG = '{"organization": "contoso", "project": "Fabrikam", "mode": "strict", "approvers": ["55555555-5555-4555-8555-555555555555"]}'
+ADVISORY_CFG = '{"organization": "contoso", "project": "Fabrikam", "mode": "advisory", "approvers": ["55555555-5555-4555-8555-555555555555"]}'
+
+
+@pytest.mark.parametrize("kind", ["rebase-ff", "rebase-1", "squash"])
+def test_azure_a_pr_that_only_sets_advisory_mode_is_refused_too(tmp_path, monkeypatch, shell_flags, kind):
+    # `mode` is read from the target as well: a PR that keeps `approvers` but sets `mode: advisory` would turn the blocking cross-check into a warning
+    _topo(tmp_path, monkeypatch, kind, True, tgt=STRICT_CFG, pr=ADVISORY_CFG)
+    rc, out, calls = _az_close(tmp_path, shell_flags)
+    assert rc == 1 and "close refused: approvers, approval, unattended or mode changed" in out and not [c for c in calls if c.startswith("done 7")], out
+    _topo_dir = tmp_path / "ctl"
+    _topo_dir.mkdir()
+    _topo(_topo_dir, monkeypatch, kind, False, tgt=STRICT_CFG, pr=ADVISORY_CFG)  # the same repo without that change closes
+    rc, out, calls = _az_close(_topo_dir, shell_flags)
+    assert rc == 0 and len([c for c in calls if c.startswith("done 7")]) == 2, out
+
+
+@pytest.mark.parametrize("kind,changes", [("squash", False), ("rebase-ff", False), ("merge", False)])
+def test_azure_a_shallow_checkout_is_refused(tmp_path, monkeypatch, shell_flags, kind, changes):
+    src = tmp_path / "src"
+    src.mkdir()
+    _topo(src, monkeypatch, kind, changes)
+    clone = tmp_path / "clone"
+    subprocess.run(["git", "clone", "-q", "--depth", "2", f"file://{src}", str(clone)], check=True, capture_output=True)
+    assert subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=clone, capture_output=True, text=True).stdout.strip() == "true"
+    rc, out, calls = _az_close(clone, shell_flags)
+    assert rc == 1 and "close refused" in out and "shallow" in out and not [c for c in calls if c.startswith("done 7")], out
+    full = tmp_path / "full"
+    subprocess.run(["git", "clone", "-q", f"file://{src}", str(full)], check=True, capture_output=True)
+    rc, out, calls = _az_close(full, shell_flags)  # the same history in full closes
+    assert rc == 0 and len([c for c in calls if c.startswith("done 7")]) == 2, out
+
+
+def test_azure_an_unexpected_answer_of_the_history_check_is_refused(tmp_path, monkeypatch, shell_flags):
+    # zero commits listed (or anything but exactly one distinct config) is not "unchanged": a git that answers nothing fails closed
+    _topo(tmp_path, monkeypatch, "squash", False)
+    stub = tmp_path / "git"
+    stub.write_text('#!/bin/bash\ncase "$*" in "rev-list --first-parent"*) exit 0;; esac\nexec /usr/bin/git "$@"\n')
+    stub.chmod(0o755)
+    rc, out, calls = _az_close(tmp_path, shell_flags)
+    assert rc == 1 and "close refused" in out and not [c for c in calls if c.startswith("done 7")], out

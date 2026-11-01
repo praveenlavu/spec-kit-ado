@@ -48,20 +48,28 @@ steps:
           echo "$id: no ledger at $(printf '%s' "$ledger" | ann) - skipped."
           return 1
         fi
+        if [ "$trust_moved" = true ]; then
+          echo "##vso[task.logissue type=error]$id: close refused: approvers, approval, unattended or mode changed in the last 50 commits of a one-parent history, or the checkout is shallow, so the target branch's approvers cannot be established (a rebase or fast-forward merge cannot be told from a squash): a human runs ado done $id locally"
+          refused=true; story_refused=true  # a refused story is not transitioned either
+          return 1
+        fi
         # Dry run first: only a genuinely not-ready ledger is a quiet info line.
-        ado done "$id" --plan-out "${AGENT_TEMPDIRECTORY}/plan_${id}.md" > "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/done_${id}.err" || true
+        ado done "$id" --plan-out "${AGENT_TEMPDIRECTORY}/plan_${id}.md" --base "$base_sha" > "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/done_${id}.err" || true
         # A strict refusal (exit 2, a findings JSON without `ready` on stdout) is not an evaluation failure: report its rule ids, never its text, and fail the build at the end.
         if rules=$(python3 -I -c 'import json,re,sys;r=json.load(open(sys.argv[1]));assert "ready" not in r;print(" ".join(re.sub("[^A-Za-z0-9_-]","",str(x["rule"]))[:40] for x in r["findings"][:20]) or "none")' "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2>/dev/null); then
           echo "##vso[task.logissue type=error]$id: strict done refused: $rules"
           refused=true; story_refused=true  # a refused story is not transitioned either
           return 1
         fi
+        # advisory mode: the cross-check only warns; its rule ids (matched against a fixed pattern) are all that reaches the log
+        xw=$(python3 -I -c 'import json,re,sys;r=json.load(open(sys.argv[1]));print(" ".join(sorted({m.group() for w in r.get("warnings", []) for m in [re.match(r"decisions-xcheck-[a-z]+", str(w))] if m})))' "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2>/dev/null || true)
+        [ -z "$xw" ] || echo "##vso[task.logissue type=warning]$id: done cross-check: $xw"
         st=$(python3 -I -c 'import json,sys;r=json.load(open(sys.argv[1]));print("true" if r["ready"] else "false", "done" if r.get("already_done") is True else "open")' "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2>/dev/null || echo "unknown open")
         ready=${st% *}
         # A story already in done_state is never transitioned, whatever happened to its ledger: every note ends in $keep and the function returns 0.
         keep=; [ "${st#* }" = done ] && keep=" - already done, state left unchanged"
         if [ "$ready" = true ]; then
-          ado done "$id" --apply > "${AGENT_TEMPDIRECTORY}/apply_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/ado.err" && applied=true || applied=false
+          ado done "$id" --apply --base "$base_sha" > "${AGENT_TEMPDIRECTORY}/apply_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/ado.err" && applied=true || applied=false
           # the apply read is authoritative too: the dry-run GET may have failed or the story moved since
           [ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1])).get("already_done") is True)' "${AGENT_TEMPDIRECTORY}/apply_${id}.json" 2>/dev/null)" = True ] && keep=" - already done, state left unchanged"
           if [ "$applied" = true ]; then
@@ -84,6 +92,20 @@ steps:
         fi
         [ -n "$keep" ]
       }
+      # The target branch as it was BEFORE the merge: the first parent of the merged commit. That holds for a merge commit and for a squash; after a rebase / fast-forward merge
+      # HEAD^1 is a commit of the PR itself, which may have removed `approvers`. A one-parent HEAD cannot be told from a squash, so it fails closed: when the trust keys (and `mode`)
+      # differ between HEAD and any of the last 50 first-parent commits, or the checkout is shallow, or the answer is anything but one distinct value, the close is refused
+      # (a human runs `ado done` locally). This is a backstop: limiting the target branch's merge types to "Merge (no fast-forward)" and "Squash" is the control. Empty base:
+      # `ado done` refuses the empty --base.
+      base_sha=$(git rev-parse --verify --quiet 'HEAD^1^{commit}' 2>/dev/null || true)
+      trust_moved=false
+      [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != true ] || trust_moved=true
+      if [ "$(git rev-list --parents -n 1 HEAD 2>/dev/null | wc -w)" -eq 2 ]; then
+        n=$(for c in $(git rev-list --first-parent -n 50 HEAD 2>/dev/null); do
+          { git show "$c:ado.config.json" 2>/dev/null || true; } | python3 -I -c 'import json,sys;t=sys.stdin.buffer.read();d=json.loads(t.decode("utf-8")) if t.strip() else None;print(json.dumps({k: d.get(k) for k in ("approvers", "approval", "unattended", "mode")}, sort_keys=True) if isinstance(d, dict) else "absent")' 2>/dev/null || echo invalid
+        done | sort -u | wc -l)
+        [ "$(echo $n)" = 1 ] || trust_moved=true
+      fi
       refused=false
       for id in $ids; do
         ado comment "$id" "Merged to ${BRANCH} in commit ${SOURCE_VERSION:0:8}." > /dev/null 2> "${AGENT_TEMPDIRECTORY}/ado.err" \
