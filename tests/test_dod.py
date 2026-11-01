@@ -1,4 +1,5 @@
 import os
+import re
 
 from ado.dod import ac_lines, ac_hash, ledger_ac_hash, render_dod, _text, SECTION2
 
@@ -1007,3 +1008,42 @@ def test_spec_dir_round_trips_and_is_stable_across_refreshes(tmp_path, given, re
         write_dod(_wi(), tmp_path, "o", "p", synced="2026-07-14", refresh=True)
         assert p.read_text(encoding="utf-8") == first and ledger_spec_dir(first) == recorded
     assert "<!--" not in first and (recorded == given or ledger_spec_dir(first) != given)  # an escaped one is not the given path: fails closed
+
+
+def _old_text(raw):
+    """`dod._text` as it was until P4-8's review: quadratic on long blank/`<` runs; kept here as the reference for the differential test."""
+    import html as _h
+    from ado import dod as _d
+    if not raw:
+        return ""
+    s = raw.replace("\r", "")
+    s = re.sub(r"(?i)<\s*br\s*/?>", "\n", s)
+    s = re.sub(r"(?i)<\s*(/?)\s*(ol|ul|li)\b[^>]*>", _d._list_item([]), s)
+    s = re.sub(r"(?i)<\s*/\s*t[dh]\s*>\s*(?=<\s*t[dh][\s>])", " | ", s)
+    s = re.sub(r"(?i)<\s*/?\s*(p|div|tr|h[1-6])\b[^>]*>", "\n", s)
+    s = re.sub(r"<[^>]+>", "", s)
+    s = _h.unescape(s)
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = re.sub(r"\n{2,}", "\n", s)
+    return s.strip()
+
+
+def test_text_matches_the_old_regex_version_on_random_tag_soup():
+    import random
+    rnd = random.Random(3)
+    parts = ["<p>", "</p>", "<br>", "<br/>", "< br >", "<li>", "</li>", "<ul>", "</ul>", "<ol>", "</ol>", "</ ol>", "< / ul >", "<td>", "</td>", "</td> ",
+             "<th>", "<div>", "</div>", "<tr>", "<h2>", "<b>", "<a href='x'>", "</a>", "<>", "<", ">", " ", "  ", "\t", "\n", "\n\n", "text", "&amp;",
+             "&lt;", "<!-- c -->", "<P>", "<LI>", "<p class='a b'>", "<abbr>", "<ulx>", "< p >", "<  /  p  >", "\r", " \n", "x "]
+    for _ in range(5000):
+        s = "".join(rnd.choice(parts) for _ in range(rnd.randint(0, 16)))
+        assert _text(s) == _old_text(s), s
+
+
+def test_text_is_linear_on_hostile_comments():
+    """Any commenter can post a megabyte: 200,000 blanks took 44 s, 200,000 `<` took 11 s, `<` + 40,000 blanks + `>` 8 s (found in the P4-8 review)."""
+    import time
+    for s in (" " * 1_000_000, "<" * 1_000_000, "<" + " " * 500_000 + ">", "<" + " " * 300_000 + "/" + " " * 300_000 + "li", ("</td>" + " " * 50) * 20_000,
+              "<>" * 500_000, "< " * 200_000):
+        t = time.monotonic()
+        _text(s)
+        assert time.monotonic() - t < 1.0

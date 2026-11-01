@@ -27,18 +27,41 @@ def _list_item(stack):
     return tok
 
 
+def _strip_tags(s):
+    """`re.sub(r"<[^>]+>", "", s)` in ONE pass: the regex rescanned to the end of the text for every `<` that has no `>` (11 s for 200,000 `<`).
+    The next `>` is found once while it lies ahead; `<>` is not a tag (it stays), a `<` with no `>` after it stays with everything after it."""
+    out, i, gt, n = [], 0, -1, len(s)
+    while True:
+        j = s.find("<", i)
+        if j < 0:
+            break
+        if gt < j:
+            gt = s.find(">", j)
+            if gt < 0:
+                break
+        if gt == j + 1:  # `<>`: `[^>]+` needs one character
+            out.append(s[i:j + 2])
+            i = j + 2
+            continue
+        out.append(s[i:j])
+        i = gt + 1
+    out.append(s[i:])
+    return "".join(out)
+
+
 def _text(raw):
-    """Convert ADO rich-text (HTML) to readable plain text. Deterministic."""
+    """Convert ADO rich-text (HTML) to readable plain text. Deterministic. Every pass is linear: ADO text is untrusted (a comment can be 1 MiB of
+    `<` or blanks, and `\s*/?\s*` backtracks quadratically), so no pattern here has two adjacent optional runs and tags are cut by `_strip_tags`."""
     if not raw:
         return ""
     s = raw.replace("\r", "")
     s = re.sub(r"(?i)<\s*br\s*/?>", "\n", s)
-    s = re.sub(r"(?i)<\s*(/?)\s*(ol|ul|li)\b[^>]*>", _list_item([]), s)
+    s = re.sub(r"(?i)<\s*(?:(/)\s*)?(ol|ul|li)\b[^>]*>", _list_item([]), s)
     s = re.sub(r"(?i)<\s*/\s*t[dh]\s*>\s*(?=<\s*t[dh][\s>])", " | ", s)  # cell separator
-    s = re.sub(r"(?i)<\s*/?\s*(p|div|tr|h[1-6])\b[^>]*>", "\n", s)
-    s = re.sub(r"<[^>]+>", "", s)
+    s = re.sub(r"(?i)<\s*(?:/\s*)?(p|div|tr|h[1-6])\b[^>]*>", "\n", s)
+    s = _strip_tags(s)
     s = _html.unescape(s)
-    s = re.sub(r"[ \t]+\n", "\n", s)
+    s = "\n".join(line.rstrip(" \t") for line in s.split("\n"))  # trailing blanks of every line (`[ \t]+\n`, quadratic on a long blank run)
     s = re.sub(r"\n{2,}", "\n", s)
     return s.strip()
 
