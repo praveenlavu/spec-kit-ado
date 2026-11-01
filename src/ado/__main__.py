@@ -468,6 +468,30 @@ def _kits_pin(args):
     return 0
 
 
+def _rules_confirm(args):
+    """`ado rules <id> --confirm`: records in the ledger header the rule hashes a human reviewed (local only: no token, no request). New ids
+    are added by anyone. An already-recorded id that would get another hash, or leave the record, is a human re-reading a changed rule: it
+    needs a terminal on stdin AND stdout (a guard against accidents, not a security boundary: a pseudo-terminal gives a tty), prints the ids
+    and old/new hashes, and writes only when the typed `approval code` matches; everything is read again and the code recomputed right
+    before the write."""
+    if os.environ.get("ADO_CONFIG"):
+        raise ValueError(rules.CONFIRM_ENV)
+    dod_path = Config.load().dod_path
+    prep = rules.prepare_confirm(dod_path, args.id)
+    if prep["needs_human"]:
+        if not (sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty()):
+            raise ValueError(rules.CONFIRM_TERMINAL)
+        print(rules.confirm_preview(args.id, prep))
+        if not stack.confirm_code(prep["code"]):
+            raise ValueError(stack.E_NOT_CONFIRMED)
+        again = rules.prepare_confirm(dod_path, args.id)
+        if again["code"] != prep["code"]:
+            raise ValueError(rules.CONFIRM_SWAPPED)
+        prep = again
+    written = prep["write"]()
+    return {"id": args.id, "reviewed": prep["reviewed"], "added": prep["added"], "changed": prep["changed"], "removed": prep["removed"], "written": written}
+
+
 def _stack_show(args):
     """`ado stack show`: the config only supplies the mode and strict.test_command (none is advisory; an invalid one fails closed)."""
     try:
@@ -625,6 +649,8 @@ def main(argv=None):
     p = sub.add_parser("rules", help="Pull the business rules of the story's Epic/Feature ancestors into <dod_path>/Rules_<id>.md "
                        "(reads ADO with GET only)")
     p.add_argument("id", type=int)
+    p.add_argument("--confirm", action="store_true", help="local only: record in the ledger header the hashes of the rules in this story's scope "
+                   "(`Rules reviewed:`). New ids need no terminal; re-confirming a changed hash or dropping a recorded id needs your own terminal and a typed code")
     p = sub.add_parser("decisions", help="List the open, validated and rejected D<n> lines of Decisions_<id>.md; --add "
                        "records one; --post sends the unposted open ones as one new comment (dry run unless --apply)")
     p.add_argument("id", type=int)
@@ -829,6 +855,8 @@ def main(argv=None):
             out = _add_decision(args)
         elif args.command == "decisions" and args.resolve:  # local only: no token, no request
             out = _resolve_decision(args)
+        elif args.command == "rules" and args.confirm:  # local only: no token, no request
+            out = _rules_confirm(args)
         elif args.command == "kits":  # local only: no token, no request, no config
             return _kits_pin(args) if args.kits_command == "pin" else _kits_verify(args)
         elif args.command == "stack" and args.stack_command == "show":  # local only: no token, no request

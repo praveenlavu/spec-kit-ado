@@ -1846,3 +1846,22 @@ def test_tags_and_exclusions_doc_pins():
                  "the effective set", "**Worked example.**", "is a **local claim**", "Known limit in 0.3", "whatever the heading now says", "process enforcement, not a security boundary", "do not echo them"):
         assert word in text, word
     assert "Rule tags and scope (P3-6)" in _flat("CHANGELOG.md")
+
+
+def test_confirming_rules_doc_pins():
+    text = _flat("docs/business-rules.md")
+    for word in ("## Confirming rules", "`ado rules <story id> --confirm`", "local only (no token, no request)", "combines with no other flag",
+                 "- **Rules reviewed:** BR-1200-1@0c77e2d4, BR-1201-1@3f2a9c1b", "The heading hash", "does not match its heading hash",
+                 "New ids need no terminal", "Re-confirming needs a human", "stdin and stdout are both terminals", "`approval code: <12 hex>`",
+                 "never rule text", "`not confirmed: nothing was approved`", "Input typed before the prompt is discarded", "read again and the code recomputed",
+                 "the file's own line terminator (LF or CRLF, taken from its first line) is kept", "atomic rename", "a symlinked or hard-linked ledger", "`written: false`",
+                 "Process enforcement, not a security boundary", "can read the code and type it", "can edit or delete the `Rules reviewed:` line by hand",
+                 "the ledger diff in the pull request is the only visible trace", "arrives with the gate task (P3-8)"):
+        assert word in text, word
+    hitl = _flat("rules/hitl.md")
+    for word in ("`ado rules <id> --confirm`", "Re-confirming is human only", "unless stdin and stdout are both terminals", "never the rule text",
+                 "`approval code: <12 hex>`", "not a security boundary", "can read and type the code", "Never run a re-confirmation yourself"):
+        assert word in hitl, word
+    assert "`rules <id> --confirm` is local only" in _flat("README.md") and "docs/business-rules.md#confirming-rules" in _flat("README.md")
+    assert _flat("README.md").count("See [business rules](docs/business-rules.md#pulling-rules) and [confirming rules]") == 1
+    assert "Never run it for the human" in _flat("AGENTS.md") and "`ado rules <story id> --confirm` (P3-7)" in _flat("CHANGELOG.md")

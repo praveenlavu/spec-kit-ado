@@ -378,7 +378,7 @@ def test_cli_rules_exit_codes(tmp_path, monkeypatch, capsys):
     m, _ = env(tmp_path, monkeypatch, [STORY, FEATURE, EPIC], {"enabled": True})
     assert m.main(["rules", "1001"]) == 0
     capsys.readouterr()
-    for argv in (["rules"], ["rules", "abc"], ["rules", "0"], ["rules", "-3"], ["rules", "1000000000"], ["rules", "1001", "--confirm"]):
+    for argv in (["rules"], ["rules", "abc"], ["rules", "0"], ["rules", "-3"], ["rules", "1000000000"], ["rules", "1001", "--bogus"]):
         with pytest.raises(SystemExit) as e:
             m.main(argv)
         assert e.value.code == 2, argv
@@ -393,3 +393,470 @@ def test_main_help_lists_the_verb(capsys):
     with pytest.raises(SystemExit):
         main(["--help"])
     assert "rules" in capsys.readouterr().out
+
+
+# ---- `ado rules <id> --confirm` (P3-7): the hashes a human reviewed go into the ledger header; local only ----
+
+import hashlib  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+
+from ado import dod, stack  # noqa: E402
+from tests.conftest import TypedStdin, run_in_pty, shown_code, terminal  # noqa: E402
+
+FROM_LINE = "- **Rules from:** 1201, 1200\n"
+CMD = ["rules", "1001", "--confirm"]
+
+
+class Ctx:
+    """A pulled repo (Rules_1201.md, Rules_1200.md) and a ledger with `Rules from: 1201, 1200` in `tmp_path`."""
+
+    def __init__(self, tmp_path, m):
+        self.root, self.m = tmp_path, m
+        self.ledger = tmp_path / "dod" / "DoD_1001.md"
+        self.h = {r: v["hash"] for w in (1200, 1201) for r, v in rules.parse_file(self.rules_text(w), w)["rules"].items()}
+
+    def rules_text(self, wid):
+        return (self.root / "dod" / f"Rules_{wid}.md").read_text(encoding="utf-8")
+
+    def text(self):
+        return self.ledger.read_bytes().decode("utf-8")
+
+    def put(self, md):
+        self.ledger.write_bytes(md.encode("utf-8"))
+
+    def record(self, value, eol="\n"):
+        """Hand-write a `Rules reviewed:` line under `Rules from:` (as an earlier --confirm would have)."""
+        md = self.text()
+        assert FROM_LINE in md
+        self.put(md.replace(FROM_LINE, FROM_LINE + f"- **Rules reviewed:** {value}\n"))
+
+    def value(self):
+        return self.text().split("- **Rules reviewed:** ")[1].split("\n")[0].rstrip("\r")
+
+    def want(self):
+        return f"BR-1200-1@{self.h['BR-1200-1']}, BR-1201-1@{self.h['BR-1201-1']}"
+
+    def run(self, capsys, *extra):
+        code = self.m.main([*CMD, *extra])
+        cap = capsys.readouterr()
+        return code, (json.loads(cap.out) if cap.out.strip().startswith("{") else None), cap.out, cap.err
+
+
+@pytest.fixture
+def ctx(tmp_path, monkeypatch, capsys):
+    m, _ = env(tmp_path, monkeypatch, [STORY, FEATURE, EPIC], {"enabled": True})
+    assert m.main(["rules", "1001"]) == 0
+    capsys.readouterr()
+    dod.write_dod(STORY, "dod", "contoso", "Fabrikam", rules_from=[1201, 1200])
+
+    def boom(c):
+        raise AssertionError("--confirm must not reach ADO")
+    monkeypatch.setattr(m, "AdoClient", boom)
+    return Ctx(tmp_path, m)
+
+
+def leftovers(ctx):
+    return sorted(p.name for p in (ctx.root / "dod").iterdir() if p.name.endswith(".tmp"))
+
+
+def test_first_confirm_without_tty_writes(ctx, capsys):
+    before = ctx.text()
+    code, out, raw, err = ctx.run(capsys)
+    assert code == 0 and err == ""
+    assert ctx.value() == ctx.want() and ctx.want().startswith("BR-1200-1@")  # sorted by work item, then number; the draft BR-1201-2 and the retired BR-1200-3 are not in scope
+    assert ctx.text() == before.replace(FROM_LINE, FROM_LINE + f"- **Rules reviewed:** {ctx.want()}\n")
+    assert dod.ledger_rules_reviewed(ctx.text()) == {"present": True, "valid": True, "hashes": {"BR-1200-1": ctx.h["BR-1200-1"], "BR-1201-1": ctx.h["BR-1201-1"]}}
+    assert out == {"id": 1001, "reviewed": ctx.want(), "added": ["BR-1200-1", "BR-1201-1"], "changed": [], "removed": [], "written": True}
+    assert "Customers earn" not in raw and leftovers(ctx) == []
+
+
+def test_confirm_is_a_no_op_when_nothing_changed(ctx, capsys):
+    assert ctx.run(capsys)[0] == 0
+    first = ctx.ledger.stat()
+    code, out, _, _ = ctx.run(capsys)
+    assert code == 0 and out["written"] is False and out["added"] == out["changed"] == out["removed"] == []
+    assert ctx.ledger.stat().st_ino == first.st_ino and ctx.ledger.stat().st_mtime_ns == first.st_mtime_ns
+
+
+def test_a_recorded_line_in_another_order_is_not_a_change(ctx, capsys):
+    ctx.record(f"BR-1201-1@{ctx.h['BR-1201-1']}, BR-1200-1@{ctx.h['BR-1200-1']}")
+    before = ctx.text()
+    code, out, _, _ = ctx.run(capsys)
+    assert code == 0 and out["written"] is False and ctx.text() == before
+
+
+def test_new_ids_are_added_without_a_terminal_and_the_old_ones_kept(ctx, capsys):
+    ctx.record(f"BR-1200-1@{ctx.h['BR-1200-1']}")
+    code, out, _, _ = ctx.run(capsys)
+    assert code == 0 and out["added"] == ["BR-1201-1"] and out["changed"] == []
+    assert ctx.value() == ctx.want()
+
+
+def test_changed_hash_refused_without_tty(ctx, capsys):
+    ctx.record(f"BR-1200-1@{ctx.h['BR-1200-1']}, BR-1201-1@aaaaaaaa")
+    before = ctx.text()
+    code, out, raw, err = ctx.run(capsys)
+    assert code == 2 and out is None and raw == ""
+    assert err == f"error: {rules.CONFIRM_TERMINAL}\n" and ctx.text() == before
+    assert "aaaaaaaa" not in err and ctx.h["BR-1201-1"] not in err and leftovers(ctx) == []
+
+
+def test_changed_hash_with_tty_rewrites_only_that_line(ctx, capsys, monkeypatch):
+    ctx.record(f"BR-1200-1@{ctx.h['BR-1200-1']}, BR-1201-1@aaaaaaaa")
+    before = ctx.text()
+    stdin = terminal(monkeypatch)
+    code, out, raw, err = ctx.run(capsys)
+    assert code == 0 and err == "" and stdin.lines == 1
+    assert "BR-1201-1" in raw and "aaaaaaaa" in raw and ctx.h["BR-1201-1"] in raw and "Customers earn" not in raw
+    after = ctx.text()
+    assert after == before.replace("BR-1201-1@aaaaaaaa", f"BR-1201-1@{ctx.h['BR-1201-1']}")
+    assert after.count("\n") == before.count("\n") and leftovers(ctx) == []
+    assert json.loads(raw[raw.index("{"):]) == {"id": 1001, "reviewed": ctx.want(), "added": [], "changed": ["BR-1201-1"], "removed": [], "written": True}
+
+
+def test_dropping_a_recorded_id_needs_the_terminal_too(ctx, capsys, monkeypatch):
+    ctx.record(f"BR-1200-1@{ctx.h['BR-1200-1']}, BR-1200-2@bbbbbbbb, BR-1201-1@{ctx.h['BR-1201-1']}")  # BR-1200-2 is in no file
+    before = ctx.text()
+    code, _, _, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_TERMINAL}\n" and ctx.text() == before
+    terminal(monkeypatch)
+    code, out, raw, _ = ctx.run(capsys)
+    assert code == 0 and "BR-1200-2" in raw and "bbbbbbbb" in raw and out is None  # the preview comes first, the JSON after it
+    assert ctx.value() == ctx.want()
+
+
+def test_an_excluded_rule_leaves_the_record_only_through_the_terminal(ctx, capsys, monkeypatch):
+    md, d = decisions.add(decisions.render_file(1001), "decision", "out of scope: BR-1201-1", why="not for this story")
+    d1 = decisions.parse_decisions(md)["open"][0]
+    (ctx.root / "dod" / "Decisions_1001.md").write_text(md.rstrip("\n") + f" · posted: 5:{decisions.marker_hash(d1)}\n", encoding="utf-8")
+    ctx.record(f"BR-1200-1@{ctx.h['BR-1200-1']}, BR-1201-1@{ctx.h['BR-1201-1']}")
+    assert ctx.run(capsys)[0] == 2
+    terminal(monkeypatch)
+    code, _, raw, _ = ctx.run(capsys)
+    assert code == 0 and ctx.value() == f"BR-1200-1@{ctx.h['BR-1200-1']}"
+
+
+def test_nothing_in_scope_records_none(ctx, capsys):
+    ctx.put(ctx.text().replace(FROM_LINE, "- **Rules from:** none\n"))
+    code, out, _, _ = ctx.run(capsys)
+    assert code == 0 and ctx.value() == "none" and out["reviewed"] == "none"
+    assert dod.ledger_rules_reviewed(ctx.text())["valid"]
+
+
+def test_confirm_survives_refresh(ctx, capsys):
+    assert ctx.run(capsys)[0] == 0
+    line = f"- **Rules reviewed:** {ctx.want()}\n"
+    dod.write_dod(STORY, "dod", "contoso", "Fabrikam", refresh=True, rules_from=[1201, 1200])
+    assert line in ctx.text() and ctx.text().count("Rules reviewed") == 1
+    dod.write_dod(STORY, "dod", "contoso", "Fabrikam", refresh=True)  # rules off: the line is kept too
+    assert line in ctx.text()
+
+
+def test_missing_ledger_exit_2(ctx, capsys):
+    ctx.ledger.unlink()
+    code, out, raw, err = ctx.run(capsys)
+    assert code == 2 and out is None and err == f"error: {rules.CONFIRM_NO_LEDGER}\n" and not ctx.ledger.exists()
+
+
+def test_crlf_ledger_keeps_its_terminator_on_insert_and_on_replace(ctx, capsys, monkeypatch):
+    ctx.put(ctx.text().replace("\n", "\r\n"))
+    before = ctx.ledger.read_bytes()
+    assert ctx.run(capsys)[0] == 0
+    after = ctx.ledger.read_bytes()
+    assert after == before.replace(b"- **Rules from:** 1201, 1200\r\n", b"- **Rules from:** 1201, 1200\r\n- **Rules reviewed:** " + ctx.want().encode() + b"\r\n")
+    assert after.count(b"\n") == after.count(b"\r\n")
+    ctx.put(ctx.text().replace(f"BR-1201-1@{ctx.h['BR-1201-1']}", "BR-1201-1@aaaaaaaa"))
+    before = ctx.ledger.read_bytes()
+    terminal(monkeypatch)
+    assert ctx.run(capsys)[0] == 0
+    assert ctx.ledger.read_bytes() == before.replace(b"BR-1201-1@aaaaaaaa", f"BR-1201-1@{ctx.h['BR-1201-1']}".encode())
+    assert ctx.ledger.read_bytes().count(b"\n") == ctx.ledger.read_bytes().count(b"\r\n")
+
+
+def test_refresh_after_a_crlf_confirm_keeps_the_line(ctx, capsys):
+    ctx.put(ctx.text().replace("\n", "\r\n"))
+    assert ctx.run(capsys)[0] == 0
+    dod.write_dod(STORY, "dod", "contoso", "Fabrikam", refresh=True, rules_from=[1201, 1200])
+    assert f"- **Rules reviewed:** {ctx.want()}\n" in ctx.text()
+
+
+def test_a_symlinked_ledger_is_refused_and_nothing_is_written(ctx, capsys):
+    real = ctx.root / "real_ledger.md"
+    real.write_bytes(ctx.ledger.read_bytes())
+    ctx.ledger.unlink()
+    ctx.ledger.symlink_to(real)
+    before = real.read_bytes()
+    code, out, raw, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_LEDGER}\n" and real.read_bytes() == before and ctx.ledger.is_symlink() and leftovers(ctx) == []
+
+
+def test_a_hard_linked_or_non_regular_ledger_is_refused(ctx, capsys):
+    os.link(ctx.ledger, ctx.root / "other_name.md")
+    assert ctx.run(capsys)[0] == 2 and "Rules reviewed" not in ctx.text()
+    os.unlink(ctx.root / "other_name.md")
+    ctx.ledger.unlink()
+    ctx.ledger.mkdir()
+    code, _, _, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_LEDGER}\n"
+
+
+def test_a_rule_whose_text_no_longer_matches_its_heading_hash_is_not_recordable(ctx, capsys):
+    path = ctx.root / "dod" / "Rules_1201.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("Customers earn 1 points per euro.", "Customers earn 100 points per euro."), encoding="utf-8")
+    before = ctx.text()
+    code, out, raw, err = ctx.run(capsys)
+    assert code == 2 and raw == "" and ctx.text() == before
+    assert err == "error: " + rules.CONFIRM_HASH.format(ids="BR-1201-1") + "\n" and "100 points" not in err
+
+
+def test_an_invalid_or_missing_rules_file_is_refused(ctx, capsys):
+    before = ctx.text()
+    path = ctx.root / "dod" / "Rules_1200.md"
+    good = path.read_text(encoding="utf-8")
+    path.write_text(good + "\n<!-- hide -->\n", encoding="utf-8")
+    assert ctx.run(capsys)[3] == f"error: {rules.CONFIRM_FILES}\n"
+    path.write_text(good.replace("rules-format: 1", "rules-format: 2"), encoding="utf-8")
+    assert ctx.run(capsys)[3] == f"error: {rules.CONFIRM_FILES}\n"
+    path.unlink()
+    code, _, _, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_FILES}\n" and ctx.text() == before
+
+
+def test_a_symlinked_rules_file_is_refused(ctx, capsys):
+    path = ctx.root / "dod" / "Rules_1200.md"
+    real = ctx.root / "copy.md"
+    real.write_bytes(path.read_bytes())
+    path.unlink()
+    path.symlink_to(real)
+    assert ctx.run(capsys)[3] == f"error: {rules.CONFIRM_FILES}\n" and "Rules reviewed" not in ctx.text()
+
+
+def test_an_unreadable_decisions_file_is_refused(ctx, capsys):
+    (ctx.root / "dod" / "Decisions_1001.md").mkdir()
+    code, _, _, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_DECISIONS}\n" and "Rules reviewed" not in ctx.text()
+
+
+@pytest.mark.parametrize("name,edit", [
+    ("opener in the title hides the first heading", lambda md: md.replace("# DoD — US1001: ", "# DoD — US1001: x <!-- ", 1)),
+    ("a fence hides the first heading", lambda md: md.replace("\n- **ADO:**", "\n```\n- **ADO:**", 1)),
+    ("two Rules reviewed lines", lambda md: md.replace(FROM_LINE, FROM_LINE + "- **Rules reviewed:** none\n- **Rules reviewed:** none\n")),
+    ("a malformed Rules reviewed line", lambda md: md.replace(FROM_LINE, FROM_LINE + "- **Rules reviewed:** BR-1201-1 deadbeef\n")),
+    ("a quoted Rules reviewed line", lambda md: md.replace(FROM_LINE, FROM_LINE + "> - **Rules reviewed:** none\n")),
+    ("a repeated id", lambda md: md.replace(FROM_LINE, FROM_LINE + "- **Rules reviewed:** BR-1201-1@aaaaaaaa, BR-1201-1@bbbbbbbb\n")),
+    ("a malformed Rules from line", lambda md: md.replace(FROM_LINE, "- **Rules from:** 1201,1200\n")),
+    ("two Rules from lines", lambda md: md.replace(FROM_LINE, FROM_LINE + FROM_LINE)),
+])
+def test_an_untrusted_or_malformed_header_is_refused(ctx, capsys, monkeypatch, name, edit):
+    ctx.put(edit(ctx.text()))
+    before = ctx.ledger.read_bytes()
+    for tty in (False, True):
+        if tty:
+            terminal(monkeypatch)
+        code, out, raw, err = ctx.run(capsys)
+        assert code == 2 and err == f"error: {rules.CONFIRM_HEADER}\n" and ctx.ledger.read_bytes() == before, name
+    assert leftovers(ctx) == []
+
+
+def test_a_ledger_without_rules_from_is_refused(ctx, capsys):
+    ctx.put(ctx.text().replace(FROM_LINE, ""))
+    code, _, _, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_NO_FROM}\n" and "Rules reviewed" not in ctx.text()
+
+
+def test_a_forged_line_in_section_1_is_not_the_header(ctx, capsys):
+    ctx.put(ctx.text().replace("### Description\n", "### Description\n- **Rules reviewed:** BR-1201-1@aaaaaaaa\n"))
+    code, out, _, _ = ctx.run(capsys)
+    assert code == 0 and out["added"] == ["BR-1200-1", "BR-1201-1"] and ctx.value() == ctx.want()
+
+
+def test_adoconfig_set_is_refused(ctx, capsys, monkeypatch, tmp_path_factory):
+    other = tmp_path_factory.mktemp("elsewhere") / "c.json"
+    other.write_text(json.dumps({"organization": "contoso", "project": "Fabrikam", "dod_path": "elsewhere"}))
+    monkeypatch.setenv("ADO_CONFIG", str(other))
+    code, _, _, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_ENV}\n" and "Rules reviewed" not in ctx.text()
+
+
+def test_the_confirm_code_covers_the_ledger_and_the_value(ctx):
+    ctx.record(f"BR-1200-1@{ctx.h['BR-1200-1']}, BR-1201-1@aaaaaaaa")
+    a = rules.prepare_confirm("dod", 1001)
+    assert a["needs_human"] and a["changed"] == ["BR-1201-1"] and a["code"] == rules.prepare_confirm("dod", 1001)["code"]
+    ctx.put(ctx.text().replace("Last synced:** ", "Last synced:** x"))
+    assert rules.prepare_confirm("dod", 1001)["code"] != a["code"]
+
+
+# ---- the typed approval code (the same mechanism as `ado stack approve`) ----
+
+def stale(ctx):
+    ctx.record(f"BR-1200-1@{ctx.h['BR-1200-1']}, BR-1201-1@aaaaaaaa")
+    return ctx.ledger.read_bytes()
+
+
+@pytest.mark.parametrize("answer", ["deadbeef0000\n", "\n", "", "yes\n", KeyboardInterrupt])
+def test_a_wrong_or_missing_code_confirms_nothing(ctx, capsys, monkeypatch, answer):
+    before = stale(ctx)
+    terminal(monkeypatch, answer)
+    code, out, raw, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {stack.E_NOT_CONFIRMED}\n" and ctx.ledger.read_bytes() == before and leftovers(ctx) == []
+
+
+def test_the_code_is_never_read_from_a_pipe(ctx, capsys, monkeypatch):
+    before = stale(ctx)
+
+    class Piped(TypedStdin):
+        def isatty(self):
+            return False
+    monkeypatch.setattr(sys, "stdin", Piped())
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    code, _, raw, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_TERMINAL}\n" and "approval code" not in raw and ctx.ledger.read_bytes() == before
+
+
+def test_stdout_must_be_a_terminal_too(ctx, capsys, monkeypatch):
+    before = stale(ctx)
+    monkeypatch.setattr(sys, "stdin", TypedStdin())
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    code, _, raw, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_TERMINAL}\n" and "approval code" not in raw and ctx.ledger.read_bytes() == before
+
+
+def test_the_ledger_edited_between_the_prompt_and_the_code_is_refused(ctx, capsys, monkeypatch):
+    before = stale(ctx)
+
+    def edit(code):
+        ctx.ledger.write_bytes(before.replace(b"Last synced:** ", b"Last synced:** x"))
+    terminal(monkeypatch, None, before=edit)
+    code, _, _, err = ctx.run(capsys)
+    assert code == 2 and err == f"error: {rules.CONFIRM_SWAPPED}\n" and b"BR-1201-1@aaaaaaaa" in ctx.ledger.read_bytes()
+
+
+def test_a_rules_file_edited_between_the_prompt_and_the_code_is_refused(ctx, capsys, monkeypatch):
+    before = stale(ctx)
+    path = ctx.root / "dod" / "Rules_1201.md"
+
+    def edit(code):
+        path.write_text(path.read_text(encoding="utf-8").replace("Customers earn 1 points per euro.", "Customers earn 100 points per euro."), encoding="utf-8")
+    terminal(monkeypatch, None, before=edit)
+    code, _, _, err = ctx.run(capsys)
+    assert code == 2 and err.startswith("error: ") and "nothing" in err and ctx.ledger.read_bytes() == before
+
+
+def test_the_ledger_replaced_by_a_symlink_before_the_write_is_refused(ctx, monkeypatch):
+    before = stale(ctx)
+    prep = rules.prepare_confirm("dod", 1001)
+    real = ctx.root / "elsewhere.md"
+    real.write_bytes(before)
+    ctx.ledger.unlink()
+    ctx.ledger.symlink_to(real)
+    with pytest.raises(ValueError) as e:
+        prep["write"]()
+    assert str(e.value) == rules.CONFIRM_SWAPPED and real.read_bytes() == before and ctx.ledger.is_symlink() and leftovers(ctx) == []
+
+
+def test_a_write_error_has_one_fixed_text(ctx, monkeypatch):
+    before = stale(ctx)
+    prep = rules.prepare_confirm("dod", 1001)
+    monkeypatch.setattr(stack, "_atomic_replace", lambda *a, **k: (_ for _ in ()).throw(ValueError(stack._E_BACK)))
+    with pytest.raises(ValueError) as e:
+        prep["write"]()
+    assert str(e.value) == rules.CONFIRM_WRITE and ctx.ledger.read_bytes() == before
+
+
+def test_the_text_about_to_be_renamed_is_checked(ctx, monkeypatch):
+    stale(ctx)
+    prep = rules.prepare_confirm("dod", 1001)
+    seen = {}
+    orig = stack._atomic_replace
+
+    def spy(path, text, check=None, expect=None):
+        seen["check"] = check
+        return orig(path, text, check, expect)
+    monkeypatch.setattr(stack, "_atomic_replace", spy)
+    prep["write"]()
+    good = ctx.ledger.read_bytes()
+    seen["check"](good)
+    for bad in (good.replace(b"BR-1201-1@", b"BR-1201-2@"), good.replace(b"Rules from:** 1201, 1200", b"Rules from:** 1201"),
+                good.replace(b"Last synced:** ", b"Last synced:** x")):
+        with pytest.raises(ValueError) as e:
+            seen["check"](bad)
+        assert str(e.value) == rules.CONFIRM_WRITE
+
+
+@pytest.mark.parametrize("eol", ["\r", "\u2028"])
+def test_an_unusual_line_terminator_on_the_line_is_refused(ctx, capsys, eol):
+    ctx.put(ctx.text().replace(FROM_LINE, "- **Rules from:** 1201, 1200" + eol + "- **Note:** x\n"))
+    before = ctx.ledger.read_bytes()
+    code, _, _, err = ctx.run(capsys)
+    assert code == 2 and err.startswith("error: ") and ctx.ledger.read_bytes() == before
+
+
+def test_early_typed_code_is_flushed_and_the_same_code_typed_after_the_prompt_confirms(ctx):
+    stale(ctx)
+    before = ctx.ledger.read_bytes()
+    early = rules.prepare_confirm("dod", 1001)["code"]
+    code, screen, err = run_in_pty(CMD, ctx.root, early=early, answer="")  # then end of input at the prompt
+    assert code == 2 and stack.E_NOT_CONFIRMED in err and ctx.ledger.read_bytes() == before, (screen, err)
+    code, screen, err = run_in_pty(CMD, ctx.root)
+    assert code == 0 and ctx.value() == ctx.want(), (screen, err)
+    assert "BR-1201-1" in screen and "aaaaaaaa" in screen and "Customers earn" not in screen
+
+
+def test_a_real_process_without_terminals_refuses_a_re_confirmation(ctx):
+    stale(ctx)
+    before = ctx.ledger.read_bytes()
+    for kw in ({"stdout_pty": False}, {"stdin_pty": False}, {"stdout_pty": False, "stdin_pty": False}):
+        code, screen, err = run_in_pty(CMD, ctx.root, **kw)
+        assert code == 2 and rules.CONFIRM_TERMINAL in err and "approval code" not in screen and ctx.ledger.read_bytes() == before, kw
+    code, screen, err = run_in_pty(CMD, ctx.root, answer="not-the-code")
+    assert code == 2 and ctx.ledger.read_bytes() == before
+
+
+def test_a_real_process_without_terminals_still_adds_new_ids(ctx):
+    code, screen, err = run_in_pty(CMD, ctx.root, stdout_pty=False, stdin_pty=False)
+    assert code == 0 and ctx.value() == ctx.want() and '"written": true' in screen, (screen, err)
+
+
+def test_confirm_makes_no_request_and_needs_no_token(ctx, monkeypatch):
+    monkeypatch.delenv("ADO_TOKEN", raising=False)
+    assert ctx.m.main(CMD) == 0
+
+
+def test_help_and_parser_for_confirm(capsys):
+    from ado.__main__ import main
+    with pytest.raises(SystemExit):
+        main(["rules", "--help"])
+    assert "--confirm" in capsys.readouterr().out
+    for argv in (["rules", "--confirm"], ["rules", "1001", "--confirm", "--apply"]):
+        with pytest.raises(SystemExit) as e:
+            main(argv)
+        assert e.value.code == 2, argv
+
+
+def test_run_in_pty_kills_a_child_that_waits_forever_within_the_timeout():
+    import time
+    start = time.monotonic()
+    for kw in ({}, {"stdout_pty": False}):
+        with pytest.raises(pytest.fail.Exception) as e:
+            run_in_pty([], ".", timeout=2, argv=[sys.executable, "-c", "import time; time.sleep(60)"], **kw)
+        assert "did not finish within 2 s and was killed" in str(e.value)
+    assert time.monotonic() - start < 15
+
+
+def test_the_new_line_takes_the_terminator_of_the_files_first_line(ctx, capsys, monkeypatch):
+    mixed = ctx.text().replace("\n", "\r\n", 1)  # the first line is CRLF, every other line LF
+    ctx.put(mixed)
+    assert ctx.run(capsys)[0] == 0
+    want = f"- **Rules reviewed:** {ctx.want()}"
+    assert ctx.ledger.read_bytes() == mixed.replace(FROM_LINE, FROM_LINE + want + "\r\n").encode()
+    stale_line = f"- **Rules reviewed:** BR-1200-1@{ctx.h['BR-1200-1']}, BR-1201-1@aaaaaaaa\n"  # an LF line in a file whose first line is CRLF
+    ctx.put(ctx.text().replace(want + "\r\n", stale_line))
+    before = ctx.text()
+    terminal(monkeypatch)
+    assert ctx.run(capsys)[0] == 0
+    assert ctx.ledger.read_bytes() == before.replace(stale_line, want + "\r\n").encode()  # rewritten with the first line's terminator, the rest as it was
+    lf = mixed.replace("\r\n", "\n", 1)  # the reverse: first line LF, the Rules from line CRLF
+    ctx.put(lf.replace(FROM_LINE, FROM_LINE.replace("\n", "\r\n")))
+    assert ctx.run(capsys)[0] == 0
+    assert ctx.ledger.read_bytes() == lf.replace(FROM_LINE, FROM_LINE.replace("\n", "\r\n") + want + "\n").encode()

@@ -3,6 +3,7 @@ lines, then parse `Rule <n>:` blocks. The input is UNTRUSTED text (pasted from W
 dropped silently (anything doubtful becomes a named problem), text never becomes structure, and problems carry fixed keys only,
 never rule text. Every pass is linear: input is capped, scans use str.find, and the reused `comments._MENTION` / `comments._EMAIL` and
 `dod._text` regexes only ever see input shaped so they cannot backtrack badly (see `normalise`)."""
+import hashlib
 import os
 import re
 import stat
@@ -11,7 +12,7 @@ import urllib.parse
 from datetime import date
 from pathlib import Path
 
-from . import __version__, comments, decisions, dod, workitems
+from . import __version__, comments, decisions, dod, stack, workitems
 from .client import AdoError
 
 BULLETS = "•·▪◦○●■□►▸➢➤✓✔§-*–—"  # fixed set; `o` only when alone, list numbers `1.`/`1)`; nothing else is stripped (`€5 off` stays)
@@ -697,3 +698,127 @@ def scope(files, rules_from, decisions_parsed, phase):
                             and (v["status"] == "approved" or v.get("body_hash") != v["hash"]))  # a mismatch/None: the heading status is untrusted
     return {"in_scope": sorted(approved - named, key=_key), "excluded": sorted(approved & named, key=_key),
             "bad_exclusions": sorted(set(bad), key=lambda i: int(i[1:]))}
+
+
+# ---- `ado rules <id> --confirm` (P3-7): the rule hashes a human reviewed go into the ledger header; local only, no network ----
+
+CONFIRM_NO_LEDGER = "there is no ledger for this story; run `ado dod <story id>` first"
+CONFIRM_LEDGER = "the ledger is not a readable regular UTF-8 file inside dod_path (a symlink, a hard link, over 1 MiB, not UTF-8); nothing was changed"
+CONFIRM_HEADER = "the ledger header cannot be trusted or has a malformed `Rules from:` or `Rules reviewed:` line; fix the header by hand, nothing was changed"
+CONFIRM_NO_FROM = "the ledger has no `Rules from:` line; run `ado dod <story id> --refresh` with rules enabled first, nothing was changed"
+CONFIRM_FILES = "a rules file named in `Rules from:` is missing, unreadable, invalid or in another rules-format; run `ado rules <story id>` first, nothing was changed"
+CONFIRM_DECISIONS = "the decisions file exists but is not a readable regular file; nothing was changed"
+CONFIRM_HASH = ("a rule in scope does not match its heading hash, so the file text is not what was reviewed ({ids}); "
+                "run `ado rules <story id>` to copy it again, nothing was changed")
+CONFIRM_TERMINAL = ("re-confirming a rule whose recorded hash changed, or dropping a recorded one, records that a human re-read it, which only a human may do: "
+                    "run it in your own terminal (stdin and stdout must both be a terminal; a guard against accidents, not a security boundary); nothing was changed")
+CONFIRM_SWAPPED = "the ledger, a rules file or the decisions file changed while you were reading: nothing was approved"
+CONFIRM_WRITE = "the ledger could not be written or read back identical; nothing was confirmed (check the file)"
+CONFIRM_ENV = "ADO_CONFIG is set: Config.load would read that file, not ./ado.config.json, so dod_path could differ from the committed one; unset it to confirm"
+_REVIEWED = "- **Rules reviewed:** "
+
+
+def _line_at(md, label):
+    """Index of the header line that names `label`, else None (a valid header has at most one)."""
+    look = dod._look(label)
+    return next((i for i, x in enumerate(dod._header(md)[0]) if look.match(x)), None)
+
+
+def _with_reviewed(md, value):
+    """`md` with `- **Rules reviewed:** <value>`: that line rewritten in place, or a new one under `Rules from:`. The line written ends with the
+    terminator of the file's FIRST line (the rest of the bytes stay as they are, a mixed file stays mixed). None when the line it sits on is not
+    shown exactly as written (hidden text), or that line or the first one does not end in `\n` / `\r\n`."""
+    lines, shown = md.splitlines(keepends=True), dod._header(md)[0]
+    at = _line_at(md, "Rules reviewed")
+    src = at if at is not None else _line_at(md, "Rules from")
+    if src is None or src >= len(lines):
+        return None
+    body = lines[src].splitlines()[0]
+    eol = lines[0][len(lines[0].splitlines()[0]):]
+    if body != shown[src] or lines[src][len(body):] not in ("\n", "\r\n") or eol not in ("\n", "\r\n"):
+        return None
+    lines[src:src + 1] = [lines[src], _REVIEWED + value + eol] if at is None else [_REVIEWED + value + eol]
+    return "".join(lines)
+
+
+def prepare_confirm(dod_path, story_id):
+    """Read everything `ado rules <id> --confirm` needs and write nothing: `{"reviewed", "added", "changed", "removed", "needs_human", "code",
+    "write"}`. The `pr` scope (P3-6) is computed from the committed rules files named by the ledger's `Rules from:` and the story's decisions
+    file; the hashes to record are the HEADING hashes of the rules in scope, which must equal the hash of the text in the file. `reviewed` is
+    the new value of `Rules reviewed:` (sorted by work item, then number), `added` / `changed` / `removed` the ids that differ from what the ledger
+    records now. `needs_human` is true when an already-recorded id would get another hash or leave the record (a human's act). `code` is the
+    `stack.approval_code` over the story, the ledger as read and the new value. `write()` replaces the ledger atomically (tmp file in the same
+    directory, the bytes read now are required, read back; the file's own line terminator is kept) and returns whether it wrote. ValueError with a fixed
+    text (ids and hashes only, no file text) for every refusal: nothing is written."""
+    path = dod.dod_file(dod_path, story_id)
+    if not os.path.lexists(path):
+        raise ValueError(CONFIRM_NO_LEDGER)
+    md = read_file(path, ".", dod_path)
+    if md is None:
+        raise ValueError(CONFIRM_LEDGER)
+    frm, rev = dod.ledger_rules_from(md), dod.ledger_rules_reviewed(md)
+    if not (dod._header(md)[1] and frm["valid"] and rev["valid"]):
+        raise ValueError(CONFIRM_HEADER)
+    if not frm["present"]:
+        raise ValueError(CONFIRM_NO_FROM)
+    files = {}
+    for wid in frm["ids"]:
+        text = read_file(rules_file(dod_path, wid), ".", dod_path)
+        f = parse_file(text, wid) if text is not None else None
+        if f is None or f["invalid"] or f["format"] != FORMAT:
+            raise ValueError(CONFIRM_FILES)
+        files[wid] = f
+    dpath = decisions.decisions_file(dod_path, story_id)
+    dmd = read_file(dpath, ".", dod_path) if os.path.lexists(dpath) else ""
+    if dmd is None:
+        raise ValueError(CONFIRM_DECISIONS)
+    in_scope = scope(files, frm["ids"], decisions.parse_decisions(dmd), "pr")["in_scope"]
+    rule = {r: files[_key(r)[0]]["rules"][r] for r in in_scope}
+    if bad := [r for r, v in rule.items() if v["body_hash"] != v["hash"]]:
+        raise ValueError(CONFIRM_HASH.format(ids=", ".join(bad)))
+    new, old = {r: v["hash"] for r, v in rule.items()}, rev["hashes"]
+    value = ", ".join(f"{r}@{h}" for r, h in new.items()) or "none"
+    added = [r for r in new if r not in old]
+    changed = [r for r in new if r in old and old[r] != new[r]]
+    removed = sorted((r for r in old if r not in new), key=_key)
+    noop = rev["present"] and old == new
+    text = md if noop else _with_reviewed(md, value)
+    if text is None:
+        raise ValueError(CONFIRM_HEADER)
+
+    def check(raw):  # what is about to replace the ledger: header trusted, the same Rules from, exactly the new record, nothing else moved
+        back = raw.decode("utf-8")
+        if not (dod._header(back)[1] and dod.ledger_rules_from(back) == frm and dod.ledger_rules_reviewed(back) == {"present": True, "valid": True, "hashes": new}
+                and _without(back) == _without(md)):
+            raise ValueError(CONFIRM_WRITE)
+
+    def write():
+        if noop:
+            return False
+        try:
+            stack._atomic_replace(path, text, check, md.encode("utf-8"))
+        except ValueError as e:
+            raise ValueError(CONFIRM_SWAPPED if str(e) == stack._E_CHANGED else CONFIRM_WRITE) from None
+        return True
+
+    code = stack.approval_code({"story": story_id, "ledger_sha256": hashlib.sha256(md.encode("utf-8")).hexdigest(), "reviewed": value})
+    return {"reviewed": value, "added": added, "changed": changed, "removed": removed, "needs_human": bool(changed or removed), "code": code,
+            "old": old, "new": new, "write": write}
+
+
+def _without(md):
+    """`md` minus its `Rules reviewed:` header line (as `_with_reviewed` places it): what a confirm must leave byte for byte."""
+    at = _line_at(md, "Rules reviewed")
+    lines = md.splitlines(keepends=True)
+    return "".join(lines[:at] + lines[at + 1:]) if at is not None else md
+
+
+def confirm_preview(story_id, prep):
+    """What a human reads before typing the code: ids and hashes only, never rule text."""
+    out = [f"Confirming the business rules of work item {story_id}: the ledger will record that you reviewed them.", ""]
+    out += [f"changed: {r}  {prep['old'][r]} -> {prep['new'][r]}" for r in prep["changed"]]
+    out += [f"removed: {r}  (was {prep['old'][r]})" for r in prep["removed"]]
+    out += [f"added: {r}  ({prep['new'][r]})" for r in prep["added"]]
+    out += ["", "Read each changed rule in its Rules_<id>.md file first: a hash says nothing about the text.",
+            "A terminal check stops accidents; it is not a security boundary, and the record is a statement, not proof."]
+    return "\n".join(out)

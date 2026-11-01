@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -182,22 +183,26 @@ def terminal(monkeypatch, answer=None, before=None):
     return stdin
 
 
-def run_in_pty(args, cwd, answer=None, before=None, stdout_pty=True, stdin_pty=True, interrupt=False, early=None, timeout=60):
+def run_in_pty(args, cwd, answer=None, before=None, stdout_pty=True, stdin_pty=True, interrupt=False, early=None, timeout=60, argv=None):
     """`python -m ado ARGS` as a real process with a pty on stdin (and on stdout unless `stdout_pty` is False). When the screen shows
     `approval code: <12 hex>` it calls `before(code)` (change a file between the prompt and the typed code), then types `answer` (default:
     the code; `""` sends Ctrl-D, end of input) or, with `interrupt`, sends SIGINT. `early` is typed right after the start, before any prompt. Returns `(returncode, screen, stderr)`; `screen` has
-    CRLF turned into LF. Without a code on the screen nothing is typed."""
+    CRLF turned into LF. Without a code on the screen nothing is typed. `timeout` is a deadline for the whole run: a child still running
+    then is killed and the test fails. `argv` replaces `python -m ado ARGS` (for testing the helper itself)."""
     env = {**os.environ, "PYTHONPATH": _SRC}
     env.pop("ADO_CONFIG", None)
     master, slave = pty.openpty()
-    proc = subprocess.Popen([sys.executable, "-m", "ado", *args], cwd=cwd, env=env, stdin=slave if stdin_pty else subprocess.DEVNULL,
+    proc = subprocess.Popen(argv or [sys.executable, "-m", "ado", *args], cwd=cwd, env=env, stdin=slave if stdin_pty else subprocess.DEVNULL,
                             stdout=slave if stdout_pty else subprocess.PIPE, stderr=subprocess.PIPE)
     os.close(slave)
     if early is not None:
         os.write(master, early.encode() + b"\n")
-    out, typed = b"", False
+    out, typed, deadline = b"", False, time.monotonic() + timeout
     try:
         while True:
+            if time.monotonic() > deadline:
+                proc.kill()
+                pytest.fail(f"run_in_pty: the child did not finish within {timeout} s and was killed (it waits for input that never comes?)")
             if select.select([master], [], [], 0.1)[0]:
                 try:
                     chunk = os.read(master, 4096)
@@ -221,6 +226,7 @@ def run_in_pty(args, cwd, answer=None, before=None, stdout_pty=True, stdin_pty=T
         os.close(master)
         if proc.poll() is None:
             proc.kill()
+            proc.communicate()  # reaps the killed child and closes its pipes
     return proc.returncode, (out if stdout_pty else piped).decode().replace("\r\n", "\n"), err.decode()
 
 
