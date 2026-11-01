@@ -1833,3 +1833,6 @@ def test_ledger_header_doc_pins():
     assert "Rules from:` (see [business rules](docs/business-rules.md#ledger-header))" in _flat("README.md")
     assert "walk the ancestors and write the ledger header line `Rules from:`" in _flat("docs/configuration.md")
     assert "Ledger header lines `Rules from:` and `Rules reviewed:` (P3-5)" in _flat("CHANGELOG.md")
+    assert "Ledger header hardening (P3-5b)" in _flat("CHANGELOG.md")
+    for word in ("a problem in the section", "An untrusted header fails closed", "is hidden by a comment or fence", "is invalid, not absent", "`<!--` written as `&lt;!--`", "recorded escaped"):
+        assert word in text, word

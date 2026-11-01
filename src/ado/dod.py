@@ -60,6 +60,11 @@ def _unescape(line):
     return _ESCAPED.sub(lambda m: "<!--" if m.group(0) != "\\" else "", line)
 
 
+def _hv(value):
+    """A value for a ledger header line: one line (any line break becomes a space) and escaped like the title, so it can never open a comment."""
+    return _esc(" ".join(str(value).splitlines()))
+
+
 def _ado_url(organization, project, work_item_id):
     proj = urllib.parse.quote(project)
     return f"https://dev.azure.com/{organization}/{proj}/_workitems/edit/{work_item_id}"
@@ -237,11 +242,14 @@ _H1 = re.compile(r"^## ", re.M)
 
 def _header(md):
     """(the header block as lines, whether it can be trusted). The block is what comes before the first line-start `## ` heading
-    outside fences and comments; text hidden in them is gone. Untrusted when no heading is found and a fence or comment is still open:
-    the opener may hide header lines, so the readers below call that invalid."""
+    outside fences and comments; text hidden in them is gone. Untrusted when the first raw line-start `## ` is not that heading (a comment
+    or fence hides it: the opener sits in the header, e.g. an old title that was not escaped, and story text could stand in for header
+    lines), or when there is no heading and a fence or comment is still open. The readers below call that invalid."""
     vis, still_open = _visible(md)
     m = _H1.search(vis)
-    return (vis[:m.start()] if m else vis).splitlines(), bool(m) or not still_open
+    raw = next((i for i, line in enumerate(md.splitlines()) if line.startswith("## ")), None)
+    shown = vis.count("\n", 0, m.start()) if m else None
+    return (vis[:m.start()] if m else vis).splitlines(), raw == shown and (bool(m) or not still_open)
 
 
 def header_block(md):
@@ -255,13 +263,17 @@ _RULES_FROM = re.compile(rf"none|{_RULES_ID}(?:, {_RULES_ID})*")
 MAX_RULES_FROM = 3  # the walk follows at most 3 links
 
 
+def _look(label):
+    """A line that names `label` as a header line in any spelling (list marker, blockquote prefix, emphasis, case)."""
+    return re.compile(r"\s*(?:>\s*)*(?:(?:[-*+]|[0-9]+[.)])\s*)?[*_]*\s*" + label.replace(" ", r"\s+") + r"\b", re.I)
+
+
 def _labelled(md, label):
     """(present, value) for the header line `- **<label>:** <value>`. Exact form only (one space, no trailing blanks). Value None = malformed:
     a second line, an unclosed opener in the header, or a list line that names the label in any other way. A title or `Spec dir` that
     mentions the label is not a line of that kind (it does not begin with the label)."""
     lines, trusted = _header(md)
-    look = re.compile(r"\s*(?:(?:[-*+]|[0-9]+[.)])\s*)?[*_]*\s*" + label.replace(" ", r"\s+") + r"\b", re.I)
-    hits = [x for x in lines if look.match(x)]
+    hits = [x for x in lines if _look(label).match(x)]
     prefix = f"- **{label}:** "
     if not trusted:
         return True, None
@@ -332,6 +344,7 @@ def render_dod(work_item, organization, project, synced="", spec_dir="", extra_d
     of a `Rules reviewed:` line, written when not empty. Both are checked with the readers' own rules before they reach the header."""
     if "\n" in spec_dir or "\r" in spec_dir:
         raise ValueError("spec dir must be a single line (it is written into the ledger header)")
+    spec_dir = _hv(spec_dir)
     header = []
     if rules_from is not None:
         if not isinstance(rules_from, (list, tuple)) or any(type(i) is not int for i in rules_from):
@@ -347,9 +360,8 @@ def render_dod(work_item, organization, project, synced="", spec_dir="", extra_d
     wid = work_item["id"]
     f = work_item.get("fields", {})
     title = f.get("System.Title", "")
-    one_line = " ".join(title.splitlines())  # a line break in the title would let `\r```` start a fence line
-    wtype = f.get("System.WorkItemType", "")
-    state = f.get("System.State", "")
+    wtype = _hv(f.get("System.WorkItemType", ""))
+    state = _hv(f.get("System.State", ""))
     ac = _text(f.get("Microsoft.VSTS.Common.AcceptanceCriteria", ""))
     desc = _text(f.get("System.Description", ""))
     repro = _text(f.get("Microsoft.VSTS.TCM.ReproSteps", ""))
@@ -365,11 +377,11 @@ def render_dod(work_item, organization, project, synced="", spec_dir="", extra_d
             "first.\n\n" + ac_block
         )
     parts = [
-        f"# DoD — US{wid}: {_esc(one_line)}",
+        f"# DoD — US{wid}: {_hv(title)}",  # a line break in the title would let `\r```` start a fence line
         "",
-        f"- **ADO:** {_ado_url(organization, project, wid)}",
+        f"- **ADO:** {_hv(_ado_url(organization, project, wid))}",
         f"- **Type / State:** {wtype} / {state}",
-        f"- **Last synced:** {synced}",
+        f"- **Last synced:** {_hv(synced)}",
         f"- **AC hash:** {ac_hash(work_item)}",
         f"- **Spec dir:** {spec_dir or SPEC_DIR_UNSET}",
         *header,
@@ -433,13 +445,17 @@ def write_dod(work_item, dod_dir, organization, project, synced="",
     old = path.read_text(encoding="utf-8") if refresh and path.exists() else None
     if old is not None:
         spec_dir = spec_dir or ledger_spec_dir(old) or ""
-        # written by `ado rules --confirm`: kept like Spec dir, even when rules are off. A header an old ledger left open (an unescaped
-        # `<!--` in its title) cannot be read; it is rebuilt as before, so teams not using rules see no change.
-        present, kept = _labelled(old, "Rules reviewed") if _header(old)[1] else (False, "")
+        # written by `ado rules --confirm`: kept like Spec dir, even when rules are off. A header that cannot be trusted (an old ledger's
+        # unescaped `<!--` in its title hid the first heading) cannot be read: with no line that names the label it is rebuilt as before,
+        # so teams not using rules see no change; with one (maybe forged from the Description) the refresh refuses.
+        if _header(old)[1]:
+            present, kept = _labelled(old, "Rules reviewed")
+        else:
+            present, kept = any(_look("Rules reviewed").match(x) for x in old.splitlines()), None
         if present and _parse_reviewed(kept) is None:
-            raise DodExists(f"{path} has a malformed 'Rules reviewed:' header line — refusing to --refresh "
-                            "(it would drop the hashes a human confirmed). Fix the line, or use --force to fully overwrite.")
-        rules_reviewed = rules_reviewed or kept
+            raise DodExists(f"{path} has a malformed or untrusted 'Rules reviewed:' header line — refusing to --refresh "
+                            "(it would drop the hashes a human confirmed, or copy a forged line). Fix the header, or use --force to fully overwrite.")
+        rules_reviewed = rules_reviewed or kept or ""
     # stack DoD items seed a fresh ledger only: a refresh keeps everything after section 1, section 5 included
     fresh = render_dod(work_item, organization, project, synced, spec_dir, () if old is not None else extra_dod, rules_from, rules_reviewed)
     if old is not None:

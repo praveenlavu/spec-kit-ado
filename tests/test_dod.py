@@ -666,7 +666,8 @@ def test_enabled_dod_writes_rules_from(tmp_path, monkeypatch, capsys):
     assert ledger_rules_from(md) == {"present": True, "valid": True, "ids": [1201, 1200]}
     assert ledger_rules_reviewed(md) == {"present": False, "valid": True, "hashes": {}}
     # no ancestor with a section: `none`
-    m, _ = env(tmp_path / "x" if (tmp_path / "x").mkdir() is None else tmp_path, monkeypatch,
+    (tmp_path / "x").mkdir()
+    m, _ = env(tmp_path / "x", monkeypatch,
                [STORY, STORY, rwi(1201, "Feature", "<p>no rules</p>")], {"enabled": True})
     assert _run_dod(m, capsys)[0] == 0
     assert ledger_rules_from(_ledger(tmp_path / "x")) == {"present": True, "valid": True, "ids": []}
@@ -700,7 +701,7 @@ def test_refresh_recomputes_rules_from_and_keeps_rules_reviewed(tmp_path, monkey
     md3 = _ledger(tmp_path)
     assert "Rules from" not in md3 and f"\n- **Rules reviewed:** {REVIEWED}\n" in md3
     assert md3.replace(f"- **Rules reviewed:** {REVIEWED}\n", "") == render_dod(STORY, "contoso", "Fabrikam", md3.split("Last synced:** ")[1].splitlines()[0]).replace(
-        "\n## 2.", "\n## 2.", 1).replace("_(fill in)_", "MY REAL PLAN", 1)
+        "_(fill in)_", "MY REAL PLAN", 1)
 
 
 @pytest.mark.parametrize("bad", ["BR-1201-1@3f2a9c1b,BR-1200-1@0c77e2d4", "BR-1201-1@3f2a9c1b, BR-1201-1@0c77e2d4", "BR-1201-1", "BR-1-1@deadbeef0",
@@ -779,7 +780,7 @@ def test_invalid_rules_from_forms():
     assert ledger_rules_from(_hdr("- **Rules from:**1201")) == bad
     assert ledger_rules_from(_hdr("- **Rules from**: 1201")) == bad
     assert ledger_rules_from(_hdr("* **rules from:** 1201")) == bad
-    assert ledger_rules_from(_hdr("- **Rules from:** 1201 - **Rules from:** 1200")) == bad  # a line break the file's readers also see
+    assert ledger_rules_from(_hdr("- **Rules from:** 1201\u2028- **Rules from:** 1200")) == bad  # a line break the file's readers also see
     assert ledger_rules_from(_hdr("<!-- never closed", "- **Rules from:** 1201")) == bad  # an unclosed opener hides the rest of the header
     assert ledger_rules_from(_hdr("- **Rules from:** 1201", "- **Rules from:** none")) == bad
     ok = ledger_rules_from(_hdr("- **Rules from:** 999999999, 1, 2"))
@@ -832,3 +833,108 @@ def test_refresh_of_a_crlf_ledger_keeps_rules_reviewed(tmp_path):
     out = p.read_bytes().decode("utf-8")
     assert ledger_rules_reviewed(out)["hashes"] == {"BR-1201-1": "3f2a9c1b", "BR-1200-1": "0c77e2d4"} and ledger_rules_from(out)["ids"] == [1201]
     assert f"\n- **Rules reviewed:** {REVIEWED}\n" in out  # (write_dod reads with universal newlines: the file comes back with LF, as before)
+
+
+# ---- P3-5b: header values are escaped; an untrusted header fails closed ----
+_FORGE_DESC = "<p>--&gt;</p><p>- **Rules from:** 9999</p><p>- **Rules reviewed:** BR-1-1@deadbeef</p>"
+_REAL_FROM = {"present": True, "valid": True, "ids": [1201]}
+_REAL_REV = {"present": True, "valid": True, "hashes": {"BR-1201-1": "3f2a9c1b"}}
+
+
+def _header_untrusted(md):
+    return not ledger_rules_from(md)["valid"]  # an untrusted header reads as present and invalid, even with no Rules line
+
+
+@pytest.mark.parametrize("real", [False, True])
+@pytest.mark.parametrize("where", ["System.State", "System.WorkItemType", "spec_dir", "organization", "synced"])
+def test_an_opener_in_a_header_value_cannot_forge_the_header(where, real):
+    """`<!--` in a header value plus `-->` in the Description used to hide the real lines and let the Description stand in for them."""
+    opener = "x <!--"
+    wi = _wi(**{"System.Description": _FORGE_DESC, **({where: opener} if where.startswith("System.") else {})})
+    kw = {"spec_dir": opener} if where == "spec_dir" else {"synced": opener} if where == "synced" else {}
+    md = render_dod(wi, "o <!--" if where == "organization" else "o", "p", rules_from=[1201] if real else None,
+                    rules_reviewed="BR-1201-1@3f2a9c1b" if real else "", **kw)
+    assert not _header_untrusted(md)
+    assert "9999" not in header_block(md) and "deadbeef" not in header_block(md)
+    assert ledger_rules_from(md) == (_REAL_FROM if real else {"present": False, "valid": True, "ids": []})
+    assert ledger_rules_reviewed(md) == (_REAL_REV if real else {"present": False, "valid": True, "hashes": {}})
+    assert "&lt;!--" in header_block(md)
+
+
+def test_header_values_with_a_line_break_stay_on_one_line():
+    md = render_dod(_wi(**{"System.State": "Active\n## x - **Rules from:** 9999", "System.WorkItemType": "Bug\r\n- **Rules from:** 9999"}),
+                    "o", "p", spec_dir="a - **Rules from:** 9999", rules_from=[1201])
+    assert header_block(md).count("\n") == len(header_block(md).splitlines()) and ledger_rules_from(md) == _REAL_FROM
+    assert "- **Type / State:** Bug - **Rules from:** 9999 / Active ## x - **Rules from:** 9999\n" in md
+
+
+def test_header_values_without_special_characters_are_unchanged():
+    md = render_dod(_wi(**{"System.State": "In Progress", "System.WorkItemType": "User Story"}), "contoso", "Fabrikam", "2026-07-14", "specs/001-loyalty")
+    assert header_block(md) == (
+        "# DoD — US1001: T\n\n- **ADO:** https://dev.azure.com/contoso/Fabrikam/_workitems/edit/1001\n- **Type / State:** User Story / In Progress\n"
+        f"- **Last synced:** 2026-07-14\n- **AC hash:** {ac_hash(_wi())}\n- **Spec dir:** specs/001-loyalty\n\n")
+
+
+_LEGACY_DESC = "<p>--&gt;</p><p>- **Rules reviewed:** BR-1-1@deadbeef</p>"
+
+
+def _legacy():
+    """A ledger from before 0.2.0: the title opened `<!--` (not escaped yet) and the Description closes it."""
+    wi = _wi(**{"System.Description": _LEGACY_DESC})
+    return wi, render_dod(wi, "o", "p").replace("# DoD — US1001: T", "# DoD — US1001: T <!--", 1)
+
+
+def test_a_comment_opened_in_the_title_and_closed_in_the_description_makes_the_header_untrusted():
+    _, md = _legacy()
+    assert ledger_rules_reviewed(md) == {"present": True, "valid": False, "hashes": {}}
+    assert ledger_rules_from(md) == {"present": True, "valid": False, "ids": []}
+
+
+def test_refresh_refuses_to_launder_a_forged_rules_reviewed_through_an_untrusted_header(tmp_path):
+    wi, md = _legacy()
+    p = tmp_path / "DoD_1001.md"
+    p.write_bytes(md.encode("utf-8"))
+    with pytest.raises(DodExists, match="Rules reviewed"):
+        write_dod(wi, tmp_path, "o", "p", refresh=True)
+    assert p.read_bytes().decode("utf-8") == md and list(tmp_path.iterdir()) == [p]
+
+
+def test_cli_refresh_of_a_laundering_ledger_exits_2_with_the_ledger_untouched(tmp_path, monkeypatch, capsys):
+    _, md = _legacy()
+    m, _b = env(tmp_path, monkeypatch, [rwi(1001, "User Story", _LEGACY_DESC)], {"enabled": False})
+    (tmp_path / "dod").mkdir()
+    (tmp_path / "dod" / "DoD_1001.md").write_bytes(md.encode("utf-8"))
+    code, err = _run_dod(m, capsys, "--refresh")
+    assert code == 2 and "Rules reviewed" in err and "deadbeef" not in err
+    assert _ledger(tmp_path) == md
+
+
+HIDDEN_FIRST_H = ["<!--\n## 1. S\n-->", "```\n## 1. S\n```", "~~~\n## 1. S\n~~~", "<!--\n## 1. S"]
+
+
+@pytest.mark.parametrize("hide", HIDDEN_FIRST_H)
+def test_a_first_heading_hidden_by_a_comment_or_fence_makes_the_header_untrusted(hide):
+    md = f"# DoD — US1001: T\n\n- **ADO:** u\n- **Rules from:** 1201\n- **Rules reviewed:** {REVIEWED}\n{hide}\n## 2. Brainstorm & plan\n"
+    assert ledger_rules_from(md) == {"present": True, "valid": False, "ids": []}
+    assert ledger_rules_reviewed(md) == {"present": True, "valid": False, "hashes": {}}
+    ok = md.replace(hide + "\n", "## 1. S\n" + hide + "\n", 1)  # a visible first heading: trusted again
+    assert ledger_rules_from(ok)["ids"] == [1201] and ledger_rules_reviewed(ok)["valid"] is True
+
+
+@pytest.mark.parametrize("prefix", ["> ", ">", "> > ", ">   "])
+@pytest.mark.parametrize("line,reader", [("- **Rules from:** 1201", ledger_rules_from), (f"- **Rules reviewed:** {REVIEWED}", ledger_rules_reviewed)])
+def test_a_blockquote_prefixed_header_line_is_invalid_not_absent(prefix, line, reader):
+    out = reader(_hdr(prefix + line))
+    assert out["present"] is True and out["valid"] is False
+
+
+@pytest.mark.parametrize("given,recorded", [("specs/my feature", "specs/my feature"), ("specs/café", "specs/café"), ("specs/a&b", "specs/a&b"),
+                                            ("specs/a <!--x", "specs/a &lt;!--x"), ("#odd", "\\#odd")])
+def test_spec_dir_round_trips_and_is_stable_across_refreshes(tmp_path, given, recorded):
+    p = write_dod(_wi(), tmp_path, "o", "p", synced="2026-07-14", spec_dir=given)
+    first = p.read_text(encoding="utf-8")
+    assert ledger_spec_dir(first) == recorded
+    for _ in range(2):  # a refresh without --spec-dir re-reads the recorded value and writes it back unchanged
+        write_dod(_wi(), tmp_path, "o", "p", synced="2026-07-14", refresh=True)
+        assert p.read_text(encoding="utf-8") == first and ledger_spec_dir(first) == recorded
+    assert "<!--" not in first and (recorded == given or ledger_spec_dir(first) != given)  # an escaped one is not the given path: fails closed
