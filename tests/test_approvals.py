@@ -1153,3 +1153,743 @@ def test_a_decision_the_kit_cut_stays_open_until_a_short_repost_is_approved(cfg)
     assert _wv(cfg, [cut, again, _cmd(24, "/reject D1: no", T3), approve[1]])["met"] is True
     again_cut = raw_comment(25, f"[spec-kit-ado:decisions]<br>{head}<br>D1 (decision): " + "y" * 484 + "…", T3, author=ME)
     assert _wv(cfg, [cut, again, again_cut] + approve + [_cmd(26, "/approve D1", T3)])["open"] == ["D1"]  # the newest posting is cut again
+
+
+# ---- P4-13: the poller `ado approvals sync RUN_ID [--resume]` and the approval-request comment -----------------------------------------------
+import types  # noqa: E402
+
+RID = "20261001-100000-ab12cd34"
+TREQ = Trust([HUMAN], "comment", {"approval_requests": True})
+PLAN13 = "# Plan: push\n| create | T001 | <script>alert('x')</script> |\n"
+PLAN_FILES = {"approve-questions": ".ado/plan-questions.md", "approve-plan-questions": ".ado/plan-questions-after-plan.md",
+              "approve-answers-questions": ".ado/plan-questions-after-answers.md", "approve-push": ".ado/plan-push.md", "approve-decisions": ".ado/plan-decisions.md",
+              "approve-sync": ".ado/plan-sync.md", "approve-pr": ".ado/plan-pr.md"}
+
+
+def _state(root, status="paused", step="approve-push", run_id=RID, story=1001, **over):
+    d = root / ".specify/workflows/runs" / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    data = {"run_id": run_id, "workflow_id": "ado-lifecycle", "status": status, "current_step_id": step, "updated_at": "2026-10-01T10:00:00+00:00",
+            "inputs": {"story_id": story}, **over}
+    for k in [k for k, v in data.items() if v is None]:
+        del data[k]
+    (d / "state.json").write_text(json.dumps(data))
+    return d / "state.json"
+
+
+def _plan_file(root, gate="approve-push", text=PLAN13):
+    p = root / PLAN_FILES[gate]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+def _h(gate, text=PLAN13, story=1001):
+    return approvals.gate_hash(gate, story, text.encode("utf-8"))
+
+
+def _go(gate="approve-push", cid=11, date=T1, text=PLAN13, verb="approve", **kw):
+    return _cmd(cid, f"/{verb} {gate} {_h(gate, text)}", date, **kw)
+
+
+class _Live(RouteClient):
+    """A story that remembers what is POSTed to it (as the token identity), so a second poll sees the first one's request."""
+
+    def request(self, method, path, body=None, content_type="application/json", raw=False):
+        if method == "POST" and "/comments?" in path:
+            self.calls.append({"method": method, "path": path, "body": body, "content_type": content_type})
+            self.raw.append(raw_comment(900 + len(self.raw), body["text"], f"2026-10-02T00:00:{len(self.raw):02d}Z", author=self.me))
+            return {}
+        return super().request(method, path, body, content_type, raw)
+
+
+@pytest.fixture
+def run13(monkeypatch, tmp_path_factory):
+    """Replaces the one subprocess call of the poller; records (argv, kwargs). A `specify` that is only a file stands on a PATH directory outside the project."""
+    calls = []
+    bindir = tmp_path_factory.mktemp("bin")
+    for tool in ("specify", "ado"):  # `git` is the real one further down the PATH
+        (bindir / tool).write_text("#!/bin/sh\n")
+        (bindir / tool).chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+
+    def fake(argv, **kw):
+        calls.append((argv, kw))
+        return types.SimpleNamespace(returncode=0)
+    monkeypatch.setattr(approvals, "_resume_run", fake)
+    return calls
+
+
+def _sync(cfg, root, raws, trust=T12, client=None, **kw):
+    client = client or _Live(cfg, raws, me=ME)
+    return approvals.sync(client, trust, RID, cfg, repo=str(root), **kw), client
+
+
+def _wrote(client):
+    return [c for c in client.calls if c["method"] == "POST"]
+
+
+def test_gate_id_allowlisted(repo, cfg, run13):
+    """A gate id from state.json that is outside GATES, or has shell metacharacters, builds no argv and makes no request."""
+    for step in ("plan", "tasks", "pull", "approve-push;rm", "$(touch x)", "approve push", "../../x", "evil", "approve-push\n", "a:b", "loop:evil:1",
+                 "push-loop:evil:1", "push-loop:approve-push:x", "push-loop:approve-push:1:2", "", None, 3, ["approve-push"]):
+        _state(repo, step=step)
+        client = _Live(cfg, [_go()], me=ME)
+        with pytest.raises(ValueError) as e:
+            approvals.sync(client, T12, RID, cfg, repo=str(repo), resume=True)
+        assert str(e.value) in (approvals.E_SYNC_GATE, approvals.E_RUN) and "evil" not in str(e.value) and "touch" not in str(e.value)
+        assert run13 == [] and client.calls == []
+    for gate in ("approve-push;rm", "x", "REVIEW-SPEC", "", None, "plan"):  # the argv builder refuses on its own
+        with pytest.raises(ValueError):
+            approvals.resume_argv(RID, gate, "approve")
+    for verdict in ("", "waiting", "APPROVE", "approve;rm", None):
+        with pytest.raises(ValueError):
+            approvals.resume_argv(RID, "approve-push", verdict)
+    _state(repo, step="push-loop:approve-push:2")  # a nested loop step maps to its gate
+    _plan_file(repo)
+    out, _ = _sync(cfg, repo, [_go()], resume=True)
+    assert out["gate"] == "approve-push" and out["verdict"] == "approve" and len(run13) == 1
+
+
+def test_waiting_without_comment(repo, cfg, run13):
+    _state(repo, step="review-spec")
+    conf = _tree(repo)
+    for raws in ([], [_cmd(1, "looks good to me", T1), _cmd(2, "/approve D1", T1)], [_cmd(1, "/approve review-spec", T1)]):
+        out, client = _sync(conf, repo, raws, resume=True)
+        assert out == {"gate": "review-spec", "verdict": "waiting", "resumed": False} or out == {"gate": "review-spec", "verdict": "waiting", "resumed": False, "bad_newer": 1}
+        assert run13 == [] and _wrote(client) == [] and all(c["method"] == "GET" for c in client.calls)
+    assert json.loads(json.dumps(out))  # plain JSON
+
+
+def test_poller_hashes_what_check_hashes(repo, cfg, run13):
+    """The review-gate hash is `approvals.artifacts` on the same checkout: the approval that meets `check` is the poller's approve; a changed spec is stale."""
+    conf = _tree(repo)
+    _state(repo, step="review-plan")
+    art = _art("review-plan", repo, conf)
+    raws = [_appr("review-plan", art)]
+    assert approvals.check(_rc(cfg, raws), T12, 1001, "review-plan", conf, str(repo))["met"]
+    out, _ = _sync(conf, repo, raws, resume=True)
+    assert out["verdict"] == "approve" and run13[0][0][4:6] == ["--input", "verdict_review_plan=approve"]
+    conf = _tree(repo, spec="# Spec\nchanged after approval\n")
+    out, _ = _sync(conf, repo, raws)
+    assert out["verdict"] == "waiting"
+    conf = _tree(repo)
+    out, _ = _sync(conf, repo, raws + [_cmd(12, f"/reject review-plan {approvals.gate_hash('review-plan', 1001, art)}: no", T2)])
+    assert out["verdict"] == "reject"
+    out, _ = _sync(conf, repo, [_appr("review-plan", art), _cmd(12, "/approve review-plan " + approvals.gate_hash("review-plan", 1001, art)[:60], T2)])
+    assert out == {"gate": "review-plan", "verdict": "waiting", "bad_newer": 1}  # a newer malformed approver line: waiting, never approve
+
+
+def test_apply_gates_hash_the_rendered_text_not_the_plan_file(repo, cfg, run13):
+    """An apply gate's hash is over the plan TEXT: a plan over 190 lines gets a first-line warning in the file that the apply's hash does not include."""
+    from ado import push
+    text = "# Plan: push\n" + "".join(f"| create | T{n:03d} |\n" for n in range(1, 260))
+    _state(repo, step="approve-push")
+    p = repo / PLAN_FILES["approve-push"]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(push.gate_preview(text, ".ado/plan-push.md"))
+    assert p.read_text().startswith("⚠")
+    out, _ = _sync(cfg, repo, [_go(text=text)])
+    assert out["verdict"] == "approve"
+    out, _ = _sync(cfg, repo, [_cmd(11, f"/approve approve-push {_h('approve-push', p.read_text())}", T1)])  # the hash of the file with the warning: stale
+    assert out["verdict"] == "waiting"
+    p.write_text("⚠ not the warning the gate writes\n" + text)  # a first line that is not exactly gate_preview's is hashed as it is
+    assert _sync(cfg, repo, [_go(text=text)])[0]["verdict"] == "waiting"
+    p.write_text(text.replace("\n", "\r\n"))  # a text-mode read, as the apply's --expect-plan compares
+    assert _sync(cfg, repo, [_go(text=text)])[0]["verdict"] == "approve"
+    # the sibling gate of the verb is one target: a later reject on approve-sync (same plan) stops the approval
+    p.write_text(text)
+    out, _ = _sync(cfg, repo, [_go(text=text), _go("approve-sync", cid=12, date=T2, text=text, verb="reject")])
+    assert out["verdict"] == "reject"
+    for gate, rel in PLAN_FILES.items():  # every apply gate reads its own fixed file
+        _state(repo, step=gate)
+        _plan_file(repo, gate, f"plan for {gate}\n")
+        assert _sync(cfg, repo, [_go(gate, text=f"plan for {gate}\n")])[0] == {"gate": gate, "verdict": "approve"}
+
+
+def test_apply_gate_plan_file_must_be_readable(repo, cfg, run13, tmp_path_factory):
+    _state(repo, step="approve-push")
+    with pytest.raises(ValueError) as e:  # missing
+        _sync(cfg, repo, [_go()])
+    assert str(e.value) == approvals.E_ARTIFACT
+    outside = tmp_path_factory.mktemp("outside") / "p.md"
+    outside.write_text(PLAN13)
+    (repo / ".ado").mkdir(exist_ok=True)
+    (repo / PLAN_FILES["approve-push"]).symlink_to(outside)
+    with pytest.raises(ValueError):
+        _sync(cfg, repo, [_go()])
+    (repo / PLAN_FILES["approve-push"]).unlink()
+    (repo / PLAN_FILES["approve-push"]).write_text("x" * (1 << 20 + 1))
+    with pytest.raises(ValueError):
+        _sync(cfg, repo, [_go()])
+    assert run13 == []
+
+
+def test_wait_gate_resumes_on_state(repo, cfg, run13):
+    """The wait gates have no hash: met by the approvers' comments on ADO (`wait_state`), never by a hash."""
+    _state(repo, step="wait-po-answers")
+    html, own = _own([QA, QB])
+    vers = versions_response((1, html, T0))
+    client = _Live(cfg, [own, _cmd(11, "/answer Q1: yes", T1)], me=ME, responses=[vers])
+    out, _ = _sync(cfg, repo, None, client=client, resume=True)
+    assert out == {"gate": "wait-po-answers", "verdict": "waiting", "resumed": False} and run13 == []
+    client = _Live(cfg, [own, _cmd(11, "/answer Q1: yes", T1), _cmd(12, "/answer Q2: no", T2)], me=ME, responses=[vers])
+    out, _ = _sync(cfg, repo, None, client=client, resume=True)
+    assert out == {"gate": "wait-po-answers", "verdict": "approve", "resumed": True}
+    assert run13[0][0][1:5] == ["workflow", "resume", RID, "--input"] and "verdict_wait_po_answers=approve" in run13[0][0]
+    assert _wrote(client) == []  # no request for a wait gate, even with approval_requests on
+    out, client = _sync(cfg, repo, [_go(gate="wait-po-answers")], trust=TREQ)  # a hash comment does not meet a wait gate (and posts nothing)
+    assert _wrote(client) == []
+    _state(repo, step="wait-po-validation")
+    out, _ = _sync(cfg, repo, [decisions_post := raw_comment(10, f"[spec-kit-ado:decisions]<br>Decisions and assumptions made during development; please validate or reject:<br>D1 (decision): use blue", T0, author=ME)])
+    assert out["verdict"] == "waiting"
+    out, _ = _sync(cfg, repo, [decisions_post, _cmd(11, "/approve D1", T1)])
+    assert out["verdict"] == "approve"
+    with pytest.raises(approvals.ApprovalMissing) as e:  # an untrustworthy kit comment (not the poller's own identity): a refusal, not "waiting"
+        _sync(cfg, repo, [raw_comment(10, decisions_post["text"], T0, author=KIT)])
+    assert str(e.value) == approvals.E_DECISIONS
+
+
+def test_request_posted_once_per_hash_and_escaped(repo, cfg, run13):
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    client = _Live(cfg, [], me=ME)
+    out, _ = _sync(cfg, repo, None, client=client, trust=TREQ)
+    h = _h("approve-push")
+    assert out == {"gate": "approve-push", "verdict": "waiting", "request": "posted"}
+    (post,) = _wrote(client)
+    body = post["body"]["text"]
+    assert post["path"].endswith("/workItems/1001/comments?api-version=" + comments.API) and set(post["body"]) == {"text"}
+    assert body.split("<br>")[0] == f"[spec-kit-ado:approval-request] approve-push {h}"
+    assert "&lt;script&gt;alert(&#x27;x&#x27;)&lt;/script&gt;" in body and "<script" not in body and "<" not in body.replace("<br>", "")
+    assert f"/approve approve-push {h}" in body and f"/reject approve-push {h}" in body  # the line to copy
+    again, _ = _sync(cfg, repo, None, client=client, trust=TREQ)  # the same hash: nothing more is posted
+    assert again == {"gate": "approve-push", "verdict": "waiting", "request": "present"} and len(_wrote(client)) == 1
+    _plan_file(repo, text=PLAN13 + "| create | T002 |\n")  # another hash: another request
+    _sync(cfg, repo, None, client=client, trust=TREQ)
+    assert len(_wrote(client)) == 2 and _h("approve-push", PLAN13 + "| create | T002 |\n") in _wrote(client)[1]["body"]["text"]
+    # approvals older than the request are stale; the approver answers the request
+    _plan_file(repo)
+    client.raw.append(_go(cid=950, date="2026-10-03T00:00:00Z"))
+    out, _ = _sync(cfg, repo, None, client=client, trust=TREQ)
+    assert out["verdict"] == "approve" and "request" not in out and len(_wrote(client)) == 2  # an approved plan gets no request (it would make the approval stale)
+
+
+def test_request_that_is_not_ours_edited_or_unreadable_is_reposted(repo, cfg, run13):
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    h = _h("approve-push")
+    first = f"[spec-kit-ado:approval-request] approve-push {h}<br>shown"
+    for other in (raw_comment(5, first, T0, author=HUMAN), raw_comment(5, first, T0, author=ME, version=2),  # another author; an edited one
+                  raw_comment(5, first.replace("approve-push", "approve-sync"), T0, author=ME), raw_comment(5, first.replace(h[:8], "0" * 8), T0, author=ME)):
+        client = _Live(cfg, [other], me=ME)
+        assert _sync(cfg, repo, None, client=client, trust=TREQ)[0]["request"] == "posted"
+    client = _Live(cfg, [raw_comment(5, first, T0, author=ME)], me=ME)
+    assert _sync(cfg, repo, None, client=client, trust=TREQ)[0]["request"] == "present"
+    many = [raw_comment(100 + n, f"[spec-kit-ado:approval-request] approve-push {n:064x}<br>x", T0, author=ME) for n in range(approvals.MAX_REQUESTS)]
+    client = _Live(cfg, many, me=ME)
+    with pytest.raises(approvals.ApprovalRefused) as e:  # edits of our own requests cannot make the poller post forever
+        _sync(cfg, repo, None, client=client, trust=TREQ)
+    assert str(e.value) == approvals.E_REQUEST_CAP and _wrote(client) == []
+
+
+def test_request_refused_when_config_disallows(repo, cfg, run13):
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    for unattended in ({}, {"approval_requests": False}, {"approval_requests": "yes"}, {"approval_requests": 1}, {"assume_after_hours": 5}):
+        trust = Trust([HUMAN], "comment", unattended)
+        client = _Live(cfg, [], me=ME)
+        out, _ = _sync(cfg, repo, None, client=client, trust=trust)  # the poll itself works; no request is posted or mentioned
+        assert out == {"gate": "approve-push", "verdict": "waiting"} and _wrote(client) == []
+        with pytest.raises(approvals.ApprovalRefused) as e:  # and the posting function itself refuses
+            approvals.post_request(client, trust, 1001, "approve-push", _h("approve-push"), PLAN13, [], ME)
+        assert str(e.value) == approvals.E_REQUESTS_OFF and _wrote(client) == []
+
+
+def _commands(body):
+    """Every `<br>`-separated line of a request comment that the guard's grammar reads as a command (the whole comment is one comment, so the lines are tried one by one
+    and, as the guard does, the comment as a whole: only its first line counts there)."""
+    import html as htmllib
+    lines = [htmllib.unescape(x) for x in body.split("<br>")]
+    return [c for ln in lines if (c := approvals.parse_command(ln))], approvals.parse_command(body)
+
+
+def test_request_text_is_escaped_visible_and_cut_at_the_cap(repo, cfg, run13):
+    h = "ab" * 32
+    ugly = "line\r\n\u202eevil\u200b\x07 <b>&amp;</b> \"q\"\n\ttab"
+    body = approvals.request_html("approve-push", h, ugly)
+    assert "\u202e" not in body and "\u200b" not in body and "\x07" not in body and "\r" not in body and "<U+202E>" in body.replace("&lt;", "<").replace("&gt;", ">")
+    assert "&lt;b&gt;&amp;amp;&lt;/b&gt;" in body and "&quot;q&quot;" in body and "<b>" not in body
+    assert body.startswith(f"[spec-kit-ado:approval-request] approve-push {h}<br>")
+    assert len(approvals.request_html("approve-push", h, "y" * 200_000)) > 200_000  # below the cap the text is shown whole
+    big = approvals.request_html("approve-push", h, "x" * 600_000)
+    assert "xxxx" not in big and len(big) < 1500 and "/approve" not in big and "/reject" not in big
+    import re as _re
+    assert int(_re.search(r"\((\d+) characters once escaped", big).group(1)) > approvals.REQUEST_CAP  # the count is the escaped length, the thing the limit is applied to
+    assert "characters once escaped, the limit is 500000" in big and "must not be approved by comment" in big and "hand-typed approval" in big
+
+
+def test_every_line_of_shown_text_is_quoted_so_it_cannot_be_a_command(repo, cfg, run13):
+    """Review 1: a plan or spec line that is a command must not be copyable from the request; the kit's own lines are the only commands in it."""
+    h = "cd" * 32
+    other = "ef" * 32
+    shown = "\n".join([f"/approve approve-pr {other}", f"/reject approve-pr {other}: no", f" /approve approve-pr {other}", f"> /approve approve-pr {other}",
+                       f"\t/approve approve-pr {other}", "/approve D1", "/answer Q1: yes", "", f"\u00a0/approve approve-pr {other}", f"<blockquote>/approve approve-pr {other}</blockquote>",
+                       "[spec-kit-ado:approval-request] approve-pr " + other])
+    body = approvals.request_html("approve-pr", h, shown)
+    cmds, whole = _commands(body)
+    assert whole is None  # the first line is the marker
+    assert [(c["verb"], c["target"], c["hash"]) for c in cmds] == [("approve", "approve-pr", h), ("reject", "approve-pr", h)]  # the two lines the kit wrote, nothing else
+    head, shown_part = body.split("The text this hash covers:<br>")
+    assert all(x.startswith(approvals.QUOTE) for x in shown_part.split("<br>")) and shown_part.count("<br>") == shown.count("\n")
+    assert other not in head and "<blockquote" not in body
+
+
+def test_a_visually_wrapped_line_cannot_start_with_a_copyable_command(repo, cfg, run13):
+    """Re-review M1: after a long unbreakable run a browser can start a visual line at `/approve ...`; the slash is shown as <U+002F> so nothing copyable remains."""
+    h, h2 = "cd" * 32, "ef" * 32
+    shown = "\u00a0" * 300 + f" /approve approve-push {h2}\nword word /Reject approve-push {h2} and /ANSWER Q1: x\n/approvex // / approve"
+    body = approvals.request_html("approve-push", h, shown)
+    import html as htmllib
+    cmds, whole = _commands(body)
+    assert [(c["verb"], c["hash"]) for c in cmds] == [("approve", h), ("reject", h)] and whole is None
+    text = htmllib.unescape(body)
+    assert text.count("/approve") == 1 and text.count("/reject") == 1 and "/answer" not in text.lower() and "/Reject" not in text and "/approve " in text
+    tail = text.split("The text this hash covers:")[1]
+    assert "/approve" not in tail and "/reject" not in tail.lower() and "<U+002F>approve approve-push " + h2 in tail and "<U+002F>Reject approve-push" in tail
+    for visual in tail.replace("\u00a0", " ").split():  # any piece of the shown text a wrap could start a line with
+        assert approvals.parse_command(visual) is None
+    assert approvals.parse_command(tail[tail.index("<U+002F>approve"):].replace("<U+002F>", "/")) is not None  # (the unescaped form WOULD parse: the test is meaningful)
+
+
+def test_text_too_long_to_show_has_no_command_and_no_pointer(repo, cfg, run13):
+    """Review 2: 40k zero-width characters (about 14 characters each once shown) force the fallback; it offers nothing to copy and points at no file."""
+    _state(repo, step="approve-push")
+    p = repo / PLAN_FILES["approve-push"]
+    p.parent.mkdir(exist_ok=True)
+    p.write_text("# Plan: push\n" + "\u200b" * 40_000 + "\n/approve approve-push " + "0" * 64 + "\n")
+    client = _Live(cfg, [], me=ME)
+    out, _ = _sync(cfg, repo, None, client=client, trust=TREQ, resume=True)
+    assert out == {"gate": "approve-push", "verdict": "waiting", "request": "posted", "resumed": False} and run13 == []
+    text = _wrote(client)[0]["body"]["text"]
+    cmds, whole = _commands(text)
+    assert cmds == [] and whole is None and len(text) < 1500
+    assert "/approve" not in text and "/reject" not in text and ".ado" not in text and git(repo, "rev-parse", "HEAD") not in text
+    assert "working tree" in text and "terminal mode" in text and "must not be approved by comment" in text and "cannot be approved" not in text
+    assert _sync(cfg, repo, None, client=client, trust=TREQ)[0]["request"] == "present"  # still once per hash
+
+
+def test_review_request_shows_the_hashed_artifacts(repo, cfg, run13):
+    conf = _tree(repo, spec="# Spec\nA <i>one</i>\n")
+    _state(repo, step="review-spec")
+    client = _Live(cfg, [], me=ME)
+    assert _sync(conf, repo, None, client=client, trust=TREQ)[0]["request"] == "posted"
+    text = _wrote(client)[0]["body"]["text"]
+    assert f"/approve review-spec {approvals.gate_hash('review-spec', 1001, _art('review-spec', repo, conf))}" in text and "A &lt;i&gt;one&lt;/i&gt;" in text
+    assert approvals.QUOTE + "# Spec" in text
+
+
+def test_dry_run_posts_and_resumes_nothing(repo, cfg, run13):
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    client = _Live(cfg, [], me=ME)
+    out, _ = _sync(cfg, repo, None, client=client, trust=TREQ, dry_run=True, resume=True)
+    assert out == {"gate": "approve-push", "verdict": "waiting", "request": "would-post", "resumed": False} and _wrote(client) == [] and run13 == []
+    client = _Live(cfg, [_go()], me=ME)
+    out, _ = _sync(cfg, repo, None, client=client, trust=TREQ, dry_run=True, resume=True)
+    assert out == {"gate": "approve-push", "verdict": "approve", "resumed": False} and run13 == []
+
+
+def test_resume_args_reset_other_verdicts(repo, cfg, run13, monkeypatch):
+    monkeypatch.setenv("GIT_DIR", "/nonexistent")
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    gates = approvals.GATES
+    name = lambda g: "verdict_" + g.replace("-", "_")  # noqa: E731
+    for u in gates:
+        for v in ("approve", "reject"):
+            others = [g for g in gates if g != u]
+            want = ["specify", "workflow", "resume", RID, "--input", f"{name(u)}={v}"]
+            for o in others:  # one --input per pair: specify's option takes ONE value (a bare second value is "unexpected extra argument")
+                want += ["--input", f"{name(o)}="]
+            assert approvals.resume_argv(RID, u, v) == want and len(want) == 4 + 2 * len(gates)
+    _state(repo, step="review-spec")
+    conf = _tree(repo)
+    art = _art("review-spec", repo, conf)
+    out, _ = _sync(conf, repo, [_appr("review-spec", art)], resume=True)
+    assert out == {"gate": "review-spec", "verdict": "approve", "resumed": True}
+    (argv, kw), = run13
+    assert argv[1:] == approvals.resume_argv(RID, "review-spec", "approve")[1:] and os.path.isabs(argv[0]) and os.path.basename(argv[0]) == "specify"
+    assert argv[4] == "--input" and argv[5] == "verdict_review_spec=approve" and "verdict_approve_push=" in argv
+    assert "shell" not in kw or kw["shell"] is False
+    assert isinstance(kw["timeout"], int) and 0 < kw["timeout"] <= 24 * 3600 and kw["stdin"] is not None and kw["cwd"] == str(repo)
+    assert "GIT_DIR" not in kw["env"] and "GIT_CONFIG_COUNT" not in kw["env"] and kw["env"]["GIT_PAGER"] == "cat" and kw["env"]["PATH"] == os.environ["PATH"]
+    assert kw["stdout"] is not None and kw["stderr"] is not None and not kw.get("capture_output")  # the run's output is never echoed
+    # not without --resume, and not when waiting
+    run13.clear()
+    _sync(conf, repo, [_appr("review-spec", art)])
+    _sync(conf, repo, [], resume=True)
+    assert run13 == []
+
+
+def test_resume_is_rechecked_and_failures_are_exit_1_texts(repo, cfg, run13, monkeypatch):
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    flips = iter([None])
+
+    def fake(argv, **kw):
+        raise AssertionError("must not run")
+    monkeypatch.setattr(approvals, "_resume_run", fake)
+    client = _Live(cfg, [_go()], me=ME)
+    real = approvals.read_run
+
+    def flip(repo_, run_id):  # the run moved on (another poller resumed it) between the first read and the resume
+        run = real(repo_, run_id)
+        if next(flips, "again") == "again":
+            run = {**run, "status": "running"}
+        return run
+    monkeypatch.setattr(approvals, "read_run", flip)
+    out = approvals.sync(client, T12, RID, cfg, repo=str(repo), resume=True)
+    assert out == {"gate": "approve-push", "verdict": "approve", "resumed": False}
+    monkeypatch.setattr(approvals, "read_run", real)
+    monkeypatch.setattr(approvals, "_resume_run", lambda argv, **kw: types.SimpleNamespace(returncode=3))
+    with pytest.raises(approvals.ResumeFailed) as e:
+        approvals.sync(_Live(cfg, [_go()], me=ME), T12, RID, cfg, repo=str(repo), resume=True)
+    assert str(e.value) == approvals.E_RESUME.format(code=3) and isinstance(e.value, AdoError)
+
+    def slow(argv, **kw):
+        raise __import__("subprocess").TimeoutExpired(argv, 1)
+    monkeypatch.setattr(approvals, "_resume_run", slow)
+    with pytest.raises(approvals.ResumeFailed) as e:
+        approvals.sync(_Live(cfg, [_go()], me=ME), T12, RID, cfg, repo=str(repo), resume=True)
+    assert str(e.value) == approvals.E_RESUME_TIMEOUT
+
+    def gone(argv, **kw):
+        raise FileNotFoundError("SEKRET dana@contoso.example")
+    monkeypatch.setattr(approvals, "_resume_run", gone)
+    with pytest.raises(approvals.ResumeFailed) as e:
+        approvals.sync(_Live(cfg, [_go()], me=ME), T12, RID, cfg, repo=str(repo), resume=True)
+    assert "SEKRET" not in str(e.value) and str(e.value) == approvals.E_RESUME_MISSING
+
+
+def test_run_id_validated_before_any_path(repo, cfg, run13, monkeypatch):
+    _state(repo)
+    _plan_file(repo)
+    boom = lambda *a, **k: (_ for _ in ()).throw(AssertionError("a path was built from an invalid run id"))  # noqa: E731
+    from ado import gate as gate_mod
+    for bad in ("../x", "..", "a/b", "a\\b", "", "-x", "_x", "x" * 200, "a b", "run\n", "run\x00", "r;rm", "$(x)", "a" * 129, None, 7, "١٢", "run-é"):
+        with monkeypatch.context() as m:
+            for target in (os.path, "realpath"), (os.path, "islink"), (os.path, "lexists"), (os, "scandir"), (os, "open"), (gate_mod, "_read"):
+                m.setattr(*target, boom)
+            client = _Live(cfg, [], me=ME)
+            with pytest.raises(ValueError) as e:
+                approvals.sync(client, T12, bad, cfg, repo=str(repo), resume=True)
+            assert str(e.value) == approvals.E_RUN_ID and client.calls == []
+    with pytest.raises(ValueError):
+        approvals.resume_argv("../x", "approve-push", "approve")
+    assert approvals.sync(_Live(cfg, [], me=ME), T12, RID, cfg, repo=str(repo))["gate"] == "approve-push"
+
+
+def test_state_json_is_untrusted(repo, cfg, run13, tmp_path_factory):
+    outside = tmp_path_factory.mktemp("outside")
+    for kw in ({"workflow_id": "other"}, {"run_id": "another-run"}, {"status": "weird"}, {"status": None}, {"updated_at": "yesterday"}, {"updated_at": None},
+               {"inputs": {"story_id": "1001"}}, {"inputs": {"story_id": True}}, {"inputs": {"story_id": 0}}, {"inputs": {"story_id": 2 ** 31}}, {"inputs": None},
+               {"inputs": {}}, {"current_step_id": "approve-push; rm -rf /"}):
+        _state(repo, **kw)
+        client = _Live(cfg, [], me=ME)
+        with pytest.raises(ValueError) as e:
+            approvals.sync(client, T12, RID, cfg, repo=str(repo), resume=True)
+        assert str(e.value) == approvals.E_RUN and client.calls == [] and run13 == []
+    d = repo / ".specify/workflows/runs" / RID
+    path = _state(repo)
+    path.write_text("{not json")
+    for text in ("{not json", "[]", "null", "[" * 100000, json.dumps({"x": "y" * (1 << 20)})):
+        path.write_text(text)
+        with pytest.raises(ValueError) as e:
+            approvals.sync(_Live(cfg, [], me=ME), T12, RID, cfg, repo=str(repo))
+        assert str(e.value) == approvals.E_RUN
+    path.unlink()
+    (outside / "state.json").write_text(json.dumps({"run_id": RID, "workflow_id": "ado-lifecycle", "status": "paused", "current_step_id": "approve-push",
+                                                     "updated_at": "2026-10-01T10:00:00+00:00", "inputs": {"story_id": 1001}}))
+    path.symlink_to(outside / "state.json")  # a symlinked state file
+    with pytest.raises(ValueError):
+        approvals.sync(_Live(cfg, [], me=ME), T12, RID, cfg, repo=str(repo))
+    path.unlink()
+    d.rmdir()
+    d.symlink_to(outside, target_is_directory=True)  # a symlinked run directory
+    with pytest.raises(ValueError):
+        approvals.sync(_Live(cfg, [], me=ME), T12, RID, cfg, repo=str(repo))
+    d.unlink()
+    with pytest.raises(ValueError):  # no such run
+        approvals.sync(_Live(cfg, [], me=ME), T12, RID, cfg, repo=str(repo))
+    assert run13 == []
+
+
+def test_not_paused_does_nothing(repo, cfg, run13):
+    _plan_file(repo)
+    for st in ("running", "failed", "aborted", "completed", "created"):
+        _state(repo, status=st, step=None if st == "created" else "approve-push")
+        client = _Live(cfg, [_go()], me=ME)
+        out = approvals.sync(client, TREQ, RID, cfg, repo=str(repo), resume=True)
+        assert out == {"gate": None, "verdict": "waiting", "paused": False}
+        assert client.calls == [] and run13 == []  # no request, no resume, not even a read
+
+
+def test_the_poller_identity_never_counts_as_an_approver(repo, cfg, run13, monkeypatch):
+    """The identity the poller runs as is passed to `excluded` (as `ci_identity`) and never approves, even when it is listed as an approver."""
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    seen = []
+    real = approvals.excluded
+    monkeypatch.setattr(approvals, "excluded", lambda client, found, ci_identity=None: seen.append(ci_identity) or real(client, found, ci_identity))
+    out, _ = _sync(cfg, repo, [_go(author=ME)], trust=Trust([ME, HUMAN], "comment", {}), resume=True)
+    assert out["verdict"] == "waiting" and run13 == [] and seen and set(seen) == {ME.lower()}
+    out, _ = _sync(cfg, repo, [raw_comment(1, "[spec-kit-ado:questions]<br>x", T0, author=KIT), _go(author=KIT)], trust=Trust([KIT], "comment", {}))  # a kit posting identity
+    assert out["verdict"] == "waiting"
+    for answer in (connection_data(ANON), {"authenticatedUser": {}}, AdoError("HTTP 401", status=401, kind="signin")):  # the identity cannot be established
+        client = _Live(cfg, [_go()], me=ME)
+        client.request = lambda m, p, b=None, c="application/json", raw=False, a=answer: (_ for _ in ()).throw(a) if isinstance(a, BaseException) else a  # noqa: E731
+        with pytest.raises(approvals.ApprovalMissing) as e:
+            approvals.sync(client, T12, RID, cfg, repo=str(repo), resume=True)
+        assert str(e.value) == approvals.E_SYNC_IDENTITY and run13 == []
+
+
+def test_bypass_and_comment_mode_refusals_apply_to_the_poller(repo, cfg, run13):
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    for bypass in (True, AdoError("HTTP 403", status=403)):
+        client = _Live(cfg, [_go()], me=ME, bypass=bypass)
+        with pytest.raises(approvals.ApprovalRefused) as e:
+            approvals.sync(client, TREQ, RID, cfg, repo=str(repo), resume=True)
+        assert str(e.value) == approvals.BYPASS_REFUSAL and run13 == [] and _wrote(client) == []
+    with pytest.raises(approvals.ApprovalMissing) as e:
+        _sync(cfg, repo, [_go()], trust=Trust([], "comment", {}))
+    assert str(e.value) == approvals.E_NO_APPROVERS
+    with pytest.raises(approvals.ApprovalRefused) as e:  # terminal mode: the library refuses too
+        approvals.sync(_Live(cfg, [], me=ME), Trust([HUMAN], "terminal", {}), RID, cfg, repo=str(repo))
+    assert str(e.value) == approvals.E_SYNC_TERMINAL
+
+
+def test_a_request_newer_than_the_approval_makes_it_stale_and_blocks_only(repo, cfg, run13):
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    req = raw_comment(5, f"[spec-kit-ado:approval-request] approve-push {_h('approve-push')}<br>x", T2, author="66666666-6666-4666-8666-666666666666")  # any author's
+    assert _sync(cfg, repo, [_go(date=T1), req], resume=True)[0]["verdict"] == "waiting" and run13 == []
+    assert _sync(cfg, repo, [req, _go(date=T3)])[0]["verdict"] == "approve"
+
+
+class _Racy(_Live):
+    """An approval arrives between the poller's first read of the comments and the read right before its POST."""
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.gets = 0
+
+    def request(self, method, path, body=None, content_type="application/json", raw=False):
+        if method == "GET" and "/comments?" in path and "/versions" not in path:
+            self.gets += 1
+            if self.gets == 2:
+                self.raw.append(_go(cid=777, date="2026-10-03T00:00:00Z"))
+        return super().request(method, path, body, content_type, raw)
+
+
+def test_comments_are_read_again_right_before_the_request_is_posted(repo, cfg, run13):
+    """Review 3: an approval that landed since the first read means no request (it would make that approval stale) and the verdict is approve."""
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    client = _Racy(cfg, [], me=ME)
+    out, _ = _sync(cfg, repo, None, client=client, trust=TREQ, resume=True)
+    assert out == {"gate": "approve-push", "verdict": "approve", "resumed": True} and _wrote(client) == [] and len(run13) == 1
+
+
+def test_an_approval_older_than_a_request_for_the_same_hash_is_noted(repo, cfg, run13):
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    req = raw_comment(5, f"[spec-kit-ado:approval-request] approve-push {_h('approve-push')}<br>x", T2, author=ME)
+    for trust in (T12, TREQ):
+        out, client = _sync(cfg, repo, [_go(date=T1), req], trust=trust, resume=True)
+        assert out["verdict"] == "waiting" and out["note"] == approvals.E_NOTE_STALE and _wrote(client) == [] and run13 == []
+        assert out.get("request", "present") == "present"
+    assert "note" not in _sync(cfg, repo, [_go(date=T3), req])[0] and "note" not in _sync(cfg, repo, [req])[0]  # approved after the request; no approval at all
+    assert "note" not in _sync(cfg, repo, [_go(text="another plan\n", date=T1), req])[0]  # an approval of another text is not this one
+    assert "/approve" not in approvals.E_NOTE_STALE.replace("`/approve`", "")
+
+
+def test_a_pending_malformed_approver_line_still_gets_one_request(repo, cfg, run13):
+    """Review 5, decided: the request shows the exact line to copy, which is what a mistyped retraction or approval needs; the verdict stays waiting."""
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    client = _Live(cfg, [_cmd(12, "/approve approve-push", T1)], me=ME)
+    out, _ = _sync(cfg, repo, None, client=client, trust=TREQ, resume=True)
+    assert out == {"gate": "approve-push", "verdict": "waiting", "bad_newer": 1, "request": "posted", "resumed": False} and len(_wrote(client)) == 1 and run13 == []
+    assert _sync(cfg, repo, None, client=client, trust=TREQ)[0]["request"] == "present" and len(_wrote(client)) == 1
+
+
+def test_resume_needs_the_very_same_step_a_loop_iteration_included(repo, cfg, run13, monkeypatch):
+    _plan_file(repo)
+    _state(repo, step="push-loop:approve-push:1")
+    real = approvals.read_run
+    seen = []
+
+    def moved(repo_, run_id):
+        run = real(repo_, run_id)
+        seen.append(run["step"])
+        return {**run, "step": "push-loop:approve-push:2"} if len(seen) > 1 else run  # the loop went round once more between the two reads
+    monkeypatch.setattr(approvals, "read_run", moved)
+    out, _ = _sync(cfg, repo, [_go()], resume=True)
+    assert out == {"gate": "approve-push", "verdict": "approve", "resumed": False} and run13 == []
+    monkeypatch.setattr(approvals, "read_run", real)
+    assert _sync(cfg, repo, [_go()], resume=True)[0]["resumed"] is True
+
+
+def test_a_differently_cased_spelling_of_the_project_is_still_inside(repo, cfg, run13, monkeypatch):
+    """Re-review M3a: on a case-insensitive filesystem `PROJ/bin` is the project's `proj/bin`; compared by identity (samestat), not by spelling."""
+    swapped = str(repo).swapcase()
+    if not (os.path.exists(swapped) and os.path.samefile(swapped, repo)):
+        pytest.skip("a case-sensitive filesystem: the other spelling is another directory")
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    (repo / "bin").mkdir()
+    for tool in ("specify", "ado", "git"):
+        (repo / "bin" / tool).write_text("#!/bin/sh\n")
+        (repo / "bin" / tool).chmod(0o755)
+    for entry in (swapped + "/bin", swapped, str(repo / "bin")):
+        monkeypatch.setenv("PATH", entry)
+        assert approvals._safe_path(str(repo)) == ""
+        with pytest.raises(approvals.ResumeFailed):
+            _sync(cfg, repo, [_go()], resume=True)
+    assert run13 == []
+
+
+def test_ado_and_git_must_be_on_the_same_safe_path(repo, cfg, run13, monkeypatch, tmp_path_factory):
+    """Re-review M3b: the resumed steps run `ado` and `git` on the sanitized PATH; a missing one is a refusal up front, not a run that fails halfway."""
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    only = tmp_path_factory.mktemp("only")
+    (only / "specify").write_text("#!/bin/sh\n")
+    (only / "specify").chmod(0o755)
+    monkeypatch.setenv("PATH", str(only))
+    with pytest.raises(approvals.ResumeFailed) as e:
+        _sync(cfg, repo, [_go()], resume=True)
+    assert str(e.value) == approvals.E_RESUME_TOOLS and run13 == []
+    (only / "ado").write_text("#!/bin/sh\n")  # ado present, git still missing
+    (only / "ado").chmod(0o755)
+    with pytest.raises(approvals.ResumeFailed) as e:
+        _sync(cfg, repo, [_go()], resume=True)
+    assert str(e.value) == approvals.E_RESUME_TOOLS and run13 == []
+    (repo / "git").write_text("#!/bin/sh\n")  # a git only inside the project does not count
+    (repo / "git").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{only}{os.pathsep}{repo}")
+    with pytest.raises(approvals.ResumeFailed):
+        _sync(cfg, repo, [_go()], resume=True)
+
+
+def test_specify_is_resolved_on_a_safe_path(repo, cfg, run13, monkeypatch, tmp_path_factory):
+    """Review 7: an empty or relative PATH entry, or one inside the project, never finds a `specify` the project planted."""
+    git_bin = __import__("shutil").which("git")
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    planted = repo / "specify"
+    planted.write_text("#!/bin/sh\nexit 0\n")
+    planted.chmod(0o755)
+    (repo / "bin").mkdir()
+    (repo / "bin/specify").write_text("#!/bin/sh\n")
+    (repo / "bin/specify").chmod(0o755)
+    link = tmp_path_factory.mktemp("links") / "looks-outside"
+    link.symlink_to(repo / "bin", target_is_directory=True)
+    monkeypatch.chdir(repo)
+    for path in (":", ".", "", "bin", str(repo), str(repo / "bin"), str(link), f":.:bin:{repo}"):
+        monkeypatch.setenv("PATH", path)
+        with pytest.raises(approvals.ResumeFailed) as e:
+            _sync(cfg, repo, [_go()], resume=True)
+        assert str(e.value) == approvals.E_RESUME_MISSING and run13 == [], path
+    good = tmp_path_factory.mktemp("good")
+    for tool in ("specify", "ado"):
+        (good / tool).write_text("#!/bin/sh\n")
+        (good / tool).chmod(0o755)
+    (good / "git").symlink_to(git_bin)
+    monkeypatch.setenv("PATH", f":.:{repo}:{repo}/bin:{good}")
+    assert _sync(cfg, repo, [_go()], resume=True)[0]["resumed"] is True
+    (argv, kw), = run13
+    assert argv[0] == str(good / "specify") and kw["env"]["PATH"] == str(good)  # the child gets the clean PATH too
+
+
+# -- the CLI --
+def _cli_sync_env(tmp_path, monkeypatch, raws, trust=T12, **kw):
+    _cli_env(tmp_path, monkeypatch, raws, **kw)
+    monkeypatch.setattr(_main, "trusted", lambda repo=".", base=None: trust)
+    monkeypatch.setattr(_main, "AdoClient", lambda c: _Live(c, raws, me=ME))
+
+
+def test_cli_sync_prints_the_verdict_and_exit_codes(repo, monkeypatch, capsys, run13):
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    raws = []
+    _cli_sync_env(repo, monkeypatch, raws)
+    assert _main.main(["approvals", "sync", RID]) == 0
+    assert json.loads(capsys.readouterr().out) == {"gate": "approve-push", "verdict": "waiting"}
+    raws.append(_go())
+    assert _main.main(["approvals", "sync", RID, "--resume"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"gate": "approve-push", "verdict": "approve", "resumed": True} and len(run13) == 1
+    monkeypatch.setattr(approvals, "_resume_run", lambda argv, **kw: types.SimpleNamespace(returncode=1))
+    assert _main.main(["approvals", "sync", RID, "--resume"]) == 1  # a failing resume is a failing check: exit 1
+    assert capsys.readouterr().err.strip() == "error: " + approvals.E_RESUME.format(code=1)
+    for bad, text in (("../x", approvals.E_RUN_ID), ("no-such-run", approvals.E_RUN)):
+        assert _main.main(["approvals", "sync", bad]) == 2
+        assert capsys.readouterr().err.strip() == "error: " + text
+    _state(repo, step="plan")
+    assert _main.main(["approvals", "sync", RID, "--resume"]) == 2
+    assert capsys.readouterr().err.strip() == "error: " + approvals.E_SYNC_GATE
+    _state(repo, status="running")
+    assert _main.main(["approvals", "sync", RID, "--resume"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"gate": None, "verdict": "waiting", "paused": False}
+    assert _main.main(["approvals", "sync", RID, "--dry-run", "--resume"]) == 0  # the flags exist
+    assert _main.main(["approvals", "check", "1001", "--gate", "review-spec"]) in (0, 2)  # check is unchanged
+    capsys.readouterr()
+
+
+def test_cli_terminal_mode_is_refused_with_no_request(repo, monkeypatch, capsys, run13):
+    _state(repo, step="approve-push")
+    _cli_sync_env(repo, monkeypatch, [], trust=Trust([], "terminal", {}))
+    made = []
+    monkeypatch.setattr(_main, "AdoClient", lambda c: made.append(c))
+    assert _main.main(["approvals", "sync", RID, "--resume"]) == 2
+    assert capsys.readouterr().err.strip() == "error: " + approvals.E_SYNC_TERMINAL and made == [] and run13 == []
+    monkeypatch.delenv("ADO_TOKEN", raising=False)  # not even a token is needed to be refused
+    assert _main.main(["approvals", "sync", RID]) == 2
+
+
+def test_cli_story_id_range_still_checked_for_check_only(repo, monkeypatch, capsys):
+    _cli_sync_env(repo, monkeypatch, [])
+    with pytest.raises(SystemExit):
+        _main.main(["approvals", "check", "0", "--gate", "review-spec"])
+    with pytest.raises(SystemExit):
+        _main.main(["approvals", "sync"])
+    capsys.readouterr()
+
+
+def test_refusal_texts_are_fixed(repo, cfg, run13):
+    """No comment text, display name or state.json text in any poller text or output."""
+    _state(repo, step="approve-push")
+    _plan_file(repo)
+    secret = _cmd(11, f"/reject approve-push {_h('approve-push')}: SEKRET dana@contoso.example Dana Fictional", T1)
+    out, _ = _sync(cfg, repo, [secret], resume=True)
+    assert out["verdict"] == "reject" and "SEKRET" not in json.dumps(out) and "Dana" not in json.dumps(out)
+    argv = run13[0][0]
+    assert all("SEKRET" not in a and "Dana" not in a and "contoso" not in a for a in argv)
+    _state(repo, step="approve-push", **{"output": {"x": "SEKRET"}, "error": "Dana Fictional"})
+    assert "SEKRET" not in json.dumps(_sync(cfg, repo, [])[0])
+
+
+def test_apply_files_match_the_shipped_workflow():
+    """Pinned: the fixed plan file of each apply gate is the `show_file` of that gate in the shipped workflow."""
+    from pathlib import Path
+    text = (Path(__file__).resolve().parent.parent / "workflows/ado-lifecycle/workflow.yml").read_text(encoding="utf-8")
+    shown, cur = {}, None
+    for line in text.splitlines():
+        m = line.strip().removeprefix("- ")
+        if m.startswith("id: "):
+            cur = m[4:].strip()
+        elif m.startswith("show_file: ") and cur:
+            shown[cur] = m[len("show_file: "):].strip()
+    assert shown == PLAN_FILES == approvals.APPLY_FILES
+    assert set(approvals.APPLY_FILES) | set(approvals.REVIEW_GATES) | set(approvals.WAIT_GATES) == set(approvals.GATES)
+    assert {g: v for v, gs in approvals.VERB_GATES.items() for g in gs if g in approvals.APPLY_FILES} == approvals.GATE_VERB

@@ -1,9 +1,13 @@
 import datetime
 import hashlib
+import json
 import os
 import re
+import shutil
+import subprocess
 import unicodedata
 import urllib.parse
+from html import escape as _escape
 
 from . import comments, dod, questions, workitems
 from .client import AdoError, is_anonymous
@@ -28,7 +32,7 @@ def excluded(client, comments, ci_identity=None):
     ValueError, never a guess), the author of any comment that starts with a `[spec-kit-ado:` marker (the kit's posting identities) and, when
     given, `ci_identity` (the CI token identity; a value that is not a non-anonymous identity GUID raises ValueError: never skipped silently).
     `comments` is `comments.fetch(..., with_meta=True)` output (its authors are already lowercase GUIDs, or None and then skipped; `with_id` rows work too and are lowercased here). The anonymous identity is never added.
-    shortcut: the local verbs do not know the CI identity; P4-13 passes it."""
+    The local verbs do not know a CI identity; the poller (`sync`) passes its own token identity."""
     me = _guid(questions._me(client))
     if me is None:
         raise ValueError("cannot tell which ADO comments are yours (the token identity is not an identity id); nothing counted")
@@ -396,11 +400,12 @@ def _requests(found, hashes):
     return [_order(c) for c in found if (m := _REQUEST.match(c.get("text") or "")) and hashes.get(m.group(1)) == m.group(2)]
 
 
-def _approve_for(client, trust_cfg, story_id, make_hashes, message, ci_identity=None):
-    """The core of `require` and of `check`: `make_hashes()` gives {gate: hash}, called after `comment_mode_allowed`. These gates are ONE target: the newest
+def _decide(client, trust_cfg, story_id, make_hashes, ci_identity=None):
+    """`(verdict, bad, hashes, found, skip, stale)`: `make_hashes()` gives {gate: hash}, called after `comment_mode_allowed`. These gates are ONE target: the newest
     valid command over all of them (a command with any other hash still counts as a command, so a later reject or another plan's approval cancels) must be
-    an `/approve` with that gate's hash, newer than every approval request for the set, with no newer malformed approver line (`newest()["bad_newer"]`) on
-    any gate of the set. Anything else raises ApprovalMissing(`message(hashes, bad)`); the bypass refusal is ApprovalRefused. Reads only."""
+    an `/approve` or `/reject` with that gate's hash, newer than every approval request for the set, with no newer malformed approver line
+    (`newest()["bad_newer"]`) on any gate of the set: then `verdict` is "approve" or "reject". Anything else is `None` (`bad`: the count of newer malformed
+    lines to show; `stale`: an `/approve` with this exact hash exists but an approval request is newer than it). `found` and `skip` are the comments and the excluded identities. The bypass refusal is ApprovalRefused. Reads only."""
     comment_mode_allowed(client)
     hashes = make_hashes()
     found, skip = _load(client, trust_cfg, story_id, ci_identity)
@@ -416,14 +421,24 @@ def _approve_for(client, trust_cfg, story_id, make_hashes, message, ci_identity=
     wins, bad = scan(found)
     key = lambda w: _order({"date": w["created"], "id": w["id"]})  # noqa: E731
     g, best = max(wins.items(), key=lambda kv: key(kv[1]), default=(None, None))
-    if best and best["verb"] == "approve" and best["hash"] == hashes[g]:
+    stale = False
+    if best and best["hash"] == hashes[g]:
         reqs, cut = _requests(found, hashes), key(best)
+        stale = best["verb"] == "approve" and not (None not in reqs and all(r < cut for r in reqs))
         if None not in reqs and all(r < cut for r in reqs):
             # a malformed approver line anywhere in the set newer than the winner: the comments newer than it are read again, so a line older than the approval is harmless
             _, bad = scan([c for c in found if (k := _order(c)) is None or k > cut])
             if not bad:
-                return
-    raise ApprovalMissing(message(hashes, bad))
+                return best["verb"], 0, hashes, found, skip, False
+    return None, bad, hashes, found, skip, stale
+
+
+def _approve_for(client, trust_cfg, story_id, make_hashes, message, ci_identity=None):
+    """The core of `require` and of `check`: `_decide` must give "approve"; anything else (a reject, nothing, stale, a request, malformed lines) raises
+    ApprovalMissing(`message(hashes, bad)`); the bypass refusal is ApprovalRefused. Reads only."""
+    verdict, bad, hashes, *_ = _decide(client, trust_cfg, story_id, make_hashes, ci_identity)
+    if verdict != "approve":
+        raise ApprovalMissing(message(hashes, bad))
 
 
 def _load(client, trust_cfg, story_id, ci_identity=None):
@@ -494,13 +509,25 @@ def _block(sec, heading):
     return "".join(raw[live[-1]:end])
 
 
+def _head(repo):
+    """HEAD's full commit id (40 lowercase hex); ValueError(E_ARTIFACT) when git cannot say."""
+    from . import prs
+    try:
+        head = prs._text(prs._git(repo, "rev-parse", "--verify", "HEAD^{commit}"), "HEAD").strip()
+    except prs._Refuse:
+        raise ValueError(E_ARTIFACT) from None
+    if not re.fullmatch(r"[0-9a-f]{40}", head):
+        raise ValueError(E_ARTIFACT)
+    return head
+
+
 def artifacts(gate_id, story_id, cfg, repo="."):
     """The bytes a review gate shows its approver (D§4.2), for `gate_hash`: UTF-8 text of the listed artifacts, each framed as `<label> <byte count>\\n<bytes>\\n`
     (so no content can pass for a frame): `review-spec` = spec.md + ledger section 2; `review-plan` = plan.md + spec.md + ledger section 2; `review-review` =
     the newest live `### Review` block of ledger section 4, then (strict mode only) the newest live `### AC fidelity` block (an empty frame when there is none),
     then HEAD's full commit id. spec.md and plan.md sit in the ledger's `Spec dir`. Every file is read confined to `repo` (`gate._read`: no symlink,
     realpath inside, 1 MiB, UTF-8); the result depends on file contents and HEAD only, never on paths or time. ValueError (E_ARTIFACT) for anything missing or unreadable."""
-    from . import gate, prs
+    from . import gate
     if gate_id not in REVIEW_GATES:
         raise ValueError(E_ARTIFACT)
     ledger = gate._read(os.path.join(repo, dod.dod_file(cfg.dod_path, comments._num(story_id))), repo, set())
@@ -530,13 +557,7 @@ def artifacts(gate_id, story_id, cfg, repo="."):
         ledger_part("review", _block(sec4, _REVIEW_H) if sec4 is not None else None)
         if cfg.mode == "strict":
             parts.append(("fidelity", _block(sec4, _FIDELITY_H) or ""))
-        try:
-            head = prs._text(prs._git(repo, "rev-parse", "--verify", "HEAD^{commit}"), "HEAD").strip()
-        except prs._Refuse:
-            raise ValueError(E_ARTIFACT) from None
-        if not re.fullmatch(r"[0-9a-f]{40}", head):
-            raise ValueError(E_ARTIFACT)
-        parts.append(("head", head))
+        parts.append(("head", _head(repo)))
     return b"".join(f"{label} {len(b)}\n".encode() + b + b"\n" for label, b in ((label, text.encode("utf-8")) for label, text in parts))
 
 
@@ -680,3 +701,283 @@ def check(client, trust_cfg, story_id, gate_id, cfg, repo=".", ci_identity=None)
     _approve_for(client, trust_cfg, story_id, lambda: {gate_id: gate_hash(gate_id, story_id, artifacts(gate_id, story_id, cfg, repo))},
                  lambda hashes, bad: E_REVIEW.format(gate=gate_id, story=int(story_id), hash=hashes[gate_id], bad=_bad(bad)), ci_identity)
     return {"gate": gate_id, "mode": "comment", "met": True}
+
+
+# ---- the poller: `ado approvals sync RUN_ID [--resume]` and the approval-request comment (P4-13) --------------------------------------------------
+
+APPLY_FILES = {"approve-questions": ".ado/plan-questions.md", "approve-plan-questions": ".ado/plan-questions-after-plan.md",
+               "approve-answers-questions": ".ado/plan-questions-after-answers.md", "approve-push": ".ado/plan-push.md", "approve-decisions": ".ado/plan-decisions.md",
+               "approve-sync": ".ado/plan-sync.md", "approve-pr": ".ado/plan-pr.md"}  # the `show_file` of each apply gate (pinned to workflow.yml by a test)
+GATE_VERB = {g: v for v, gs in VERB_GATES.items() for g in gs if g in APPLY_FILES}  # the apply that each of those gates guards
+MAX_RUN_ID = 128
+MAX_REQUESTS = 50  # request comments of the poller's own on one story: more than this is refused, so edits of them cannot make the poller post forever
+REQUEST_CAP = 500_000  # a request comment longer than this (characters, escaped) shows no text and no command line, only a fixed sentence (E_TOO_LONG)
+RESUME_TIMEOUT = 6 * 3600  # seconds: a resume runs the workflow up to its next pause, agent steps included
+_resume_run = subprocess.run  # the one subprocess call of the poller (tests replace it)
+E_SYNC_TERMINAL = ("approvals sync works in comment mode only (`approval: \"comment\"` on the target branch): in terminal mode a person answers the gates "
+                   "in a terminal; nothing was read or resumed")
+E_RUN_ID = "the run id is not a Spec Kit run id (ASCII letters, digits, `-` and `_`, starting with a letter or digit, at most 128 characters)"
+E_RUN = ("the run's state.json cannot be read or is not a run of the ado-lifecycle workflow (missing, a symlink, over 1 MiB, not JSON, another workflow, or an unknown "
+         "status, step or story id), so nothing is done")
+E_SYNC_GATE = "the run is paused at a step that is not one of the 12 gates of the ado-lifecycle workflow, so it is not resumed here"
+E_SYNC_IDENTITY = ("the poller's token identity cannot be established, so the comments cannot be attributed and nothing is resumed (the poller must run with the "
+                   "token identity that posted the kit's comments)")
+E_REQUESTS_OFF = "approval requests are off: `unattended.approval_requests` is not true on the target branch, so no request comment is posted"
+E_REQUEST_CAP = f"this story already has {MAX_REQUESTS} approval-request comments by the token identity, so no more are posted; delete the old ones"
+E_RESUME = "`specify workflow resume` failed (exit status {code}); see `specify workflow status`"
+E_RESUME_TIMEOUT = "`specify workflow resume` did not finish within the poller's time limit and was stopped; see `specify workflow status`"
+E_RESUME_TOOLS = ("`ado` or `git` was not found on a safe PATH (absolute entries outside the project), so the resumed steps would fail; the run is not resumed")
+E_RESUME_MISSING = ("the `specify` command was not found on a safe PATH (absolute entries outside the project; an empty or relative entry and one inside the project are "
+                    "ignored) or could not be started")
+
+
+class ResumeFailed(AdoError):
+    """`specify workflow resume` failed, timed out or could not start: exit 1 with a fixed text (the run's own output is never echoed)."""
+
+
+def valid_run_id(run_id):
+    from . import status
+    return isinstance(run_id, str) and len(run_id) <= MAX_RUN_ID and status.RUN_ID.fullmatch(run_id) is not None
+
+
+def read_run(repo, run_id):
+    """`{"run_id", "status", "step", "story_id"}` of one run, from `<repo>/.specify/workflows/runs/<run id>/state.json`, which is UNTRUSTED (the agent can edit
+    it): the run id is checked by Spec Kit's pattern BEFORE any path is built (ValueError E_RUN_ID), the file is read confined (no symlink, a plain
+    directory under the runs directory, 1 MiB, UTF-8), the workflow id and the run id in it must match, the status must be a known one, the step one
+    of the shipped workflow (`status._step_ok`; a nested step is `<loop>:<step>:<n>`), the story id a work item id (int) and `updated_at` a time. Nothing else of
+    the file is read. ValueError (E_RUN) for anything else."""
+    from . import gate, prs, status
+    if not valid_run_id(run_id):
+        raise ValueError(E_RUN_ID)
+    base = os.path.realpath(repo)
+    runs = os.path.join(base, *status.RUNS_DIR)
+    path = os.path.join(runs, run_id)
+    if os.path.realpath(runs) != runs or os.path.realpath(path) != path:  # .specify, workflows, runs or the run directory is a link
+        raise ValueError(E_RUN)
+    text = gate._read(os.path.join(path, "state.json"), base, set())
+    try:
+        data = json.loads(text) if text is not None else None
+    except (ValueError, RecursionError):
+        data = None
+    inp = data.get("inputs") if isinstance(data, dict) else None
+    sid = inp.get("story_id") if isinstance(inp, dict) else None
+    state, step = (data.get("status"), data.get("current_step_id")) if isinstance(data, dict) else (None, None)
+    if not (isinstance(data, dict) and data.get("workflow_id") == status.RUN_WORKFLOW and data.get("run_id") == run_id and type(sid) is int
+            and 1 <= sid <= prs.MAX_ID and isinstance(state, str) and state in status.RUN_STATUSES and status._when(data.get("updated_at")) is not None
+            and (status._step_ok(step) or (step is None and state == "created"))):
+        raise ValueError(E_RUN)
+    return {"run_id": run_id, "status": state, "step": step or "", "story_id": sid}
+
+
+def _paused_gate(step):
+    """The gate a paused run waits at (`<gate>`, or the middle part of a nested `<loop>:<gate>:<n>`), which must be one of the 12 `GATES`: checked before any
+    argv is built or any request is made."""
+    gate_id = step.split(":")[-2] if ":" in step else step
+    if gate_id not in GATES:
+        raise ValueError(E_SYNC_GATE)
+    return gate_id
+
+
+def _input(gate_id):
+    return "verdict_" + gate_id.replace("-", "_")  # the workflow's input names are the underscore forms
+
+
+def resume_argv(run_id, gate_id, verdict):
+    """The argument list of the resume: the verdict for this gate, and every OTHER gate's verdict input reset to empty (a verdict persists across resumes and a
+    stale one would pass a later gate). One `--input` per pair: specify's option takes one value, a bare second value is an "unexpected extra argument"
+    (checked on specify 1.2.4.dev0). ValueError for a run id or a gate outside the fixed lists, or a verdict that is not approve or reject."""
+    if not valid_run_id(run_id):
+        raise ValueError(E_RUN_ID)
+    if gate_id not in GATES or verdict not in ("approve", "reject"):
+        raise ValueError(E_SYNC_GATE)
+    pairs = [f"{_input(gate_id)}={verdict}"] + [f"{_input(o)}=" for o in GATES if o != gate_id]
+    return ["specify", "workflow", "resume", run_id] + [x for pair in pairs for x in ("--input", pair)]
+
+
+def _plan_text(gate_id, repo):
+    """The plan TEXT of an apply gate: its fixed plan file, read confined, newlines as a text-mode read gives them, without the `⚠` first line that
+    `push.gate_preview` adds to a plan over 190 lines (removed only when re-rendering the rest gives exactly the file). This is the text the apply hashes
+    (`approvals.require`), never the bytes of the file. ValueError (E_ARTIFACT) when the file cannot be read."""
+    from . import gate, push
+    rel = APPLY_FILES[gate_id]
+    raw = gate._read(os.path.join(repo, rel), repo, set())
+    if raw is None:
+        raise ValueError(E_ARTIFACT)
+    text = raw.replace("\r\n", "\n").replace("\r", "\n")
+    first, nl, rest = text.partition("\n")
+    return rest if nl and first.startswith("\u26a0") and push.gate_preview(rest, rel) == text else text
+
+
+def _view(gate_id, story_id, cfg, repo):
+    """`(hashes, shown text)` of a review or apply gate: the hashes of the gate's target (the verb's gates for an apply gate, as `require` builds them) and
+    the exact text the hash covers."""
+    if gate_id in REVIEW_GATES:
+        art = artifacts(gate_id, story_id, cfg, repo)
+        return {gate_id: gate_hash(gate_id, story_id, art)}, art.decode("utf-8")
+    text = _plan_text(gate_id, repo)
+    data = text.encode("utf-8")
+    return {g: gate_hash(g, story_id, data) for g in sorted(VERB_GATES[GATE_VERB[gate_id]])}, text
+
+
+_SLASH_CMD = re.compile(r"/(?=(?:approve|reject|answer))", re.I)
+
+
+def _visible(text):
+    """`text` with newlines normalised and every control, format and line-separator character shown as `<U+XXXX>` (a bidi override or a zero-width character
+    must not change what the approver reads). A `/` right before `approve`, `reject` or `answer` (any case) is shown as `<U+002F>` too: the quote prefix guards
+    logical lines only, and a long line that a browser wraps could otherwise start a visual line with a copyable `/approve <gate> <hash>`."""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = "".join(c if c in "\n\t" or unicodedata.category(c) not in ("Cc", "Cf", "Zl", "Zp") else f"<U+{ord(c):04X}>" for c in text)
+    return _SLASH_CMD.sub("<U+002F>", text)
+
+
+QUOTE = "\u2502 "  # in front of every line of shown text: no line of an artifact can then be a command (or be mistaken for the kit's own line to copy)
+E_TOO_LONG = ("The text this hash covers is too long to show here ({n} characters once escaped, the limit is {cap}), so this gate must not be approved by comment: "
+              "the apply would still accept a hand-typed approval of this hash, so do not type one for text you have not read. It is not committed: a human must review it "
+              "on the runner's working tree and approve in terminal mode, or the plan must be made smaller.")
+
+
+def request_html(gate_id, hash_, shown):
+    """The approval-request comment (HTML for ADO): the marker line, the two lines to copy (the ONLY lines of the comment that can be a command), then the
+    exact text the hash covers, `html.escape`d and with `QUOTE` in front of every line. Over `REQUEST_CAP` characters the text, the lines to copy and every
+    pointer are left out: a fixed sentence says that a human must read it on the runner (the file is not committed) and that it must not be approved by comment.
+    Nothing else is ever put in it; every part but `shown` is a fixed text, a gate id from `GATES` or a hash."""
+    head = f"[spec-kit-ado:approval-request] {gate_id} {hash_}"
+    body = "<br>".join(_escape(x) for x in [head, "To approve, comment exactly this as the first line of your own comment (unedited):",
+                                             f"/approve {gate_id} {hash_}", "To reject:", f"/reject {gate_id} {hash_}", "The text this hash covers:"]
+                       + [QUOTE + x for x in _visible(shown).split("\n")])
+    if len(body) > REQUEST_CAP:
+        body = "<br>".join(_escape(x) for x in [head, E_TOO_LONG.format(n=len(body), cap=REQUEST_CAP)])
+    return body
+
+
+def post_request(client, trust_cfg, story_id, gate_id, hash_, shown, found, me, dry_run=False, recheck=None):
+    """Posts the approval request for (gate, hash) unless the token identity already has one (an unedited comment of its own naming this gate and hash) and
+    returns "posted", "present", "would-post" (`dry_run`) or None (`recheck()`, called right before the POST with nothing posted yet, said no: the story changed).
+    The ONE kit write without a preview and a gate: it is allowed only when `unattended.approval_requests` is true on the target branch (`trust_cfg`;
+    ApprovalRefused otherwise), posts one comment per hash, never more than `MAX_REQUESTS` by this identity, and what it posts is fixed text plus the
+    `html.escape`d, quoted text the approver is meant to approve. `found` are the story's comments (with meta), `me` the token identity."""
+    if trust_cfg.unattended.get("approval_requests") is not True:
+        raise ApprovalRefused(E_REQUESTS_OFF)
+    own = [(m.groups(), c) for c in found if c.get("author") == me and (m := _REQUEST.match(c.get("text") or ""))]
+    if any(g == (gate_id, hash_) and c.get("version") == 1 and c.get("modified_by") == me for g, c in own):
+        return "present"
+    if len(own) >= MAX_REQUESTS:
+        raise ApprovalRefused(E_REQUEST_CAP)
+    if dry_run:
+        return "would-post"
+    if recheck is not None and not recheck():
+        return None
+    client.post(f"/{workitems._proj(client)}/_apis/wit/workItems/{comments._num(story_id)}/comments?api-version={comments.API}", {"text": request_html(gate_id, hash_, shown)})
+    return "posted"
+
+
+def _safe_path(repo):
+    """PATH for the resume: absolute entries only, none inside the project or the current directory (an empty or relative entry means the current directory,
+    where the project could plant a `specify`, `ado` or `git`). Symlinks are resolved first, and an entry counts as inside when any of its ancestors IS the project
+    directory (`os.path.samestat`, so a differently-cased spelling on a case-insensitive filesystem is caught too)."""
+    tops = [os.stat(t) for t in {os.path.realpath(repo), os.path.realpath(os.getcwd())} if os.path.isdir(t)]
+    keep = []
+    for d in os.environ.get("PATH", "").split(os.pathsep):
+        if d and os.path.isabs(d) and not _inside(os.path.realpath(d), tops):
+            keep.append(d)
+    return os.pathsep.join(keep)
+
+
+def _inside(path, tops):
+    """Is `path`, or one of its ancestors, the same directory as one of the `os.stat` results `tops`?"""
+    while True:
+        try:
+            st = os.stat(path)
+            if any(os.path.samestat(st, t) for t in tops):
+                return True
+        except OSError:
+            pass  # a directory that does not exist holds nothing to find; its ancestors are still looked at
+        parent = os.path.dirname(path)
+        if parent == path:
+            return False
+        path = parent
+
+
+def _resume(repo, run_id, gate_id, verdict):
+    """Runs the resume: an argument list, no shell, no stdin, the run's output thrown away (it is model and project text), a time limit. `specify` is looked up
+    on a sanitized PATH (`_safe_path(repo)`: absolute entries outside the project) and refused when it is not there; the child gets that PATH and otherwise this
+    process's environment without git's repository selectors and with no pager (`prs.git_env`; the resumed steps need the same credentials an interactive run has)."""
+    from . import prs
+    argv = resume_argv(run_id, gate_id, verdict)
+    path = _safe_path(repo)
+    exe = shutil.which("specify", path=path)
+    if not exe:
+        raise ResumeFailed(E_RESUME_MISSING)
+    if not all(shutil.which(tool, path=path) for tool in ("ado", "git")):  # the resumed steps run them on this same PATH
+        raise ResumeFailed(E_RESUME_TOOLS)
+    try:
+        r = _resume_run([exe] + argv[1:], cwd=repo, env={**prs.git_env(), "PATH": path}, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, timeout=RESUME_TIMEOUT, shell=False, check=False)
+    except subprocess.TimeoutExpired:
+        raise ResumeFailed(E_RESUME_TIMEOUT) from None
+    except (OSError, subprocess.SubprocessError):
+        raise ResumeFailed(E_RESUME_MISSING) from None
+    if r.returncode != 0:
+        raise ResumeFailed(E_RESUME.format(code=int(r.returncode)))
+
+
+E_NOTE_STALE = ("an approval of this exact text exists, but an approval request is newer than it, so it no longer counts: the approver must approve again "
+                "(comment the `/approve` line of the newest request)")
+
+
+def sync(client, trust_cfg, run_id, cfg, repo=".", resume=False, dry_run=False):
+    """`ado approvals sync RUN_ID`: `{"gate", "verdict": "approve"|"reject"|"waiting"}` (plus `bad_newer` (a count), `request` (posted, present, would-post), `note`
+    (a fixed text) and `resumed` when asked) for the gate a run is paused at; `{"gate": None, "verdict": "waiting", "paused": False}` and nothing else for a run
+    that is not paused. Comment mode only (ApprovalRefused otherwise). Order: the run id, then state.json (untrusted: see `read_run`), then the gate id
+    against `GATES`, all before any argv or request; then the poller's own token identity (it is passed to `excluded` as the CI identity, so it can never
+    count as an approver, and the wait gates need it to be the identity that posted the kit's comments); then the verdict: a review or apply gate by hash
+    (`artifacts`, or the plan text of its fixed plan file; the newest-wins/one-target logic of `_decide`, so a newer malformed approver line or a request
+    newer than the approval means waiting), a wait gate by `wait_state` (met = approve). A waiting gate with a hash gets its approval request when
+    `unattended.approval_requests` is true (also while a malformed approver line is pending: the request shows the line to copy); the comments are read
+    again right before the POST and nothing is posted when an approval or reject has arrived since (the window between that read and the POST is narrowed,
+    not closed). With `resume` and a verdict the run is read again (it must still be paused at the very same step, a loop iteration included) and resumed
+    (`resume_argv`). `dry_run` posts and resumes nothing. Everything refused has a fixed text; no comment or file text is ever returned."""
+    if trust_cfg.approval != "comment":
+        raise ApprovalRefused(E_SYNC_TERMINAL)
+    run = read_run(repo, run_id)
+    if run["status"] != "paused":
+        return {"gate": None, "verdict": "waiting", "paused": False}
+    gate_id, story = _paused_gate(run["step"]), run["story_id"]
+    try:
+        me = _guid(questions._me(client))
+    except ValueError:
+        me = None
+    if me is None or is_anonymous(me):
+        raise ApprovalMissing(E_SYNC_IDENTITY)
+    request, stale = None, False
+    if gate_id in WAIT_GATES:
+        st = wait_state(client, story, gate_id, trust_cfg, ci_identity=me)
+        verdict, bad = ("approve" if st["met"] else "waiting"), st["bad_newer"]
+    else:
+        seen = {}
+
+        def make():
+            hashes, seen["text"] = _view(gate_id, story, cfg, repo)
+            return hashes
+        verdict, bad, hashes, found, _, stale = _decide(client, trust_cfg, story, make, me)
+        if verdict is None and trust_cfg.unattended.get("approval_requests") is True:
+            again = {}
+
+            def recheck():
+                again["r"] = _decide(client, trust_cfg, story, make, me)
+                return again["r"][0] is None
+
+            request = post_request(client, trust_cfg, story, gate_id, hashes[gate_id], seen["text"], found, me, dry_run, recheck)
+            if "r" in again:
+                verdict, bad, hashes, found, _, stale = again["r"]
+        verdict = verdict or "waiting"
+    out = {"gate": gate_id, "verdict": verdict, **({"bad_newer": bad} if bad else {}), **({"request": request} if request else {}),
+           **({"note": E_NOTE_STALE} if stale and verdict == "waiting" else {})}
+    if resume:
+        again = read_run(repo, run_id)
+        go = verdict != "waiting" and not dry_run and again["status"] == "paused" and again["step"] == run["step"]
+        if go:
+            _resume(repo, run_id, gate_id, verdict)
+        out["resumed"] = go
+    return out

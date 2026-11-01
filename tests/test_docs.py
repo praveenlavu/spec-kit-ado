@@ -2619,3 +2619,28 @@ def test_approvals_check_is_documented():
     assert "never post it yourself" in agents and "the ledger and the decisions file do not count" in agents
     assert "`ado approvals check <id> --gate <gate>` (P4-12b)" in wf
     assert "`ado approvals` and the poller come with" not in cfg
+
+
+def test_poller_is_documented():
+    """P4-13: the verb, its flags, the local-runner-only rule, the schedules, the identity rule, the killed-run fix and the residuals are named where comment mode is."""
+    from ado import approvals
+    cfg, readme, agents, hitl, log, wf, un = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "CHANGELOG.md",
+                                                                  "workflows/ado-lifecycle/README.md", "docs/unattended.md"))
+    for doc in (readme, agents, hitl, log, wf, cfg):
+        assert "approvals sync" in doc, doc[:30]
+    for needle in ("On a local or persistent machine only", "Never on an ephemeral CI runner", "launchd", "*/5 * * * *", "`ado approvals sync RUN_ID [--resume] [--dry-run]`",
+                   "The agent never runs as an admin or approver", "Contributor", "**without** the \"Bypass rules on work item updates\" permission", "never approvers",
+                   "Poller identity = posting identity", "Approval-request comments of any author make an approval stale; this blocks only",
+                   "A persisted verdict whose apply refuses ends FAILED: start a new run", "set `\"status\"` to `\"failed\"`", "specify workflow resume <run id>",
+                   "`unattended.approval_requests`", "the one kit write without a preview and a gate", "exits 2 with a fixed text and makes no request",
+                   "one `--input` for each of the 12 gates", "`approvals.GATES`", "`approvals.artifacts`", "`approvals.wait_state`", "untrusted", "`<U+XXXX>`",
+                   "**Over 500,000 characters**", "at most 50", "prefixed with\n`│ `".replace("\n", " "), "Overlapping polls can resume a run twice", "`flock -n", "sanitized `PATH`", "multi-line JSON", "an ADO request failed", "`.specify/workflows/runs/<run id>/workflow.yml`", "does not protect against a tampered copy", "**must not** be approved by comment", "`<U+002F>`", "directory identity", "between the poller's read of the comments and its post", "Process enforcement, not a security boundary", "Exit codes: 0, 1", "No other"):
+        assert needle in un, needle
+    for g in approvals.GATES:
+        assert f"`{g}`" in un, g
+    for needle in ("`unattended.approval_requests`", "[unattended.md](unattended.md)", "**The poller: `ado approvals sync RUN_ID [--resume] [--dry-run]`**",
+                   "The poller's identity must be the identity that posted the kit's comments", "one `--input verdict_<other>=`"):
+        assert needle in cfg, needle
+    assert "the only kit write without a preview and a gate" in hitl and "docs/unattended.md" in hitl and "ADO_TOKEN" not in un.replace("`ADO_TOKEN` or", "")
+    assert "(P4-13, D§4.2)" in log and "approvals.post_request" in log and "approvals.resume_argv" in log and "start a new run" in log
+    assert "poller (P4-13) must" not in cfg and "the poller comes with a later task" not in cfg

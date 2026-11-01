@@ -511,6 +511,18 @@ def _approvals_check(args):
     return approvals.check(client, trust, args.id, args.gate, client.config)
 
 
+def _approvals_sync(args):
+    """`approvals sync RUN_ID [--resume] [--dry-run]` (P4-13, the poller): comment mode only. The run id is checked first, then the target branch's trust: in terminal
+    mode it exits 2 with a fixed text before any token is read or any request is made. The rest is `approvals.sync`."""
+    if not approvals.valid_run_id(args.run_id):
+        raise ValueError(approvals.E_RUN_ID)
+    trust = trusted(".")
+    if trust.approval != "comment":
+        raise ValueError(approvals.E_SYNC_TERMINAL)
+    client = AdoClient(_config(args))
+    return approvals.sync(client, trust, args.run_id, client.config, ".", resume=args.resume, dry_run=args.dry_run)
+
+
 def _resolve_decision(args):
     """`decisions --resolve`: the PO's verdict is recorded by a human. Tested before anything is read or written."""
     if trusted(".").approvers:
@@ -1005,6 +1017,13 @@ def main(argv=None):
                         "a no-op when approval is not \"comment\"")
     q.add_argument("id", type=int, help="story id")
     q.add_argument("--gate", required=True, metavar="GATE", help="one of: " + ", ".join(approvals.GATES))
+    q = asub.add_parser("sync", help="The poller (comment mode only, for a local or persistent runner): reads the gate a Spec Kit run is paused at, prints "
+                        "{gate, verdict: approve|reject|waiting} from the approvers' comments, and with --resume resumes the run with that verdict. When "
+                        "`unattended.approval_requests` is true on the target branch it also posts one approval-request comment per hash (the one write "
+                        "without a preview and a gate). Exit 0, 1 (the resume failed), 2 (refused)")
+    q.add_argument("run_id", metavar="RUN_ID", help="the Spec Kit run id")
+    q.add_argument("--resume", action="store_true", help="run `specify workflow resume` with the verdict when there is one")
+    q.add_argument("--dry-run", action="store_true", help="post nothing and resume nothing: only print what would happen")
 
     args = parser.parse_args(argv)
     if getattr(args, "expect_plan", None) and not args.apply:
@@ -1051,7 +1070,7 @@ def main(argv=None):
         parser.error(f"--probe-item must be a work item id between 1 and {prs.MAX_ID}")
     if args.command == "status" and not 1 <= args.id <= prs.MAX_ID:
         parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
-    if args.command == "approvals" and not 1 <= args.id <= prs.MAX_ID:
+    if args.command == "approvals" and args.approvals_command == "check" and not 1 <= args.id <= prs.MAX_ID:
         parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
     if args.command == "rules" and not 1 <= args.id <= 999999999:
         parser.error("the story id must be between 1 and 999999999")
@@ -1080,8 +1099,8 @@ def main(argv=None):
             out = _resolve_decision(args)
         elif args.command == "rules" and args.confirm:  # local only: no token, no request
             out = _rules_confirm(args)
-        elif args.command == "approvals":  # reads only; terminal mode needs no token
-            out = _approvals_check(args)
+        elif args.command == "approvals":  # `check` reads only (terminal mode needs no token); `sync` is the poller
+            out = _approvals_check(args) if args.approvals_command == "check" else _approvals_sync(args)
         elif args.command == "comments" and args.author_ids:  # reads only; stdout lines, no file
             lines, truncated = comments.author_id_lines(AdoClient(_config(args)), args.id)
             print("\n".join(lines), end="\n" if lines else "")
