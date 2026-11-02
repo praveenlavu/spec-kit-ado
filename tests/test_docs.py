@@ -2548,6 +2548,11 @@ def test_done_time_cross_check_is_documented():
                    "also blocks when the **target** branch's config is strict", "rule ids"):
         assert needle in cfg, needle
     assert "`done --help` text gains only `--base`" in log and "(P4-11" in log
+    assert "`--base` cannot weaken the check" in _flat("docs/configuration.md") and "stricter of `--base` and `origin/HEAD`" in _flat("docs/configuration.md")
+    assert "`--base` cannot weaken the check (F1, P4-20 I-1)" in log and "`__main__._stricter_trust`" in log
+    assert "except these eight additions" in log and "8. `done` reads the target branch's config" in log
+    assert "a dangling `origin/HEAD` (with or without `--base`)" in log and "even in advisory mode. A human closes such a story with plain `ado done <id>`" in log
+    assert "otherwise in the Azure DevOps UI" in cfg and "may or may not have `origin/HEAD`" in cfg and "is refused with exit 2, never replaced by `origin/HEAD`" in cfg
     assert "--base \"$BASE_SHA\"" in ci_gh and "HEAD^1" in ci_az and "HEAD^1" in azr and "decisions-xcheck-unreachable" in ci_gh and "decisions-xcheck-unreachable" in ci_az
     assert "BASE_SHA: ${{ github.event.pull_request.base.sha }}" in gh and "HEAD^1^{commit}" in az
     # fix round 1: the Azure rebase / fast-forward bypass is named, the merge-type limit is required, the claim "never the merged config" is gone

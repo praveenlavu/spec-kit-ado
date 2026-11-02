@@ -64,22 +64,34 @@ def _plan(args, text):
         Path(f"{out}.new").unlink(missing_ok=True)
 
 
-def _pr_trust(base):
-    """The trust that judges `pr create --apply`: the stricter of the PR's target branch (`--base`, when it resolves to a commit here) and `origin/HEAD`.
-    Comment mode from either wins; with both in comment mode the approvers must be the same set (two lists cannot be ordered: refuse). When the base does
-    not resolve, `origin/HEAD` alone (as every other apply). An unreadable target config raises (exit 2)."""
-    home = trusted(".")
-    ref = strict.base_ref(".", base)
-    if not strict._resolve_base(".", ref):
-        return home
-    target = trusted(".", base=ref)
-    strict_ones = [t for t in (home, target) if t.approval == "comment"]
+def _stricter_trust(base, is_strict, ci=False):
+    """`(Trust, refs)`: the stricter of the target branch (`--base`, when it resolves to a commit here) and `origin/HEAD`; `refs` are the full refs read.
+    `is_strict(trust)` picks the strict side(s); with both strict the approvers must be the same set (two lists cannot be ordered: refuse, exit 2). When the
+    base does not resolve, `origin/HEAD` alone (as every other apply). An unreadable target config raises. `ci` (`done`): a `--base` that is no commit here
+    raises as it always did (nothing is believed without it, and with no `origin/HEAD` the working tree's config is the PR's), and a missing `origin/HEAD`
+    leaves the target alone (a CI checkout may have none)."""
+    home_ref = strict.default_base(".")
+    ref = strict.base_ref(".", base) if base else ""
+    if not ref or not (ci or strict._resolve_base(".", ref)):
+        return trusted("."), [home_ref] * bool(home_ref)
+    target = trusted(".", base=ref)  # ci: raises ConfigInvalid for a base that is no commit here
+    home = trusted(".") if home_ref or not ci else None
+    strict_ones = [t for t in (home, target) if t is not None and is_strict(t)]
+    refs = [r for r in (home_ref, ref) if r]
     if not strict_ones:
-        return home
+        return (home or target), refs
     if len(strict_ones) == 2 and set(home.approvers) != set(target.approvers):
+        if ci:
+            raise ValueError("--base and the default branch (origin/HEAD) name different approvers, so it is unclear who may approve; a human closes the "
+                             "story: `ado done <id>` without --base, or in Azure DevOps (docs/configuration.md, 'Done-time cross-check')")
         raise ValueError("comment approval: the default branch and the PR's target branch name different approvers, so it is unclear who may approve; "
                          "make `approvers` the same on both (docs/configuration.md, 'Approvers and comment mode')")
-    return strict_ones[0]
+    return strict_ones[0], refs
+
+
+def _pr_trust(base):
+    """The trust that judges `pr create --apply`: the stricter of the PR's target branch and `origin/HEAD`; comment mode from either wins."""
+    return _stricter_trust(base, lambda t: t.approval == "comment")[0]
 
 
 def _approved(client, args, verb, text, writes=True, trust=None):
@@ -113,15 +125,14 @@ def _stamp_used(client, args, ids):
 
 
 def _xcheck(client, args, dec):
-    """(findings, blocking) of `done`'s cross-check (D§4.4): none unless the TARGET branch (`--base`, else origin/HEAD) configures approvers; an unreadable
-    target config raises (exit 2: nothing is believed). It blocks when either this config or the target's is strict: a PR that sets `mode: advisory` in
+    """(findings, blocking) of `done`'s cross-check (D§4.4): none unless the stricter of `--base` and origin/HEAD configures approvers (`--base` cannot weaken
+    it; `_stricter_trust`); an unreadable config on either side raises (exit 2: nothing is believed). It blocks when this config or either side's is strict: a PR that sets `mode: advisory` in
     the same change must not turn its own cross-check into a warning. The decisions file `dec` was already confined and read by the caller."""
-    approvers = trusted(".", base=args.base).approvers
+    trust, refs = _stricter_trust(args.base, lambda t: bool(t.approvers), ci=True)  # the stricter of --base and origin/HEAD: --base cannot weaken it
+    approvers = trust.approvers
     if not approvers:
         return [], False
-    base = args.base or strict.default_base(".")
-    target = Config.load_from_ref(base, repo=".") if base else None
-    blocking = client.config.mode == "strict" or (target is not None and target.mode == "strict")
+    blocking = client.config.mode == "strict" or any((c := Config.load_from_ref(r, repo=".")) is not None and c.mode == "strict" for r in refs)
     md = (gate._read(dec, ".", set()) or "") if os.path.lexists(dec) else ""
     return strict.xcheck_run(client, args.id, md, approvers), blocking
 

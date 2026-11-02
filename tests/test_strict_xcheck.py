@@ -407,3 +407,173 @@ def test_marker_fix_text_names_a_non_approver_poster(cfg):
     md, html = _posted(S1)
     (f,) = _x(cfg, md.replace("posted: 10", "posted: 99"), [_kit(html)])
     assert "non-approver identity (the agent token" in f["fix"] and "a human re-posts" not in f["fix"]
+
+
+# ---- F1 (P4-20 I-1): `done --base` is judged by the stricter of --base and origin/HEAD; it can never weaken the cross-check ----
+def _done_repo(tmp_path, monkeypatch, git_env, head, old=None, mode="strict", extra=None, ci=False):
+    """A real repository, `trusted` NOT stubbed: commit A (`old`, default no approvers), commit B = origin/main (`head`); local branches `old` (= A) and
+    `side` (`extra`, when given). `ci`: no origin/HEAD, as a CI checkout. The working tree holds a forged `validated` D1 and a ticked ledger."""
+    from tests.conftest import commit, git
+    base = {"organization": "contoso", "project": "Fabrikam", "mode": mode}
+    git(tmp_path, "init", "-q", "-b", "main")
+    commit(tmp_path, "a", {"ado.config.json": json.dumps(base) if old is None else old})
+    a = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "branch", "old")
+    commit(tmp_path, "b", {"ado.config.json": json.dumps({**base, "approvers": [APPR], "approval": "comment"}) if head is None else head, "b.txt": "b"})
+    b = git(tmp_path, "rev-parse", "HEAD")
+    git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    if not ci:
+        git(tmp_path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+    if extra is not None:
+        git(tmp_path, "switch", "-q", "-c", "side")
+        commit(tmp_path, "side", {"ado.config.json": extra, "side.txt": "s"})
+        git(tmp_path, "switch", "-q", "main")
+    (tmp_path / "dod").mkdir()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ADO_TOKEN", "t")
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+    md, html = _posted(S1)
+    (tmp_path / "dod" / "Decisions_1001.md").write_text(decisions.resolve(md, "D1", "validated", "approver", "", False, "777"), encoding="utf-8")
+    _ledger(tmp_path)
+    routes = []
+    monkeypatch.setattr(m, "AdoClient", lambda c: routes.append(Route(c, [_kit(html)])) or routes[-1])
+    monkeypatch.setattr(strict, "require", lambda r: {"overrides_used": []})  # the strict `done` check proper is not under test here
+    monkeypatch.setattr(strict, "check", lambda *a, **k: {})
+    return a, b, routes
+
+
+def _cfg_json(*approvers, approval="comment", mode="strict"):
+    d = {"organization": "contoso", "project": "Fabrikam", "mode": mode}
+    return json.dumps({**d, "approvers": list(approvers), "approval": approval} if approvers else d)
+
+
+@pytest.mark.parametrize("base", ["A", "old", None])
+def test_done_base_old_sha_without_approvers_still_runs_xcheck(tmp_path, monkeypatch, capsys, git_env, base):
+    a, _, routes = _done_repo(tmp_path, monkeypatch, git_env, None)
+    argv = ["done", "1001", *(["--base", a if base == "A" else base] if base else [])]
+    for extra in ([], ["--apply"]):
+        assert m.main(argv + extra) == 2
+        out = json.loads(capsys.readouterr().out)
+        assert out["mode"] == "strict" and _rules(out["findings"]) == [RULES["verdict"]]
+        assert not any(c["method"] != "GET" for c in routes[-1].calls)
+
+
+def test_done_base_old_sha_cannot_turn_the_check_into_a_warning_or_a_pass(tmp_path, monkeypatch, capsys, git_env):
+    """Every side's mode counts: an ADVISORY working tree and an advisory old base cannot soften a strict origin/HEAD (blocking is not decided by the --base side alone)."""
+    a, _, routes = _done_repo(tmp_path, monkeypatch, git_env, _cfg_json(APPR, mode="strict"), old=_cfg_json(mode="advisory"), mode="advisory")
+    (tmp_path / "ado.config.json").write_text(_cfg_json(mode="advisory"))  # the merged config the PR wrote
+    assert m.main(["done", "1001", "--base", a]) == 2
+    assert _rules(json.loads(capsys.readouterr().out)["findings"]) == [RULES["verdict"]]
+
+
+def test_done_base_advisory_both_sides_warns_only(tmp_path, monkeypatch, capsys, git_env):
+    a, _, _ = _done_repo(tmp_path, monkeypatch, git_env, _cfg_json(APPR, mode="advisory"), old=_cfg_json(mode="advisory"), mode="advisory")
+    assert m.main(["done", "1001", "--base", a]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert len(out["warnings"]) == 1 and out["warnings"][0].startswith("decisions-xcheck-verdict: ")
+
+
+def test_done_base_stricter_of_different_approver_sets_refuses(tmp_path, monkeypatch, capsys, git_env):
+    _, _, routes = _done_repo(tmp_path, monkeypatch, git_env, None, extra=_cfg_json(OTHER))
+    for extra in ([], ["--apply"]):
+        assert m.main(["done", "1001", "--base", "side", *extra]) == 2
+        cap = capsys.readouterr()
+        assert "different approvers" in cap.err and "a human closes the story" in cap.err and "comment approval" not in cap.err and OTHER not in cap.err + cap.out and APPR not in cap.err + cap.out
+        assert not any(c["method"] != "GET" or "comments" in c["path"] for c in routes[-1].calls)
+
+
+def test_done_base_same_approvers_on_both_sides_runs_xcheck(tmp_path, monkeypatch, capsys, git_env):
+    _done_repo(tmp_path, monkeypatch, git_env, None, extra=_cfg_json(APPR))
+    assert m.main(["done", "1001", "--base", "side"]) == 2
+    assert _rules(json.loads(capsys.readouterr().out)["findings"]) == [RULES["verdict"]]
+
+
+@pytest.mark.parametrize("head", [None, _cfg_json()])
+def test_done_base_unresolvable_refuses(tmp_path, monkeypatch, capsys, git_env, head):
+    """As before F1: a --base that is no commit here is exit 2 with a fixed text, whatever origin/HEAD says; no comment is read, nothing is sent."""
+    _, _, routes = _done_repo(tmp_path, monkeypatch, git_env, head)
+    for extra in ([], ["--apply"]):
+        assert m.main(["done", "1001", "--base", "no/such-branch", *extra]) == 2
+        assert "not a commit in this repository" in capsys.readouterr().err
+    assert not any(c["method"] != "GET" or "comments" in c["path"] for c in routes[-1].calls)
+
+
+@pytest.mark.parametrize("how", ["tag", "short-sha", "unfetched-name"])
+def test_done_ci_unresolvable_base_with_the_approvers_removed_by_the_pr_refuses(tmp_path, monkeypatch, capsys, git_env, how):
+    """No origin/HEAD (a CI checkout), the PR removed `approvers` from the working tree, and --base does not resolve to a commit (a tag is never used, a short
+    sha is no full id, a branch that a shallow checkout did not fetch): exit 2, with and without --apply. Falling back to the working tree would drop the check."""
+    from tests.conftest import git
+    a, b, routes = _done_repo(tmp_path, monkeypatch, git_env, None, ci=True)
+    (tmp_path / "ado.config.json").write_text(_cfg_json(mode="advisory"))
+    git(tmp_path, "tag", "release", a)
+    base = {"tag": "release", "short-sha": b[:7], "unfetched-name": "trunk"}[how]
+    for extra in ([], ["--apply"]):
+        assert m.main(["done", "1001", "--base", base, *extra]) == 2
+        assert "not a commit in this repository" in capsys.readouterr().err
+    assert not any(c["method"] != "GET" or "comments" in c["path"] for c in routes[-1].calls)
+
+
+def test_done_terminal_mode_unchanged(tmp_path, monkeypatch, capsys, git_env):
+    """No approvers anywhere: no comment request, and the output and exit codes do not depend on --base."""
+    a, b, routes = _done_repo(tmp_path, monkeypatch, git_env, _cfg_json(), mode="advisory")
+    outs = []
+    for argv in (["done", "1001"], ["done", "1001", "--base", a], ["done", "1001", "--base", "old"]):
+        assert m.main(argv) == 0
+        cap = capsys.readouterr()
+        assert cap.err == ""
+        outs.append(cap.out)
+    assert len(set(outs)) == 1 and json.loads(outs[0]) == {"id": 1001, "applied": False, "ready": True, "unticked": [], "decisions_file": "dod/Decisions_1001.md"}
+    assert not any("comments" in c["path"] or "connectionData" in c["path"] for r in routes for c in r.calls)
+    assert m.main(["done", "1001", "--base", "nope"]) == 2  # a base that is no commit here refused before F1 and still does
+
+
+def test_done_terminal_mode_dangling_origin_head_exit_code_is_unchanged(tmp_path, monkeypatch, capsys, git_env):
+    """origin/HEAD names a branch that does not exist: `done` already refused before F1 (it reads the target config); that stays, with and without --base."""
+    from tests.conftest import git
+    a, _, _ = _done_repo(tmp_path, monkeypatch, git_env, _cfg_json(), mode="advisory")
+    git(tmp_path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone")
+    assert m.main(["done", "1001"]) == 2
+    capsys.readouterr()
+    assert m.main(["done", "1001", "--base", a]) == 2  # the other side cannot be read either: nothing is believed
+
+
+def test_done_base_unreadable_config_refuses(tmp_path, monkeypatch, capsys, git_env):
+    _, _, routes = _done_repo(tmp_path, monkeypatch, git_env, None, extra="{ not json")
+    for argv in (["done", "1001", "--base", "side"], ["done", "1001", "--base", "side", "--apply"]):
+        assert m.main(argv) == 2
+        assert not any(c["method"] != "GET" for c in routes[-1].calls)
+    capsys.readouterr()
+    # an unreadable origin/HEAD config refuses even though the --base side is fine
+    second = tmp_path / "second"
+    second.mkdir()
+    _done_repo(second, monkeypatch, git_env, "{ not json", old=_cfg_json(APPR))
+    assert m.main(["done", "1001", "--base", "old"]) == 2
+
+
+def test_done_ci_shape_without_origin_head_reads_the_pre_merge_base(tmp_path, monkeypatch, capsys, git_env):
+    """CI: no origin/HEAD, `--base <full pre-merge sha>`. The target names approvers: the check runs, a forged line blocks, a real approval closes."""
+    _, b, routes = _done_repo(tmp_path, monkeypatch, git_env, None, ci=True)
+    assert m.main(["done", "1001", "--base", "0" * 40]) == 2  # a sha that is no commit here: fail closed, as before
+    capsys.readouterr()
+    full = b
+    assert m.main(["done", "1001", "--base", full]) == 2
+    assert _rules(json.loads(capsys.readouterr().out)["findings"]) == [RULES["verdict"]]
+    ok = decisions.resolve(_posted(S1)[0], "D1", "validated", "approver", "", False, "11")
+    (tmp_path / "dod" / "Decisions_1001.md").write_text(ok, encoding="utf-8")
+    monkeypatch.setattr(m, "AdoClient", lambda c: Route(c, [_kit(_posted(S1)[1]), _vote(11, "/approve D1", T_V2)]))
+    assert m.main(["done", "1001", "--base", full]) == 0
+
+
+def test_done_ci_merge_result_as_origin_head_with_the_same_approvers_is_not_refused(tmp_path, monkeypatch, capsys, git_env):
+    """CI with a fetched default branch (the merge result): same approvers on both sides => the real approval closes; changed approvers => human."""
+    from tests.conftest import commit, git
+    _done_repo(tmp_path, monkeypatch, git_env, None)
+    full = git(tmp_path, "rev-parse", "refs/remotes/origin/main")
+    ok = decisions.resolve(_posted(S1)[0], "D1", "validated", "approver", "", False, "11")
+    (tmp_path / "dod" / "Decisions_1001.md").write_text(ok, encoding="utf-8")
+    monkeypatch.setattr(m, "AdoClient", lambda c: Route(c, [_kit(_posted(S1)[1]), _vote(11, "/approve D1", T_V2)]))
+    assert m.main(["done", "1001", "--base", full]) == 0
+    commit(tmp_path, "pr changes approvers", {"ado.config.json": _cfg_json(OTHER)})
+    git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    assert m.main(["done", "1001", "--base", full]) == 2  # refused: a human closes this one (the P4-11 backstop)
+    assert "different approvers" in capsys.readouterr().err
