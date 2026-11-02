@@ -3,6 +3,8 @@
 import importlib.util
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -115,3 +117,10 @@ def test_fixtures_hold_only_fictional_names():
 def test_pytest_never_collects_the_fixture_repositories():
     assert 'collect_ignore_glob = ["fixtures/*"]' in (SMOKE / "conftest.py").read_text(encoding="utf-8")
     assert (SMOKE / "fixtures" / "tree" / "red" / "tests" / "test_a.py").is_file()  # the failing test the red commit holds
+
+
+def test_run_local_runs_as_documented_without_the_package_installed(tmp_path):
+    """F7 (C M-5): `python3 scripts/ci_smoke/run_local.py` on a Python that has not installed the package (`-S`: no site-packages, no .pth) finds src/ itself."""
+    r = subprocess.run([sys.executable, "-S", str(SMOKE / "run_local.py"), "a"], capture_output=True, text=True, cwd=str(tmp_path),
+                       env={"PATH": os.environ.get("PATH", ""), "HOME": os.environ.get("HOME", "")})
+    assert r.returncode == 0 and "ModuleNotFoundError" not in r.stderr and "(a)" in r.stdout, (r.stdout[-300:], r.stderr[-300:])

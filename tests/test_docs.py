@@ -1,6 +1,7 @@
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -1180,7 +1181,7 @@ def test_advisory_mode_additions_listed_in_the_changelog():
             "new ledgers get the decisions-file pointer sentence",
             "`gate` adds `open_decisions` only when a decisions file exists",
             "`done` adds `decisions_file` and a plan step and attaches `Decisions_<id>.md` only when the file exists",
-            "the usage text lists the new verbs `decisions` and `strict`",
+            "the usage text lists the new verbs `doctor`, `status`, `calibrate`, `approvals`, `decisions`, `strict`, `stack`, `kits` and `rules`",
             "`done` and `attach` refuse symlinked or oversized files",
             "`gate` exits 3 for an invalid target-branch config when `--base` is given",
             "the plan and implement prompts record decisions and the workflow posts them behind a gate in every mode when a decisions file exists"), 1):
@@ -1299,7 +1300,7 @@ def test_stack_show_documented_with_exposure_rules_and_tripwire_wording():
         assert needle in docs, needle
     assert "shown only after a profile marked approved" in docs and "a human approved" not in docs
     assert ("the approval is a record, not proof: anyone who can edit the file can compute the hash; trust comes from reviewing the commit "
-            "and, from P2-5, the target branch plus the terminal-only approve") in docs
+            "and the target branch plus the terminal-only approve") in docs
     assert "`approval.by` is printed only when it is a plain role" in docs
     assert "`ado stack show`" in _flat("AGENTS.md") and "ado stack show [--json|--md] [--check]" in _flat("AGENTS.md")
     assert "`ado stack show` (read-only, local" in _flat("rules/hitl.md")
@@ -2550,7 +2551,7 @@ def test_done_time_cross_check_is_documented():
     assert "`done --help` text gains only `--base`" in log and "(P4-11" in log
     assert "`--base` cannot weaken the check" in _flat("docs/configuration.md") and "stricter of `--base` and `origin/HEAD`" in _flat("docs/configuration.md")
     assert "`--base` cannot weaken the check (F1, P4-20 I-1)" in log and "`__main__._stricter_trust`" in log
-    assert "except these eight additions" in log and "8. `done` reads the target branch's config" in log
+    assert "except these eighteen additions" in log and "8. `done` reads the target branch's config" in log
     assert "a dangling `origin/HEAD` (with or without `--base`)" in log and "even in advisory mode. A human closes such a story with plain `ado done <id>`" in log
     assert "otherwise in the Azure DevOps UI" in cfg and "may or may not have `origin/HEAD`" in cfg and "is refused with exit 2, never replaced by `origin/HEAD`" in cfg
     assert "--base \"$BASE_SHA\"" in ci_gh and "HEAD^1" in ci_az and "HEAD^1" in azr and "decisions-xcheck-unreachable" in ci_gh and "decisions-xcheck-unreachable" in ci_az
@@ -2582,7 +2583,7 @@ def test_comment_approval_of_the_five_applies_is_documented():
                    "**Never approvable by comment**", "`ado done --apply`", "`ado strict override`", "any `--force`", "a persisted verdict whose apply refuses ends FAILED: start a new run",
                    "[spec-kit-ado:approval-request] <gate> <hash>", "A plan that would write nothing",
                    "ONE target for this plan", "`gh` receives the PR body on stdin",
-                   "`origin/HEAD` points at a branch that does not exist here", "unreadable or invalid", "1 to 4 read-only git calls per `--apply` of the five", "`pr create` also resolves `--base`: 7 to 10", "a blank check",
+                   "`origin/HEAD` points at a branch that does not exist here", "unreadable or invalid", "2 to 5 read-only git calls each time the trust keys are read", "`pr create` also resolves `--base`: 7 to 13", "a blank check",
                    "hash the rendered plan TEXT, not the `--plan-out` file", "the single-item verbs", "for the same plan bytes"):
         assert needle in cfg, needle
     for doc in (hitl, readme, agents):
@@ -2624,7 +2625,7 @@ def test_approvals_check_is_documented():
     assert "caught by `ado status` and the done-time check" not in cfg and "read as `ado done`'s cross-check reads it" not in cfg and "none cut at the posting limit" not in cfg
     assert "blocks the gate until a human deletes that comment" in hitl and "posts a decisions comment listing a `D<n>`" in hitl and "keeps that `D<n>` open while its newest posting shows it cut" in log
     assert "never post it yourself" in agents and "the ledger and the decisions file do not count" in agents and "`E_DECISIONS_FILE`" in agents
-    assert "`ado approvals check <id> --gate <gate>` (P4-12b)" in wf
+    assert "`ado approvals check <id> --gate <gate>` is the check for the review and wait gates in comment mode" in wf
     assert "`ado approvals` and the poller come with" not in cfg
 
 
@@ -2698,7 +2699,7 @@ def test_compatibility_matrix_is_documented():
     doc = _flat("docs/compatibility.md")
     for needle in ("SPECKIT_CONTRACT=1", "tests/test_speckit_contract.py", "tests/fixtures/contract-workflow.yml", "`approvals.resume_argv`", "execution.version",
                    ".github/workflows/speckit-contract.yml", "1.2.4.dev0", "**10 passed**", "**11 passed**", "9dca9bf4", "0.15.1", "489a3d51", "**6 failed, 4 passed.**", "no `inputs` and no `execution`",
-                   "re-runs the loop head", "supported floor for comment mode (the poller and `ado status`) is Spec Kit 1.2.1", "`>=1.2.1`", "P4-18", "1.2.5", "none of those is claimed",
+                   "re-runs the loop head", "supported floor for comment mode (the poller and `ado status`) is Spec Kit 1.2.1", "`>=1.2.1`", "release prep", "1.2.5", "none of those is claimed",
                    "test_a_saved_verdict_survives_a_plain_resume", "## Not tested"):
         assert needle in doc, needle
     assert "docs/compatibility.md" in _flat("README.md") and "compatibility.md" in _flat("docs/unattended.md")
@@ -2877,9 +2878,9 @@ def test_pr_bound_to_review_is_documented():
     """F3 (P4-20 I-3): `pr create --apply` re-checks `review-review`, and the `approve-pr` plan shows the head commit."""
     cfg, hitl, log, wf, cmd = (_flat(n) for n in ("docs/configuration.md", "rules/hitl.md", "CHANGELOG.md", "workflows/ado-lifecycle/README.md", "commands/pr.md"))
     for doc in (cfg, hitl):
-        assert "(F3, P4-20 I-3)" in doc and "`| head commit | <40 hex> |`" in doc and "`approvals.check` for `review-review`" in doc and "terminal mode (no head row, no check: output unchanged)" in doc
+        assert "`| head commit | <40 hex> |`" in doc and "`approvals.check` for `review-review`" in doc and "terminal mode (no head row, no check: output unchanged)" in doc
     assert "(F3, P4-20 I-3)" in log and "The `pr-prepare` ordering residual is closed" in log
-    assert "The `pr-prepare` ordering (closed in F3, P4-20 I-3)" in wf and "What is not: uncommitted files (never pushed)" in wf
+    assert "**The `pr-prepare` ordering.**" in wf and "What is not: uncommitted files (never pushed)" in wf
     assert "review-review` approved for the checked-out HEAD" in cmd
     # fix round 1: the review step commits what step 2a would; comment mode verifies instead of committing; coverage and residuals stated precisely
     assert "`ado pr create <id> --check-committed`" in cfg and "`ado pr create <id> --check-committed`" in wf and "--check-committed" in log
@@ -2909,7 +2910,7 @@ def test_parse_once_and_size_cap_are_documented():
     cfg, log = _flat("docs/configuration.md"), _flat("CHANGELOG.md")
     from ado import approvals
     assert approvals.MAX_RAW_HTML == 1 << 18
-    assert "(F4, P4-20 I-4)" in cfg and "`approvals.MAX_RAW_HTML` (256 KiB" in cfg and "parsed for a command ONCE per run" in cfg and "never be an approval" in cfg
+    assert "**Parsing cost and size cap:**" in cfg and "`approvals.MAX_RAW_HTML` (256 KiB" in cfg and "parsed for a command ONCE per run" in cfg and "never be an approval" in cfg
     assert "(F4, P4-20 I-4)" in log and "`approvals.MAX_RAW_HTML` (256 KiB, counted in characters, not bytes" in log
     assert "approves again in a short comment" in log and "must approve again in a short comment" in cfg and "counts characters, not bytes" in cfg
 
@@ -2918,9 +2919,9 @@ def test_trust_minors_are_documented():
     """F5 (P4-20 M-1..M-4): cut questions stay open, a lost sync approval is reported, non-root trust keys are refused."""
     cfg, log, gh, az = _flat("docs/configuration.md"), _flat("CHANGELOG.md"), _flat("docs/ci-github.md"), _flat("docs/ci-azure-pipelines.md")
     from ado.config import E_NONROOT_TRUST
-    assert "(F5, P4-20 M-1" in cfg and "no `/answer` and not `assume_after_hours` closes it" in cfg
+    assert "until a short repost shows it in full (the rule follows the LAST showing" in cfg and "no `/answer` and not `assume_after_hours` closes it" in cfg
     assert "approval-no-longer-valid: D2, D5" in cfg and "`no_longer_valid`" in cfg
-    assert "(F5, P4-20 M-4" in cfg and "(F5, P4-20 M-4" in gh and "(F5, P4-20 M-4" in az and "move them there" in E_NONROOT_TRUST
+    assert "move them there" in E_NONROOT_TRUST
     for doc in (cfg, gh, az):
         assert "exit 2" in doc and "`ado gate`, `strict mode` and `branch --id-from` do not read" in doc
     assert "`gate`, `strict mode` and `branch --id-from` do not read them and are unaffected" in log
@@ -2948,3 +2949,147 @@ def test_f6_doctor_bypass_and_slice_b_doc_pins():
     assert "`mode: advisory`" in quick and "asks for `approvers`" in quick  # M7
     sec = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").split("## 0.3.0", 1)[1].split("\n## 0.2", 1)[0]
     assert "(F6, P4-20 slice B" in sec and "`bypass` row" in sec
+
+
+# ---- F7: docs batch from the whole-piece review (C I-1..I-3, M-2..M-8; B/F6/F3 leftovers) --------------------------------------------------------
+def _shipped_docs():
+    """The docs a consumer reads: `docs/` except the repo-only files `.extensionignore` lists, README, AGENTS, commands, rules, the workflow (README, yml,
+    prompts), the pipelines README and the bundle README. CHANGELOGs are release notes (task ids are their house style) and are checked separately."""
+    ignored = {ln.strip() for ln in (ROOT / ".extensionignore").read_text(encoding="utf-8").splitlines() if ln.strip() and not ln.startswith("#")}
+    files = [ROOT / n for n in ("README.md", "AGENTS.md", "pipelines/README.md", "bundle/README.md", "extension.yml")]
+    files += sorted((ROOT / "templates").glob("*.md"))
+    files += [p for p in sorted((ROOT / "docs").glob("*.md")) if f"docs/{p.name}" not in ignored]
+    files += sorted((ROOT / "commands").glob("*.md")) + sorted((ROOT / "rules").glob("*.md"))
+    files += [p for p in sorted((ROOT / "workflows").rglob("*")) if p.is_file() and p.suffix in (".md", ".yml") and p.name != "CHANGELOG.md"]
+    return files
+
+
+# P-ids, design refs, release-prep ids (`R-1`), a fix id in a list or a ruling (`(F3`, `F3, P4-20`, `F11 ruling`); a bare `F12` (a key name) is not one
+_TASK_ID = re.compile(r"\bP[1-4]-[0-9]+[a-z]?\b|D§[0-9]|\bR-[0-9]+\b|\(F[0-9]{1,2}\b|\bF[0-9]{1,2},|\bF[0-9]+ ruling\b|\bruling F[0-9]+\b")
+_LATER = re.compile(r"later tasks?\b|arrives later|come with later|comes with a later|not wired into the workflow yet", re.I)
+
+
+def test_no_internal_task_ids_or_later_wording_in_shipped_docs():
+    """F7 (C M-3): a consumer has no task ledger: `P4-12`, `F3`, `D§4.4` and 'a later task' mean nothing to them. Repo-only docs (`docs/release-checklist.md`,
+    `docs/catalog-submission.md`, listed in `.extensionignore`) and the CHANGELOGs may keep ids."""
+    files = _shipped_docs()
+    names = {p.relative_to(ROOT).as_posix() for p in files}
+    assert len(files) > 30 and {"README.md", "docs/configuration.md", "workflows/ado-lifecycle/README.md", "workflows/ado-lifecycle/workflow.yml",
+                                "rules/hitl.md", "commands/pr.md", "docs/compatibility.md", "extension.yml", "templates/pr-body.md"} <= names, "the file set must not shrink silently"
+    assert "docs/release-checklist.md" not in names and "docs/catalog-submission.md" not in names and "CHANGELOG.md" not in names
+    bad = []
+    for p in files:
+        for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1):
+            for m in list(_TASK_ID.finditer(line)) + list(_LATER.finditer(line)):
+                bad.append(f"{p.relative_to(ROOT)}:{n}: {m.group(0)}")
+    assert not bad, "internal ids or stale 'later' wording in shipped docs:\n" + "\n".join(bad)
+    log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert not _LATER.search(log) and "no verb uses it yet" not in log and "the key itself arrives later" not in log
+
+
+def test_f7_advisory_additions_list_is_complete_and_the_claims_hold():
+    """F7 (C I-1): the list of what an advisory (terminal-mode) project sees differently from v0.2 names every change found by walking `done`,
+    `decisions --resolve`, `pr create`, `push`, `approvals` and the other verbs against the previous builds. Behaviour is pinned in tests/test_trust_minors.py
+    (items 9 to 11), tests/test_strict_xcheck.py (8), tests/test_cli.py (9), tests/test_prs.py (13), tests/test_setup.py (14), tests/test_decisions.py (15)."""
+    raw = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    sec = raw.split("### Advisory-mode additions in 0.3.0", 1)[1].split("\n## ", 1)[0]
+    assert re.findall(r"(?m)^(\d+)\. ", sec) == [str(i) for i in range(1, 19)]
+    flat = " ".join(sec.split())
+    assert "except these eighteen additions (the release owner accepted the first eight)" in flat
+    for part in ("The usage text lists the new verbs `doctor`, `status`, `calibrate`, `approvals`, `decisions`, `strict`, `stack`, `kits` and `rules`",
+                 "`branch` (`--base`), `comments` (`--author-ids`), `decisions` and `questions` (`--sync`, `--if-comment-mode`), `pr create` (`--check-committed`) and `setup` (`--profile`)",
+                 "in the preview as well as with `--apply`, before any request to Azure DevOps",
+                 "so do trust keys in a config file that is not the repo-root `ado.config.json`",
+                 "The five ADO applies (`questions <id> --post --apply`, `push --apply`, `decisions <id> --post --apply`, `pr create --apply`, `branch <id> --link --apply`) read the target branch's trust keys",
+                 "The preview of `pr create` reads them too and never refuses on them", "Cost, measured: 2 to 5 read-only git calls per read; `done` makes 3, 5 or 6 (9 with approvers on the target, 11 to 12 with `--base`); `pr create` 7 to 13, and 14 to 20 when it refuses",
+                 "as does a `--base` that is no commit here (`--base` is new in 0.3.0)",
+                 "exit 2 (3 for `gate`, `strict mode` and `branch --id-from`) naming the key", "A valid `approvers` on the target branch changes advisory output too: `done` then runs the cross-check (4 extra GETs",
+                 "one with a host over 255 characters is matched only within its first 255 characters after the `@`, so it is left unscrubbed when those hold no complete address",
+                 "In every mode the review step's one commit also carries the spec dir, the decisions file and the story's rules files (v0.2: the ledger only; the rest landed in the PR step's commit)",
+                 "the `speckit.ado.review` and `speckit.ado.pr` prompts run `ado pr create <id> --check-committed`, which reads the trust keys and exits 2 in the cases of item 8",
+                 "`speckit.ado.status` starts with `ado status <id>`", "`speckit.ado.setup` suggests `ado setup --profile starter`",
+                 "`decisions <id> --resolve` reads the target branch's config before its terminal check",
+                 "`ado approvals check`, `ado approvals sync`, `ado questions <id> --sync` and `ado decisions <id> --sync` read it too",
+                 "now stops at its first `check-*` step",
+                 "A config file that already has a top-level `approvers`, `approval` or `unattended` key is now validated, whatever the mode",
+                 "hands the PR body to `gh pr create` on stdin", "`ado setup` without `--profile` prompts as before for short, non-secret-looking, printable-ASCII existing values",
+                 "A decisions line whose `why` or note contains the text ` · via:` is now malformed",
+                 "one with a local part over 64 characters is cut there (its first characters stay)"):
+        assert part in flat, part
+    # the claims that are cheap to prove here
+    from ado import comments
+    from ado.config import Config, ConfigInvalid
+    assert comments.scrub_emails("x" * 70 + "@example.com ok") == "xxxxxx[email] ok"  # item 16: the local part is cut at 64 characters
+    with pytest.raises(ConfigInvalid, match="'approval' must be"):  # item 12
+        Config._validate_trust_keys({"approval": "yes"}, "ado.config.json")
+    # the git-call counts of item 9 and docs/configuration.md are what the code does (F5 added one call)
+    cfg = _flat("docs/configuration.md")
+    assert ("2 to 5 read-only git calls each time the trust keys are read (2 without `origin/HEAD`, 4 when the target branch has no `ado.config.json`, 5 when it has one; "
+            "`done` makes 3, 5 or 6 (9 with approvers on the target, 11 to 12 with `--base`); `pr create` also resolves `--base`: 7 to 13, and up to 20 when it refuses") in cfg
+    assert "1 to 4 read-only git calls per `--apply`" not in cfg and "7 to 10" not in cfg
+    for needle in ("by the preview and the `--apply` of `ado done`", "by `ado pr create <id> --check-committed` (the review and PR prompts run it in every mode), by `ado decisions <id> --resolve` (before its terminal check)", "`ado approvals check` and `ado approvals sync`",
+                   "Four cases that applied before now exit 2 with nothing sent to ADO", "and the config file in use is not the repo-root `ado.config.json` and sets one of those keys",
+                   "The preview of `pr create` reads the keys too but never refuses on them"):
+        assert needle in cfg, needle
+
+
+def test_f7_ci_token_identity_and_checklist_expectations():
+    """F7 (C I-2): whose PAT CI's `ADO_TOKEN` must be, in the two CI docs, the configuration page and the release checklist (prerequisite 7, cases (e), (f), step 4)."""
+    gh, az, cfg, chk = (_flat(n) for n in ("docs/ci-github.md", "docs/ci-azure-pipelines.md", "docs/configuration.md", "docs/release-checklist.md"))
+    assert ("needs the CI token (`ADO_TOKEN`) to be a service or agent identity that can read the story's comments, does not hold the bypass-rules permission and is not one of "
+            "the `approvers`") in gh and "an approver's own token has its `/approve` ignored (`decisions-xcheck-verdict`)" in gh and "Never use an administrator's or an approver's personal PAT" in gh
+    assert ("The build service identity (the `ADO_TOKEN` the template maps from `$(System.AccessToken)`) must be able to read the story's comments, must not hold the bypass-rules "
+            "permission and must not be one of the `approvers`") in az and "(`decisions-xcheck-verdict`)" in az and "`decisions-xcheck-unreachable`" in az
+    assert ("In CI the `ADO_TOKEN` is therefore a service or agent identity that does not hold the bypass-rules permission and is not one of the `approvers`") in cfg
+    assert "once the verbs that know it pass it in" not in cfg and "in CI the token is that identity, so it is excluded as the token identity; a local run cannot know it" in cfg
+    assert ("**Whose Azure DevOps PAT it is matters.** CI's `ADO_TOKEN` is the PAT of a service or agent identity (a Contributor), **not** the owner's own account: it must not hold "
+            "\"Bypass rules on work item updates\"") in chk and "must not be one of the `approvers`" in chk and "its `bypass` row must be `ok`" in chk
+    assert "never the owner's own account" in chk  # the Prepare block
+    e = chk[chk.index("| (e) |"):chk.index("| (f) |")]
+    f = chk[chk.index("| (f) |"):chk.index("**A red run is recorded")]
+    assert "with a bypass-capable or an approver's token this case is red for the wrong reason" in e and "counts as a mismatch" in e
+    assert "if the log shows `decisions-xcheck-unreachable` instead of `-marker`, the token identity can bypass rules" in f
+    assert "`decisions-xcheck-unreachable` in (f) instead of `-marker` means it can bypass" in chk and "On Azure the `ADO_TOKEN` is the build service identity" in chk
+
+
+def test_f7_release_prep_floor_wording_is_not_a_finished_task():
+    """F7 (C I-3): the floor is raised by release prep before the tag, not by a task that already shipped."""
+    comp, wf = _flat("docs/compatibility.md"), _flat("workflows/ado-lifecycle/README.md")
+    assert "release prep raises it to `>=1.2.1` in `extension.yml`, `workflow.yml` and the bundle before 0.3.0 is tagged" in comp
+    assert "(release prep raises it to `>=1.2.1` before 0.3.0 is tagged)" in wf
+    assert "P4-18" not in comp and "P4-18" not in wf and "raises the Spec Kit floor" not in comp
+
+
+def test_f7_docs_pins_for_the_minor_findings():
+    az, agents, readme, unatt, cs, cfg = (_flat(n) for n in ("docs/ci-azure-pipelines.md", "AGENTS.md", "README.md", "docs/unattended.md", "docs/catalog-submission.md", "docs/configuration.md"))
+    log = _flat("CHANGELOG.md")
+    # M-2: the Azure doc says a non-default configPath is not trusted (and what happens to the approval keys there)
+    assert "**A non-default `configPath` is not trusted.**" in az and "`approvers`, `approval` and `unattended` in another file are refused as an invalid config with exit 2" in az
+    # M-4
+    assert ("with `approvers` configured on the target branch, their `/approve D<n>` and `/reject D<n>` comments, recorded by `ado decisions <id> --sync`; "
+            "`--resolve` is refused then, whatever `approval` says") in agents
+    # M-6: both scheduler examples set PATH; tools stay outside the project directory; the keychain is stated as unverified
+    raw = (ROOT / "docs" / "unattended.md").read_text(encoding="utf-8")
+    cron_path = re.search(r"(?m)^PATH=(\S+)$", raw)
+    plist_path = re.search(r"<key>PATH</key><string>([^<]*)</string>", raw)
+    assert cron_path and plist_path and "<key>EnvironmentVariables</key><dict>" in raw
+    for value in (cron_path.group(1), plist_path.group(1)):  # absolute tool and system directories, none inside the project
+        entries = value.split(":")
+        assert {"/usr/bin", "/bin"} <= set(entries) and all(e.startswith("/") and "project" not in e for e in entries), value
+    assert "Keep `specify`, the AI CLI and `ado` in directories outside the project directory" in unatt and "a `specify` or `git` it planted there would run with the poller's credentials" in unatt
+    assert "Not tried live (0.3.0): the keychain read from cron or launchd" in unatt
+    # M-7: the unverified-in-live-runs list (repo-only doc)
+    assert "**Unverified in live runs (state these in Testing Details; do not claim them).**" in cs
+    for needle in ("GitHub's `base.sha` lag in the close step", "Comment approvals by a second human identity, end to end", "(acceptance criteria 5 and 7)", "case (f) live (criterion 9)",
+                   "The doctor rows against real restricted tokens (criterion 10 live), including the `bypass` row", "The timed fresh-agent quickstart (criterion 1) and the catch-up to a PR (criterion 3)",
+                   "the keychain read from cron or launchd", "Python 3.13: the CI matrix has the leg, and it has not run", "the CI templates on a hosted runner, which have never run", "the toolkit's own `ci.yml`, the weekly `speckit-contract.yml` run, and the CI templates"):
+        assert needle in cs, needle
+    # M-8
+    assert "the per-operation table of required scopes, and the probes that would check it against a restricted token (`ado doctor --probe-item`), were not built for 0.3.0" in cfg
+    # B / F6 nits and the F3 residual
+    assert "(three GETs in all, never a write)" in log and "The only network call is one GET" not in log and "`approvers`, `bypass`, `stack` and `kits`" in log
+    assert "(the key itself arrives later" not in log
+    assert "answer it in a terminal; with `approval: \"comment\"` on the target branch the line points at the approver's comment and `ado approvals sync <run-id> --resume`" in readme
+    assert "byte-identical to the previous release for printable ASCII" not in log
+    assert "the same prompt as the previous release for short, non-secret-looking printable ASCII; a value of about 79 characters or more, a secret-looking one and one with non-ASCII characters are shown JSON-quoted" in log
+    assert "(The preview reads the trust keys too, to know whether to show the head commit.)" in cfg

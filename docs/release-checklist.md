@@ -40,12 +40,17 @@ All of these must be true. If one is not, stop: the later steps would prove noth
 5. **The go-public audit** is done, and the scrub check passes with the real denylist on the full history:
    `python3 scripts/scrub_check.py --require-denylist --history` exits 0. The denylist is never printed or pasted anywhere.
    `git log --format='%an <%ae>|%cn <%ce>' | sort -u` shows only the GitHub no-reply identity. **Owner** (the denylist is his).
-6. **The local rehearsal passes**: `python3 scripts/ci_smoke/run_local.py` prints `ok` for cases (a) to (f) and exits 0. This shows the checks
+6. **The local rehearsal passes**: `python3 scripts/ci_smoke/run_local.py` (from the checkout, any `python3`: it puts `src/` on the path itself) prints `ok` for cases (a) to (f) and exits 0. This shows the checks
    give the expected answer on the fixtures; it does not show how a hosted runner behaves.
 7. **A smoke Azure DevOps project** (`spec-kit-ado-smoke`) has a story for each case, two PATs the owner creates (an Azure DevOps PAT with Work Items:
    Read & Write, and a fine-grained GitHub PAT with Contents: Read-only on `praveenlavu/spec-kit-ado` alone, short expiry; see step 3), and, for case
    (e), approvers configured in the consumer's `main` (see
    [configuration.md](configuration.md#approvers-and-comment-mode-the-recommended-setup)). **Owner** (PAT creation).
+   **Whose Azure DevOps PAT it is matters.** CI's `ADO_TOKEN` is the PAT of a service or agent identity (a Contributor), **not** the owner's own account: it must not
+   hold "Bypass rules on work item updates" (organization and project administrators usually do), and it must not be one of the `approvers`. With a bypass-capable token
+   the cross-check answers `decisions-xcheck-unreachable` for cases (e) and (f); with an approver's own token that approver's `/approve` is ignored
+   (`decisions-xcheck-verdict`). The second human who posts the `/approve` comments cannot be that identity either. Before step 3, run `ado doctor` with that PAT: its
+   `bypass` row must be `ok` (or read the identity's permission page; whether the owner's own identity holds the permission is not known).
 
 ## Step 1: `ci` on `main` (tests, full-history scrub, actionlint, Python 3.9 and 3.13)
 
@@ -109,7 +114,7 @@ gh repo create praveenlavu/ci-smoke-consumer --private --clone
 # (`none`, `user` or `organization`): the rollback restores THAT value, not a guess.
 gh api repos/praveenlavu/spec-kit-ado/actions/permissions/access --jq .access_level
 gh api -X PUT repos/praveenlavu/spec-kit-ado/actions/permissions/access -f access_level=user
-# Owner: both PATs are created in the owner's browser (Azure DevOps: Work Items Read & Write; GitHub: a fine-grained PAT with Contents Read-only on
+# Owner: both PATs are created in the owner's browser (Azure DevOps: Work Items Read & Write, for the service identity of prerequisite 7, never the owner's own account; GitHub: a fine-grained PAT with Contents Read-only on
 # praveenlavu/spec-kit-ado alone, short expiry). `gh secret set` prompts for the value, so it is typed by the owner in his own terminal: never
 # in argv (no --body), never printed, never in chat.
 gh secret set ADO_TOKEN -R praveenlavu/ci-smoke-consumer
@@ -165,8 +170,8 @@ gh run view <databaseId> -R praveenlavu/ci-smoke-consumer --log | grep -E '<patt
 | (b) | The PR's own `ado.config.json` says advisory; the **target** branch is strict. | `ado strict mode --base main` prints `strict` from the `target branch`; the strict check exits 2 with `stack-profile-drift`. | `gate` runs in strict mode from the target's config and **fails**. The PR cannot weaken its own strictness. | `stack-profile-drift` |
 | (c) | A story with valid strict evidence: a red commit, a green commit, a verification record, a review and an AC fidelity block. | `gate`, `strict check --phase pr` and `strict verify --no-record` all exit 0, in strict mode from the target branch. | `gate` green; the vendored `strict-verify` green (shipped file: step 6.5). | `spec-kit-ado: strict verify passed\.$` |
 | (d) | The ledger names a "green" commit at which the tests still fail. | `strict verify --no-record` exits 2 with `green-fails`. | the vendored `strict-verify` **fails** (shipped file: step 6.5). | `green-fails` |
-| (e) | The story's PR merges, with approvers configured on the target branch and a decisions file backed by approver comments. | `ado done` (preview) exits 0 with `ready: true` and no cross-check warning. | After the merge, `link-on-merge` (with `close-story: true`) moves the story to the done state. | present: `[0-9]+: DoD complete - ledger (was already )?attached, story closed\.$`; absent: `##\[warning\][0-9]+: done cross-check` |
-| (f) | The decisions file carries a `posted:` marker that does not name a posting of the kit (the fixture names a comment that does not exist). | `ado done` exits 2 with `decisions-xcheck-marker`. | After the merge, `link-on-merge` **refuses** to close that story and fails the job. The story stays open. | `decisions-xcheck-marker` |
+| (e) | The story's PR merges, with approvers configured on the target branch and a decisions file backed by approver comments. | `ado done` (preview) exits 0 with `ready: true` and no cross-check warning. | After the merge, `link-on-merge` (with `close-story: true`) moves the story to the done state (the `ADO_TOKEN` is the service identity of prerequisite 7: with a bypass-capable or an approver's token this case is red for the wrong reason, `decisions-xcheck-unreachable` or `decisions-xcheck-verdict`, and counts as a mismatch). | present: `[0-9]+: DoD complete - ledger (was already )?attached, story closed\.$`; absent: `##\[warning\][0-9]+: done cross-check` |
+| (f) | The decisions file carries a `posted:` marker that does not name a posting of the kit (the fixture names a comment that does not exist). | `ado done` exits 2 with `decisions-xcheck-marker`. | After the merge, `link-on-merge` **refuses** to close that story and fails the job. The story stays open (if the log shows `decisions-xcheck-unreachable` instead of `-marker`, the token identity can bypass rules: fix the PAT, run it again). | `decisions-xcheck-marker` |
 
 **A red run is recorded as a match only if two things hold:** the toolkit checkout and install steps of that job succeeded, **and** the last column's pattern
 matches the log (for an "absent" pattern: `grep` finds nothing). A job that is red for any other reason (a missing secret, a runner error, a different rule)
@@ -218,7 +223,8 @@ az pipelines runs show --organization https://dev.azure.com/<org> --project spec
 ```
 
 **Expected:** the same outcomes as the right-hand column of step 3, case by case: (a) the branch guard failed and the gate green, (b) failed, (c) green,
-(d) failed, (e) the story closed and no cross-check finding, (f) the close refused with `decisions-xcheck-marker`. The pipeline log shows rule ids
+(d) failed, (e) the story closed and no cross-check finding, (f) the close refused with `decisions-xcheck-marker`. On Azure the `ADO_TOKEN` is the build service identity (`$(System.AccessToken)`): it must not hold "Bypass rules on work item
+updates" (a project administrator's build identity may; check it) and is not an approver, and `decisions-xcheck-unreachable` in (f) instead of `-marker` means it can bypass. The pipeline log shows rule ids
 only, never test output or ledger text. Check the repository's merge-type policy too: the one-parent guard assumes "Merge (no fast-forward)" or
 "Squash" only, which has not been verified on a real project.
 

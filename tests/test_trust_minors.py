@@ -241,3 +241,30 @@ def test_the_refusal_is_exit_2_for_the_verbs_that_read_the_keys_and_gate_is_unaf
     for argv in (["decisions", "1001", "--sync"], ["questions", "1001", "--sync"]):
         assert _main.main(argv) == 2
         assert capsys.readouterr().err.strip() == "error: " + approvals_text() and str(other) not in approvals_text()
+
+
+# ---- F7 (C I-1): the verbs the CHANGELOG's advisory list names read the target branch's config for every user ----------------------------------
+@pytest.mark.parametrize("argv", [["approvals", "check", "1001", "--gate", "review-spec"], ["approvals", "sync", "20261001-100000-ab12cd34"],
+                                  ["questions", "1001", "--sync"], ["decisions", "1001", "--sync", "--if-comment-mode"],
+                                  ["decisions", "1001", "--resolve", "D1", "--validated"], ["pr", "create", "1001", "--check-committed"]])
+def test_terminal_mode_verbs_read_the_target_config_and_refuse_a_dangling_origin_head(tmp_path, monkeypatch, capsys, argv):
+    """No trust key anywhere, `origin/HEAD` pointing nowhere: exit 2 with the target-config refusal before any request, token or terminal check."""
+    from tests.conftest import commit, git
+    git(tmp_path, "init", "-q", "-b", "main")
+    commit(tmp_path, "a", {"ado.config.json": json.dumps({"organization": "contoso", "project": "Fabrikam"})})
+    git(tmp_path, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/gone")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ADO_TOKEN", "t")
+    monkeypatch.delenv("ADO_CONFIG", raising=False)
+
+    class Silent:  # a client may be built, but no request may be sent before the trust read
+        def __init__(self, c):
+            self.config = c
+
+        def __getattr__(self, name):
+            pytest.fail(f"request attempted: {name}")
+
+    monkeypatch.setattr(_main, "AdoClient", Silent)
+    assert _main.main(argv) == 2
+    err = capsys.readouterr().err
+    assert "target branch" in err and "terminal" not in err

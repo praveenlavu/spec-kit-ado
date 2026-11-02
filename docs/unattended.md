@@ -98,6 +98,7 @@ One entry per paused run; remove it when the run completes. The command is cheap
 cron, every 5 minutes (a plain user crontab; the PAT comes from the keychain or from the environment of the user, never written in the crontab):
 
 ```
+PATH=/path/to/tools/bin:/usr/local/bin:/usr/bin:/bin
 */5 * * * * cd /path/to/project && /path/to/spec-kit-ado/.venv/bin/ado approvals sync 20261001-100000-ab12cd34 --resume >> .ado/poller.log 2>&1
 ```
 
@@ -111,6 +112,8 @@ launchd (macOS), `~/Library/LaunchAgents/com.contoso.ado-poller.plist`, loaded w
   <key>ProgramArguments</key><array>
     <string>/path/to/spec-kit-ado/.venv/bin/ado</string><string>approvals</string><string>sync</string>
     <string>20261001-100000-ab12cd34</string><string>--resume</string></array>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>/path/to/tools/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
   <key>WorkingDirectory</key><string>/path/to/project</string>
   <key>StartInterval</key><integer>300</integer>
   <key>StandardOutPath</key><string>/path/to/project/.ado/poller.log</string>
@@ -118,8 +121,10 @@ launchd (macOS), `~/Library/LaunchAgents/com.contoso.ado-poller.plist`, loaded w
 </dict></plist>
 ```
 
-Both need the same environment as an interactive run: the resumed steps run `ado`, `git` and the AI CLI, so `PATH`, the PAT (`ADO_TOKEN` or the
-keychain) and the AI CLI login must be available to the scheduler. Use the **same token** the run uses (next section).
+Both need the same environment as an interactive run: the resumed steps run `ado`, `git`, `specify` and the AI CLI, and cron and launchd start with a minimal
+`PATH`, so both examples set one that lists the directories of those tools; the PAT (`ADO_TOKEN` or the keychain) and the AI CLI login must be available to the
+scheduler too. Keep `specify`, the AI CLI and `ado` in directories outside the project directory, and put only such directories on `PATH`: the agent can write into the project,
+and a `specify` or `git` it planted there would run with the poller's credentials. Use the **same token** the run uses (next section).
 
 ## The poller must be the posting identity
 
@@ -157,6 +162,8 @@ never edits `state.json` and never resumes a run that is not `paused`.
   resume. Run one poller per run: a single launchd job (launchd never starts a second instance of a job that is still running), or `flock -n <lock file>` in
   front of the cron command (Linux; macOS has no `flock` by default, use launchd there). The poller re-reads the run right before the resume and requires the
   same step (a loop iteration `:n` to `:n+1` included), which narrows the window and does not close it.
+- **Not tried live (0.3.0): the keychain read from cron or launchd.** Whether a scheduled job can read the token that `ado setup` stored in the macOS keychain is unverified; run
+  the poller once under the scheduler (`--dry-run`) before relying on it.
 - A paused step that is not one of the 12 gates, an unreadable `state.json` and a symlinked run directory are exit 2: the poller does not guess.
 - The poller does not read `approvers` or `unattended` from the working tree. An unreadable target config is exit 2.
 - **`ado doctor` does not catch an approver that can never approve (known 0.3.0 limitation).** Its `approvers` row compares approvers with the local token

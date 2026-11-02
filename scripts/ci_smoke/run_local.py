@@ -10,7 +10,7 @@ that a hosted runner, a branch protection rule or a real pull request behaves th
     python3 scripts/ci_smoke/run_local.py            # all cases, exit 0 only when every step gave its expected result
     python3 scripts/ci_smoke/run_local.py c d        # some cases
 
-Needs the package installed (`pip install -e .`) and git. Stdlib only.
+Needs git and a source checkout (it puts the checkout's `src/` on the path itself; nothing is installed). Stdlib only.
 """
 import contextlib
 import io
@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parents[1] / "src"))  # the checkout's own package: runs with any python3, no install, from any directory
 FIX = HERE / "fixtures"
 STORY = 1001
 _GIT_ENV = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",

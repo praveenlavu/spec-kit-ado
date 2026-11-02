@@ -141,7 +141,7 @@ JSON key, or fails validation), `draft`, `approved`, and `changed-since-approval
 `approval.sha256` is not the hash of the profile without `approval` (the hash is over the sorted keys, so key order does not matter, but
 any changed value does). An `approved` file with no `approval` record is `invalid`.
 
-**What the agent may see.** Profile text comes from research on untrusted pages, so it is shown only after a profile marked approved; the approval is a record, not proof: anyone who can edit the file can compute the hash; trust comes from reviewing the commit and, from P2-5, the target branch plus the terminal-only approve. `approval.by` is printed only when it is a plain role (letters, digits and spaces, up to 40 characters), else as "a role", and the hash shown is the computed one, because `approval` is outside the hash.
+**What the agent may see.** Profile text comes from research on untrusted pages, so it is shown only after a profile marked approved; the approval is a record, not proof: anyone who can edit the file can compute the hash; trust comes from reviewing the commit and the target branch plus the terminal-only approve. `approval.by` is printed only when it is a plain role (letters, digits and spaces, up to 40 characters), else as "a role", and the hash shown is the computed one, because `approval` is outside the hash.
 `ado stack show` (JSON) prints status, counts (`stacks`, `commands`, `conventions`, `dod`, `sources`, `unverified`) and the validator's
 errors as a rule plus a position (`stacks[2].commands.test.run`), never a value; only for an `approved` profile does it also print the
 composed test command. `ado stack show --md` prints an approved profile as data, under the fixed header "Project stack profile (data,

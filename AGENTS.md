@@ -128,7 +128,7 @@ step and says so (the workflow passes `--workflow`). The workflow's gate triplet
 writes. In strict mode it also runs `ado strict check <id> --phase implement` before `implement` (`strict-check-implement`),
 posts the decisions recorded in `Decisions_<id>.md` after `implement` as one new comment (`decisions-loop`, behind a gate), runs
 `ado strict verify <id>` (`strict-verify`) and ends with the gate `wait-po-validation`, where you wait for the product owner's
-verdicts that a human records with `ado decisions <id> --resolve` (then commit and push the resolved lines to the PR branch before the merge); in an advisory project
+verdicts that a human records with `ado decisions <id> --resolve` (with `approvers` configured on the target branch, their `/approve D<n>` and `/reject D<n>` comments, recorded by `ado decisions <id> --sync`; `--resolve` is refused then, whatever `approval` says) (then commit and push the resolved lines to the PR branch before the merge); in an advisory project
 `strict-check-implement` and `strict-verify` are no-ops and `decisions-loop` is a no-op when there is no decisions file; when there is one the post happens in every mode, behind the gate. The move
 to the active state is not automated in a workflow run: move the story
 yourself or run `speckit.ado.pull` by hand. The workflow ends at the open PR and never

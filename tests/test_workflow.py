@@ -487,7 +487,7 @@ def test_workflow_docs_describe_stack_check(path):
 
 
 # ---- piece 3 (P3-11): business rules change prompts and docs, never the workflow ----
-BASE_WORKFLOW_SHA256 = "6f35cc2d9b45a304f69b0123fc071ae8b61b214180b2867cc03cf74976923580"  # workflow.yml at the P4-14 base, version line blanked
+BASE_WORKFLOW_SHA256 = "84d0647110bb0c69ca36ba434a8f60fb532cfed08fa17958a35ca4685c16a0de"  # workflow.yml at the P4-14 base, version line blanked; F7 then dropped "; F11 ruling" from one comment (no step, input or shell line)
 
 
 def test_workflow_unchanged_by_rules():

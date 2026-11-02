@@ -1838,3 +1838,25 @@ def test_ci_test_job_runs_on_python_3_9_and_3_13_with_the_pins_kept():
     # the rest of the workflow is as before: same jobs, read-only permissions, no secret in the matrix job
     assert sorted(wf["jobs"]) == ["actionlint", "scrub", "test"] and wf["permissions"] == {"contents": "read"}
     assert "secrets." not in json.dumps(job) and "permissions" not in job
+
+
+CHECKOUT_SHA, SETUP_PYTHON_SHA = "11bd71901bbe5b1630ceea73d27597364c9af683", "a26af69be951a213d495a4c3e4e4022e16d87065"  # v4.2.2, v5.6.0 (git ls-remote, F7)
+
+
+def test_every_third_party_action_is_pinned_by_commit_sha_in_every_workflow():
+    """F7 (C M-1): the toolkit's own jobs and the five consumer templates (which hold ADO_TOKEN) use the same two commits, never a movable tag.
+    Residual (not closed here): `ci.yml`'s `actionlint` job pipes the pinned tag's download script into bash with no checksum."""
+    pinned = {"actions/checkout": CHECKOUT_SHA, "actions/setup-python": SETUP_PYTHON_SHA}
+    seen = 0
+    for name in ALL:
+        for s in steps(load(name)):
+            use = s.get("uses", "")
+            if use.startswith("actions/"):
+                seen += 1
+                action, _, ref = use.partition("@")
+                assert pinned[action] == ref, (name, use)
+    assert seen >= 16
+    # the toolkit's read-only checkouts that never push keep no credentials in .git/config
+    for job in ("scrub", "actionlint"):
+        co = next(s for s in load("ci")["jobs"][job]["steps"] if s.get("uses", "").startswith("actions/checkout@"))
+        assert co["with"]["persist-credentials"] is False, job

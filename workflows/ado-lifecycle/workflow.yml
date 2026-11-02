@@ -437,7 +437,7 @@ steps:
     condition: "{{ steps.pr-apply.output.stderr | contains('plan changed since approval') }}"
     steps:
       # The CLI, not the agent, writes the preview the gate shows, with pr-apply's own flags
-      # (--push too, so both skip the remote-diverged review check; F11 ruling).
+      # (--push too, so both skip the remote-diverged review check).
       - id: pr-preview
         type: shell
         run: "ado pr create {{ inputs.story_id }} --from-prepared --push --plan-out .ado/plan-pr.md"

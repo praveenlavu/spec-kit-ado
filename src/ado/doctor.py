@@ -238,7 +238,8 @@ def _trust(repo):
     except ConfigInvalid as e:
         if str(e) in (config.E_NONROOT_TRUST, config.E_NO_TARGET):  # code-defined constants
             return None, str(e)
-        return None, "the target branch's config cannot be read (see the config-target row), so the approval keys cannot be trusted"
+        return None, ("a config file cannot be read (the target branch's ado.config.json, the working-tree one, or the file ADO_CONFIG names: see the config and "
+                      "config-target rows), so the approval keys cannot be trusted")
 
 
 def _approvers_row(repo, identity):

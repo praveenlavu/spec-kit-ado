@@ -396,6 +396,17 @@ def test_working_tree_trust_keys_change_nothing_in_the_approvers_row(env):
     assert r["approvers"] == {"id": "approvers", "status": "ok", "fix": ""}
 
 
+def test_approvers_refusal_names_every_file_that_can_be_unreadable(env, monkeypatch, tmp_path):
+    """F7 (F6 N3): the generic refusal is true whichever file `config.trusted` could not read: the target's, the working tree's or ADO_CONFIG's."""
+    repo, _ = env
+    _origin(repo, json.dumps(CFG))
+    junk = tmp_path / "junk.json"
+    junk.write_text("{ not json SECRETVALUE")
+    monkeypatch.setenv("ADO_CONFIG", str(junk))
+    fix = run(repo)[0]["approvers"]["fix"]
+    assert "ADO_CONFIG" in fix and "working-tree" in fix and "target branch" in fix and "config-target" in fix and "SECRETVALUE" not in fix
+
+
 def test_approvers_unknown_when_target_unreadable_unless_none_configured(env):
     repo, _ = env
     assert run(repo)[0]["approvers"]["status"] == "ok"  # no origin/HEAD, and the working tree has no approvers key
