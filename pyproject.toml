@@ -19,4 +19,4 @@ dev = ["pytest", "pytest-xdist", "pyyaml"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-ado = ["seeds/*.json"]
+ado = ["seeds/*.json", "golden/*.json"]

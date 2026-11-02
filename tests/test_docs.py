@@ -2698,3 +2698,18 @@ def test_compatibility_matrix_is_documented():
         assert needle in doc, needle
     assert "docs/compatibility.md" in _flat("README.md") and "compatibility.md" in _flat("docs/unattended.md")
     assert "docs/compatibility.md" in _flat("CHANGELOG.md") and "tests/test_speckit_contract.py" in _flat("CHANGELOG.md")
+
+
+def test_calibrate_doc_pins():
+    """P4-16: the verb, the threshold, the provenance of the labels and the unrun scores are documented in every place."""
+    doc, readme, agents = _flat("docs/compatibility.md"), _flat("README.md"), _flat("AGENTS.md")
+    for needle in ("## Calibration", "agreement of at least 10 of 12 **and no false pass**", "ado calibrate --emit .ado/calibrate.md",
+                   "ado calibrate --score .ado/answer.json", "a `does not assert` pair judged `asserts`", "`review_model`", "not run yet", "src/ado/golden/fidelity.json",
+                   "owner-reviewed 2026-11-02, all 12 agreed", "`soft_pass`", "Open owner decision: count `soft_pass` as failing?", "the first `{` of the text starts the answer",
+                   "is the most dangerous error", ".specify/extensions/ado/commands/review.md"):
+        assert needle in doc, needle
+    assert "`calibrate (--emit PATH \\| --score FILE)`" in readme and "no false pass" in readme and "never echoes the answer" in readme and "`soft_pass`" in readme and "a `{` in prose before the answer is refused" in readme
+    assert "`soft_pass`" in agents and "`soft_pass`" in _flat("CHANGELOG.md")
+    assert "ado calibrate --emit .ado/calibrate.md | --score .ado/answer.json" in agents and "you never edit `src/ado/golden/fidelity.json`" in agents
+    log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert log.index("## 0.3.0 \u2014 unreleased") < log.index("`ado calibrate (--emit PATH | --score FILE)` (P4-16, D\u00a74.6)") < log.index("## 0.2")

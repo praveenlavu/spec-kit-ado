@@ -83,7 +83,7 @@ def test_placeholder_or_real_seeds_ship_and_validate():
 
 def test_package_data_declares_the_seeds():
     toml = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert re.search(r"\[tool\.setuptools\.package-data\]\s*\n\s*ado\s*=\s*\[\s*\"seeds/\*\.json\"\s*\]", toml)
+    assert re.search(r"\[tool\.setuptools\.package-data\]\s*\n\s*ado\s*=\s*\[\s*\"seeds/\*\.json\"\s*,\s*\"golden/\*\.json\"\s*\]", toml)  # the golden set of `ado calibrate` rides along
     assert Path(stack.SEEDS_DIR) == ROOT / "src" / "ado" / "seeds"
 
 

@@ -6,7 +6,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, approvals, attachments, branch, comments, decisions, dod, done, doctor, gate, kits, prs, push, questions, rules, stack, status, strict, tasks, workitems
+from . import __version__, approvals, attachments, branch, calibrate, comments, decisions, dod, done, doctor, gate, kits, prs, push, questions, rules, stack, status, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid, trusted
@@ -665,6 +665,26 @@ def _status(args):
     return 0
 
 
+def _calibrate(args):
+    """`ado calibrate (--emit PATH | --score FILE)`: local only (no token, no network, no model). `--emit` writes the plane 8 rubric and the 12
+    unlabelled golden items under `.ado/`; `--score` reads a model's answer (under `.ado/`, at most 64 KiB) and exits 0 only at agreement >= 10 of 12
+    with no false pass, else 1. A refused file or answer is exit 2 with a fixed text, never a piece of the answer."""
+    try:
+        if args.emit is not None:
+            path = calibrate.ado_path(args.emit, ".md")
+            items = calibrate.load_items()
+            text = calibrate.emit(calibrate.read_review("."), items)
+            calibrate.write_emit(path, text)
+            print(json.dumps({"emitted": os.path.relpath(path), "items": len(items), "bytes": len(text.encode("utf-8"))}, indent=2))
+            return 0
+        result = calibrate.score(calibrate.load_items(), calibrate.read_answer(calibrate.ado_path(args.score)))
+    except (ValueError, OSError) as e:
+        print(f"error: {e if isinstance(e, ValueError) else 'the calibration file cannot be written'}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, indent=2))
+    return 0 if result["ok"] else 1
+
+
 def _rules_confirm(args):
     """`ado rules <id> --confirm`: records in the ledger header the rule hashes a human reviewed (local only: no token, no request). New ids
     are added by anyone, also when another id changed or was dropped (written first, in one atomic write, then exit 2 naming the two lists). An
@@ -796,6 +816,11 @@ def main(argv=None):
     p.add_argument("--json", action="store_true", help="print the result as JSON")
     p.add_argument("--offline", action="store_true", help="do not read ADO: the board stages are 'not checked', never met")
     p.add_argument("--catch-up", action="store_true", help="also print the ordered commands that bring the story from its first unmet stage to an open PR (after an aborted run)")
+    p = sub.add_parser("calibrate", help="How far a model's plane 8 (AC fidelity) reading can be trusted: --emit writes the rubric and 12 unlabelled "
+                       "golden items under .ado/; --score reads the model's JSON answer (exit 0 at 10 of 12 and no false pass, else 1; local only)")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--emit", metavar="PATH", help="write the calibration prompt to PATH (a .md file under .ado/)")
+    g.add_argument("--score", metavar="FILE", help='score the answer in FILE (under .ado/, at most 64 KiB): {"G1": "asserts|partial|does not assert", ...}')
     p = sub.add_parser("get", help="Get a work item (with relations)")
     p.add_argument("id", type=int)
     p = sub.add_parser("query", help="Run a WIQL query")
@@ -1107,6 +1132,8 @@ def main(argv=None):
             return run_setup(profile=args.profile)
         if args.command == "doctor":  # rows, not an exception: every failure is a row
             return _doctor(args)
+        if args.command == "calibrate":  # local only: no token, no request, no config
+            return _calibrate(args)
         if args.command == "status":  # a report: every failure is a stage, not an exception
             return _status(args)
         if args.command == "decisions" and args.add is not None:  # local only: no token, no request
