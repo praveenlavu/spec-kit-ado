@@ -1071,6 +1071,7 @@ def _xc_hits(md, rows, approvers, excluded, client, story_id):
     if parsed["unparsed"] or len(ids) != len(set(ids)) or not all(re.fullmatch(r"D[0-9]{1,9}", i) for i in ids):
         return {"dropped": {0}}  # hidden or repeated lines: nothing else can be judged
     skip, byid, newest_post = {str(e).lower() for e in excluded}, {str(c.get("id")): c for c in rows}, {}
+    index = decisions.posting_index(rows)
     for c in rows:  # every decisions comment of the story: its lines must still be in the file
         if not _xc_is_posting(c.get("text")):
             continue
@@ -1090,7 +1091,11 @@ def _xc_hits(md, rows, approvers, excluded, client, story_id):
             hit("dropped", n)
     for d in sorted((d for k in ("open", "validated", "rejected") for d in parsed[k]), key=lambda d: int(d["id"][1:])):
         n, resolved = int(d["id"][1:]), d["status"] != "open"
-        rule, post = decisions._posting_rule(d, byid, skip, client, story_id, edits)
+        rule, post = decisions._posting_rule(d, byid, skip, client, story_id, edits, index)
+        if rule == "posting-superseded":  # set back to an older posting (the rule `--sync` and the wait gate use). It overlaps `newest_post` below except when the
+            # newer posting is edited (that one is skipped there), so this hit is not redundant: a test pins the edited-newer case
+            hit("dropped", n)
+            rule = None
         if rule == "not-posted":
             if resolved:  # never shown to the PO: no verdict on it can be an approver's
                 hit("verdict", n)

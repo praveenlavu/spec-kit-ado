@@ -391,7 +391,7 @@ def apply_resolve(file_path, d_id, status, by, note, force=False):
 
 
 # ---- `ado decisions <id> --sync`: an approver's `/approve D<n>` or `/reject D<n>` comment becomes the verdict (a local write) ---------------------------
-SYNC_RULES = ("not-posted", "edited", "posting-lossy", "posting-missing", "posting-mismatch", "posting-markup", "posting-edited", "resolved-locally", "no-verdict", "older-than-posting",
+SYNC_RULES = ("not-posted", "edited", "posting-lossy", "posting-missing", "posting-mismatch", "posting-markup", "posting-edited", "posting-superseded", "resolved-locally", "no-verdict", "older-than-posting",
               "bad-comment-id", "up-to-date", "unwritable")  # why a line was left alone; fixed names, never ADO text
 SYNC_BY = "approver"  # the role written on a synced line (never a name)
 _VERDICT = {"approve": "validated", "reject": "rejected"}
@@ -405,13 +405,43 @@ def _sync_note(text):
     return " ".join(_MARKUP.sub(" ", _CTRL.sub(" ", t)).split())[:MAX_NOTE]
 
 
-def _posting_rule(d, rows, excluded, client, story_id, edits):
+def posting_index(rows):
+    """{n: (comment, whitespace-normalised lines it shows for `D<n>`)}: the NEWEST decisions comment that lists each id, built in ONE pass (each comment parsed once, so
+    the cost is linear in the comment bytes however many decisions are asked about). The ONE reading of "newest posting" that `decisions --sync`, the
+    `wait-po-validation` gate and the done-time cross-check share: any author, edited or not (it is a claim to check, not evidence), newest by created time then id
+    (`approvals._order`); a comment hidden in markup lists nothing here (the other checks refuse it)."""
+    best = {}  # n -> (order key, comment, lines)
+    for c in rows:
+        key = approvals._order(c)
+        if key is None or not comments.marked(c.get("text"), MARKER):
+            continue
+        shown = {}
+        for ln in comments.kit_lines(str(c.get("html") or ""), MARKER):
+            if m := POSTED_LINE.match(ln):
+                shown.setdefault(int(m.group(1)), []).append(" ".join(ln.split()))
+        for n, lines in shown.items():
+            if n not in best or key > best[n][0]:
+                best[n] = (key, c, tuple(lines))
+    return {n: (c, lines) for n, (_, c, lines) in best.items()}
+
+
+def superseded(d, index):
+    """Does a posted line `d` (its `posted:` marker is the claim; a line without one is not checked) point at anything but the NEWEST posting of its id (`index`:
+    `posting_index`), or differ from the line that posting shows? Then an approval of the newest posting is not an approval of this text."""
+    best, shown = index.get(int(d["id"][1:]), (None, ()))
+    return bool(d["posted"] and best is not None
+                and (str(d["posted"]["comment_id"]) != str(best["id"]) or " ".join(_comment_line(d)[0].split()) not in shown))
+
+
+def _posting_rule(d, rows, excluded, client, story_id, edits, index):
     """(rule, posting row): why the verdict on `d` cannot be read yet, else (None, the comment that posted it). The `posted:` marker is a claim in a
     PR-controlled file: the comment it names must exist, start with the decisions marker, be by a kit identity (`excluded`), hold `d`'s line as it
     reads NOW (so a line edited after posting, with its marker hash recomputed, is not the line the approver read) and be UNEDITED
     (`approvals._edited`, the rule that applies to an approver's comment; `edits` caches it per comment): the agent can rewrite its own comment.
     A line the comment cannot show exactly (`comment_line_is_lossy`) is `posting-lossy`. The comment's RAW html is read with `comments.kit_lines` (the rule
-    questions use): any tag but `<br>` is `posting-markup`, and only `<br>`-split lines are compared."""
+    questions use): any tag but `<br>` is `posting-markup`, and only `<br>`-split lines are compared. Last, the comment must be the NEWEST decisions comment that
+    lists `d` (`posting_index`): a verdict on a newer posting is not a verdict on a line set back to an older one (`posting-superseded`; the cross-check reports
+    it as `dropped`)."""
     if not d["posted"]:
         return "not-posted", None
     if d["posted"]["hash"] != marker_hash(d):
@@ -430,7 +460,9 @@ def _posting_rule(d, rows, excluded, client, story_id, edits):
         return "posting-mismatch", None
     if str(c["id"]) not in edits:
         edits[str(c["id"])] = approvals._edited(client, story_id, c)
-    return ("posting-edited", None) if edits[str(c["id"])] else (None, c)
+    if edits[str(c["id"])]:
+        return "posting-edited", None
+    return ("posting-superseded", c) if superseded(d, index) else (None, c)
 
 
 def _posting_key(post):
@@ -463,10 +495,11 @@ def sync(md, comment_rows, approvers, excluded, client, story_id):
     if parsed["unparsed"] or len(ids) != len(set(ids)) or not all(re.fullmatch(r"D[0-9]{1,9}", i) for i in ids):  # ids are printed: ASCII digits only
         raise ValueError("the decisions file is malformed (a line that breaks the grammar, an unclosed fence or comment, or a repeated id); nothing written")
     rows, skip, edits = {str(c.get("id")): c for c in comment_rows}, {str(e).lower() for e in excluded}, {}
+    index = posting_index(comment_rows)
     applied, skipped, status, bad_newer, blocked, out = [], {}, {}, {}, [], md
     for d in sorted((d for k in _STATES for d in parsed[k]), key=lambda d: int(d["id"][1:])):
         i = d["id"]
-        rule, post = _posting_rule(d, rows, skip, client, story_id, edits)
+        rule, post = _posting_rule(d, rows, skip, client, story_id, edits, index)
         if rule is None and d["status"] != "open" and not d.get("via"):
             rule = "resolved-locally"
         tally = {}

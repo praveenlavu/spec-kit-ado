@@ -491,6 +491,8 @@ E_QUESTIONS = ("comment approval: the story's questions comment cannot be truste
                "it was edited by another identity, or it has unexpected markup or lines), so nothing is met.")
 E_DECISIONS = ("comment approval: a decisions comment on the story cannot be trusted (edited, disguised, cut, hidden in markup, unexpected lines, or none of them is "
                "the token identity's own), so nothing is met.")
+E_DECISIONS_FILE = ("comment approval: the story's decisions file exists but cannot be read (a symlink, over 1 MiB, outside the repository or not UTF-8), so "
+                    "which text each decision has cannot be told; nothing is met.")
 E_AGE_UNKNOWN = "comment approval: how long the questions have been shown cannot be established from the server (versions of the kit's comment), so nothing is met."
 E_NO_TIME = "comment approval: the server time cannot be established, so no question can be due under `assume_after_hours`; nothing is met."
 _REVIEW_H, _FIDELITY_H = re.compile(r"^### Review\b"), re.compile(r"^### AC fidelity\b")
@@ -625,12 +627,27 @@ def _server_now(client):
     return now
 
 
-def _wait_validation(client, story_id, trust_cfg, found, skip):
-    """(open decision ids, malformed-line count) of `wait-po-validation` from ADO only. Every comment that carries the decisions marker (`comments.marked`, so
+def decisions_text(cfg, repo, story_id):
+    """The story's decisions file for the wait gate (the working tree's, confined as the gate reads the ledger), or None when there is none. A file that exists
+    and cannot be read is ApprovalMissing(E_DECISIONS_FILE): never a pass."""
+    from . import decisions, gate
+    path = decisions.decisions_file(os.path.join(str(repo), str(cfg.dod_path)), story_id)
+    if not os.path.lexists(path):
+        return None
+    md = gate._read(path, str(repo), set())
+    if md is None:
+        raise ApprovalMissing(E_DECISIONS_FILE)
+    return md
+
+
+def _wait_validation(client, story_id, trust_cfg, found, skip, decisions_md=None):
+    """(open decision ids, malformed-line count) of `wait-po-validation` from ADO's comments (plus the optional consistency check on the decisions file, below). Every comment that carries the decisions marker (`comments.marked`, so
     a disguised one counts) must be a plain kit posting, as `ado done`'s cross-check reads it (E_DECISIONS otherwise): starts with the marker, has a readable
     time, was never edited, is not hidden in markup, shows the heading and only `D<n> (kind): ...` lines, none of them cut at the posting limit; at least one
     posting must be the token identity's. Every `D<n>` they list needs the newest valid `/approve|/reject D<n>` (`newest`) newer than the newest posting
-    that shows it (or its last modification), with no newer malformed approver line. No posting at all is nothing to wait for."""
+    that shows it (or its last modification), with no newer malformed approver line. No posting at all is nothing to wait for. With `decisions_md` (the working
+    tree's decisions file; it can only keep an id OPEN, never close one) a decision whose `posted:` marker is not its NEWEST posting, or whose line differs from
+    what that posting shows, stays open too (`decisions.superseded` over `decisions.posting_index`, the rule `--sync` and the cross-check use): the approver answered other words."""
     from . import decisions, questions
     posts = {}  # D<n> -> the newest kit decisions comment that shows it
     marked = [c for c in found if comments.marked(c.get("text"), decisions.MARKER)]
@@ -665,19 +682,27 @@ def _wait_validation(client, story_id, trust_cfg, found, skip):
         if cut_at[i] or not (win and win["verb"] in ("approve", "reject") and not win["bad_newer"] and pkey and key and key > pkey):
             still.append(i)  # a decision whose NEWEST posting is cut stays open: an approver cannot approve text they cannot see in full
             bad_total += tally.get("bad_newer", 0)
-    return still, bad_total
+    if decisions_md is not None:
+        parsed, index = decisions.parse_decisions(decisions_md), decisions.posting_index(marked)
+        for d in (d for k in ("open", "validated", "rejected") for d in parsed[k]):
+            if d["id"] in posts and d["id"] not in still and decisions.superseded(d, index):
+                still.append(d["id"])
+    return sorted(still, key=lambda d: int(d[1:])), bad_total
 
 
-def wait_state(client, story_id, gate_id, trust_cfg, ci_identity=None):
+def wait_state(client, story_id, gate_id, trust_cfg, ci_identity=None, decisions_md=None):
     """`{"met": bool, "open": [ids], "bad_newer": int}` for `wait-po-answers` (open question ids) or `wait-po-validation` (open decision ids), computed from
-    ADO's comments ONLY, never from the ledger or the decisions file (an agent can edit those). `bad_newer` counts malformed approver lines newer than the
+    ADO's comments; the ledger and the decisions file never MEET a gate (an agent can edit them). The one file read, `decisions_md` for `wait-po-validation` (see
+    `_wait_validation`), can only keep an id open: a consistency check, not a security control (removing the marker or the file bypasses it). `bad_newer` counts malformed approver lines newer than the
     answer or verdict on the open ids (the caller shows it). Runs `comment_mode_allowed` first; ApprovalRefused / ApprovalMissing with a fixed text for anything
-    unreadable, truncated or unknown (never a pass). Reads only; an HTTP error propagates."""
+    unreadable, truncated or unknown (never a pass). Reads only; an HTTP error propagates. `decisions_md` (wait-po-validation only): the text, or a zero-argument function that returns it, called only AFTER the bypass refusal and the comments were read, so a
+    refusal of the token identity wins over an unreadable file."""
     if gate_id not in WAIT_GATES:
         raise ApprovalRefused(E_NOT_WAIT.format(gate=gate_id) if gate_id in GATES else E_GATE)
     comment_mode_allowed(client)
     found, skip = _load(client, trust_cfg, story_id, ci_identity)
-    still, bad = (_wait_answers if gate_id == "wait-po-answers" else _wait_validation)(client, story_id, trust_cfg, found, skip)
+    still, bad = (_wait_answers(client, story_id, trust_cfg, found, skip) if gate_id == "wait-po-answers"
+                  else _wait_validation(client, story_id, trust_cfg, found, skip, decisions_md() if callable(decisions_md) else decisions_md))
     return {"met": not still, "open": still, "bad_newer": bad}
 
 
@@ -692,7 +717,8 @@ def check(client, trust_cfg, story_id, gate_id, cfg, repo=".", ci_identity=None)
     if trust_cfg.approval != "comment":
         return {"gate": gate_id, "mode": "terminal", "met": True}
     if gate_id in WAIT_GATES:
-        st = wait_state(client, story_id, gate_id, trust_cfg, ci_identity)
+        st = wait_state(client, story_id, gate_id, trust_cfg, ci_identity,
+                        lambda: decisions_text(cfg, repo, story_id))
         if not st["met"]:
             raise ApprovalMissing(E_WAIT.format(gate=gate_id, story=int(story_id), n=len(st["open"]), ids=", ".join(st["open"]), bad=_bad(st["bad_newer"], "on these")))
         return {"gate": gate_id, "mode": "comment", "met": True, "open": []}
@@ -952,7 +978,8 @@ def sync(client, trust_cfg, run_id, cfg, repo=".", resume=False, dry_run=False):
         raise ApprovalMissing(E_SYNC_IDENTITY)
     request, stale = None, False
     if gate_id in WAIT_GATES:
-        st = wait_state(client, story, gate_id, trust_cfg, ci_identity=me)
+        st = wait_state(client, story, gate_id, trust_cfg, ci_identity=me,
+                        decisions_md=lambda: decisions_text(cfg, repo, story))
         verdict, bad = ("approve" if st["met"] else "waiting"), st["bad_newer"]
     else:
         seen = {}

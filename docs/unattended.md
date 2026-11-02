@@ -48,7 +48,7 @@ Run from the project root (the working tree of the run), as the same user and to
    - An apply gate (`approve-questions`, `approve-plan-questions`, `approve-answers-questions`, `approve-push`, `approve-decisions`, `approve-sync`,
      `approve-pr`) is judged by the hash of the **plan text** in its fixed plan file under `.ado/` (the file the gate shows, without the `⚠` first line
      that a plan over 190 lines gets), which is what the `--apply` hashes. The verb's gates are one target, as for the apply.
-   - A wait gate (`wait-po-answers`, `wait-po-validation`) is met by the approvers' `/answer`, `/approve` and `/reject` comments on ADO only
+   - A wait gate (`wait-po-answers`, `wait-po-validation`) is met by the approvers' `/answer`, `/approve` and `/reject` comments on ADO only (for `wait-po-validation` the working tree's decisions file can only keep a decision open when its `posted:` line is not its newest posting or whose text differs from it, which is a consistency check, not a security control, and an unreadable one refuses with `E_DECISIONS_FILE`)
      (`approvals.wait_state`): met is `approve`, anything else `waiting`. It has no hash and no request.
    - The rules are those of the applies: newest valid command wins, an approval is stale when the artifact changed or an approval request is newer, and
      a newer malformed approver line means `waiting` (never `approve`). The bypass-rules refusal, no approvers and unreadable or cut-off comments exit 2.

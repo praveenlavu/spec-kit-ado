@@ -2606,24 +2606,24 @@ def test_approvals_check_is_documented():
         assert f"`{g}`" in cfg, g
     for needle in ("**Gate checks: `ado approvals check <id> --gate <gate>`.**", "`approvals.GATES`", "approvals.artifacts(gate, story, cfg, repo)", "nothing read from ADO",
                    "`spec.md` and ledger section 2", "`plan.md`, `spec.md` and ledger section 2", "HEAD's full commit id", "newest live `### Review` block", "`### AC fidelity` block",
-                   "framed as `<label> <byte count>`", "never from the ledger or the decisions file", "`unattended.assume_after_hours`", "`client.server_now()`",
+                   "framed as `<label> <byte count>`", "never by what the ledger or the decisions file says", "`unattended.assume_after_hours`", "`client.server_now()`",
                    "the local clock is never read", "N newer malformed command line(s) by an approver", "exit 2 here in comment mode", "versions",
                    "at most ONE comment", "a question that vanishes from the text is not answered by vanishing", "disguised one", "line endings (CRLF or LF)", "never match one",
                    "the same token identity that posted", "a question or decision that was never posted, or a kit comment deleted through raw REST, or edited through raw REST",
                    "the done-time check covers decisions only", "`questions-posted` hint",
                    "at least as strictly as `ado done`'s cross-check", "stays open while its newest posting shows it cut", "edited through raw REST by the token identity",
-                   "Two cases block a gate for good", "rotating the token identity while questions are open"):
+                   "Three cases block a gate for good", "rotating the token identity while questions are open"):
         assert needle in cfg, needle
     for doc in (hitl, readme, agents, log):
         assert "approvals check <id> --gate" in doc, doc[:30]
-    for needle in ("approvals.wait_state(client, story, gate, trust)", "approvals.artifacts(gate, story, cfg, repo)", "(P4-12b", "never from the ledger or the decisions file", "Terminal mode"):
+    for needle in ("approvals.wait_state(client, story, gate, trust)", "approvals.artifacts(gate, story, cfg, repo)", "(P4-12b", "never by the ledger or the decisions file", "Terminal mode"):
         assert needle in log, needle
     assert "never by what the ledger or the decisions file says" in hitl and "`/approve <gate> <hash>` line the refusal shows" in hitl
     assert "`comments.marked`" in log and "`decisions.POSTED_LINE`" in log and "the poller must run as the identity that posted" in log
     assert "A question or decision that was never posted, or a kit comment deleted or edited through raw REST" in hitl
     assert "caught by `ado status` and the done-time check" not in cfg and "read as `ado done`'s cross-check reads it" not in cfg and "none cut at the posting limit" not in cfg
-    assert "blocks the gate until a human deletes that comment" in hitl and "keeps that `D<n>` open while its newest posting shows it cut" in log
-    assert "never post it yourself" in agents and "the ledger and the decisions file do not count" in agents
+    assert "blocks the gate until a human deletes that comment" in hitl and "posts a decisions comment listing a `D<n>`" in hitl and "keeps that `D<n>` open while its newest posting shows it cut" in log
+    assert "never post it yourself" in agents and "the ledger and the decisions file do not count" in agents and "`E_DECISIONS_FILE`" in agents
     assert "`ado approvals check <id> --gate <gate>` (P4-12b)" in wf
     assert "`ado approvals` and the poller come with" not in cfg
 
@@ -2853,3 +2853,21 @@ def test_pack_and_boundary_claims_are_honest():
         assert "runbook" not in text and "backup" not in text, f
         if f != "docs/catalog-submission.md":  # the pack links docs/release-checklist.md (P4-18); the others do not mention it
             assert "release-checklist" not in text, f
+
+
+def test_newest_posting_rule_is_documented():
+    """F2 (P4-20 I-2): one "newest posting" rule for `--sync`, the wait gate and the cross-check."""
+    cfg, hitl, log, readme, agents = (_flat(n) for n in ("docs/configuration.md", "rules/hitl.md", "CHANGELOG.md", "README.md", "AGENTS.md"))
+    assert "`posting-superseded`" in cfg and "`decisions.superseded`" in cfg and "never takes that approval" in cfg
+    assert "(F2, P4-20 I-2)" in log and "`decisions.posting_index`" in log and "`E_DECISIONS_FILE`" in log and "no new finding id" in log
+    assert "the same \"newest posting\" rule" in hitl
+    from ado import decisions
+    assert "posting-superseded" in decisions.SYNC_RULES
+    # F2 fix round 1: the wait gate DOES read the decisions file, and every place that said it never does says what it does
+    for doc in (cfg, hitl, readme, agents, _flat("docs/unattended.md")):
+        assert "`E_DECISIONS_FILE`" in doc and "never from the ledger or the decisions file" not in doc, doc[:30]
+    for needle in ("a consistency check, not a security control", "stripping the `posted:` marker, deleting the file or pointing the working tree's `dod_path` elsewhere bypasses it",
+                   "can only keep an id open, never close or meet anything", "a non-kit identity that posts a well-formed decisions comment listing a `D<n>`"):
+        assert needle in cfg, needle
+    assert "or whose text differs from it" in agents and "or whose text differs from it, which is a consistency check, not a security control" in _flat("docs/unattended.md")
+    assert "a consistency check, not a security control" in hitl and "removing the marker or the file bypasses it" in readme
