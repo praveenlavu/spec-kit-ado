@@ -336,6 +336,15 @@ def require_specify():
     return specify
 
 
+def require_commit(commit, repo=None):
+    """Return when `commit` is in this clone. Missing: skip locally (a shallow checkout), but fail under CI (`CI` set, or `ADO_REQUIRE_BASELINE=1`, which
+    ci.yml sets on both Python legs) so the byte-identity checks against the baseline commits cannot vanish silently."""
+    root = repo or Path(__file__).resolve().parent.parent
+    if subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{commit}^{{commit}}"], capture_output=True).returncode:
+        required = os.environ.get("CI") or os.environ.get("ADO_REQUIRE_BASELINE")
+        (pytest.fail if required else pytest.skip)(f"baseline commit {commit} is not in this clone (a shallow checkout?)")
+
+
 @pytest.fixture(scope="session")
 def speckit_template(tmp_path_factory):
     """Path of a committed Spec Kit repository on `main`: strict `ado.config.json`, an approved `ado.stack.json`, and an

@@ -1,0 +1,1 @@
+{"organization": "contoso", "project": "Fabrikam", "mode": "strict", "strict": {"test_command": "grep -q 'x = 2' src/app.py"}}

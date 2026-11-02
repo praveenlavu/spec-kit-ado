@@ -1,0 +1,2 @@
+{"organization": "contoso", "project": "Fabrikam", "mode": "strict", "strict": {"test_command": "grep -q 'x = 2' src/app.py"},
+ "approvers": ["55555555-5555-4555-8555-555555555555"], "approval": "comment"}

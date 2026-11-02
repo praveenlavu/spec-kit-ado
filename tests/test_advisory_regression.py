@@ -2,8 +2,8 @@
 (main a0b3c9e) prints the same stdout, the same stderr and exits with the same code as it did there.
 
 The baseline `src/` is exported with `git archive` into a temp dir (no worktree metadata is touched, so parallel test workers are safe) and
-both trees run the same verbs (the only normalised difference: the top-level argparse usage line names the new `kits` and `stack` verbs), in the same fixture path, with the venv's bin directory hidden from PATH. Skipped when the baseline commit is
-not in this clone (a shallow CI checkout)."""
+both trees run the same verbs (the only normalised difference: the top-level argparse usage line names the new `kits` and `stack` verbs), in the same fixture path, with the venv's bin directory hidden from PATH. Skipped locally when the baseline commit is
+not in this clone (a shallow checkout); under CI it fails (ci.yml checks out the full history)."""
 import os
 import shutil
 import subprocess
@@ -13,6 +13,8 @@ import io
 from pathlib import Path
 
 import pytest
+
+from tests.conftest import require_commit
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = "a0b3c9e"
@@ -64,11 +66,6 @@ VERBS = [
 HELPS = [[v, "--help"] for v in ("get", "query", "create", "update", "comment", "comments", "link", "attach", "attachments", "branch", "dod",
                                  "questions", "decisions", "gate", "push", "done")] + [["pr", "--help"], ["strict", "--help"], ["strict", "check", "--help"],
                                  ["strict", "verify", "--help"], ["strict", "override", "--help"], ["strict", "mode", "--help"]]
-
-
-def _have_baseline():
-    r = subprocess.run(["git", "-C", str(ROOT), "cat-file", "-e", f"{BASELINE}^{{commit}}"], capture_output=True)
-    return r.returncode == 0
 
 
 def _env(home, src):
@@ -174,8 +171,8 @@ def compare(tmp_path):
     return len(argvs), diffs, old
 
 
-@pytest.mark.skipif(not _have_baseline(), reason=f"baseline commit {BASELINE} is not in this clone")
 def test_pre_existing_verbs_are_byte_identical_to_the_baseline_without_a_profile_or_lockfile(tmp_path):
+    require_commit(BASELINE)  # skips locally in a shallow clone, fails under CI
     n, diffs, old = compare(tmp_path)
     assert n >= 50 and not diffs, "\n".join(diffs)
     # the comparison is not vacuous: the fixture ran real verbs (a gate summary, decisions, an advisory note), not only usage errors

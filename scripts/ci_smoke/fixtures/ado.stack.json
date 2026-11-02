@@ -1,0 +1,68 @@
+{
+ "schema": 1,
+ "version": 2,
+ "status": "approved",
+ "stacks": [
+  {
+   "id": "python",
+   "root": ".",
+   "detected": {
+    "confidence": "high",
+    "evidence": [
+     "pyproject.toml"
+    ]
+   },
+   "commands": {
+    "test": {
+     "run": "grep -q 'x = 2' src/app.py",
+     "source": "unverified"
+    },
+    "lint": {
+     "run": "ruff check .",
+     "source": "unverified"
+    },
+    "org_only": [
+     {
+      "run": "sf apex run test --wait 10",
+      "source": "S2"
+     }
+    ]
+   },
+   "conventions": [
+    {
+     "rule": "Test files are named test_*.py",
+     "source": "S1"
+    },
+    {
+     "rule": "Keep modules small",
+     "source": "unverified"
+    }
+   ],
+   "dod": [
+    {
+     "item": "No new lint findings",
+     "source": "S1"
+    }
+   ]
+  }
+ ],
+ "sources": {
+  "S1": {
+   "kind": "official",
+   "url": "https://docs.pytest.org/en/stable/",
+   "retrieved": "2026-01-15",
+   "evidence": "Run tests with python -m pytest."
+  },
+  "S2": {
+   "kind": "repo",
+   "path": "package.json",
+   "retrieved": "2026-01-15",
+   "evidence": "scripts.test"
+  }
+ },
+ "approval": {
+  "by": "tech lead",
+  "date": "2026-01-16",
+  "sha256": "ced0259d70d1d5feb46a944da432cc006ca828764b9413be35e08b6ba018aaed"
+ }
+}

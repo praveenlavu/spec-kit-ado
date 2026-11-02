@@ -1,0 +1,249 @@
+{
+  "a": {
+    "title": "advisory project, branch name without a story id",
+    "branch": "feature/members-list",
+    "target_config": "config.advisory.json",
+    "stack": false,
+    "story_refs": false,
+    "steps": [
+      {
+        "argv": [
+          "branch",
+          "--id-from",
+          "feature/members-list",
+          "--base",
+          "main"
+        ],
+        "exit": 1
+      },
+      {
+        "argv": [
+          "gate",
+          "1001",
+          "--offline",
+          "--base",
+          "main"
+        ],
+        "exit": 0,
+        "out": {
+          "blocking": false
+        }
+      },
+      {
+        "argv": [
+          "strict",
+          "mode",
+          "--base",
+          "main"
+        ],
+        "exit": 0,
+        "out": {
+          "mode": "advisory",
+          "source": "pull request"
+        }
+      }
+    ]
+  },
+  "b": {
+    "title": "pull request config advisory, target branch strict",
+    "branch": "ab1001-members",
+    "target_config": "config.strict.json",
+    "head_config": "config.advisory.json",
+    "record": true,
+    "steps": [
+      {
+        "argv": [
+          "strict",
+          "mode",
+          "--base",
+          "main"
+        ],
+        "exit": 0,
+        "out": {
+          "mode": "strict",
+          "source": "target branch"
+        }
+      },
+      {
+        "argv": [
+          "strict",
+          "check",
+          "1001",
+          "--phase",
+          "pr",
+          "--base",
+          "main"
+        ],
+        "exit": 2,
+        "rules": [
+          "stack-profile-drift"
+        ],
+        "out": {
+          "phase": "pr",
+          "mode": "strict",
+          "ok": false
+        }
+      }
+    ]
+  },
+  "c": {
+    "title": "valid strict evidence passes the gate, the strict check and strict verify",
+    "branch": "ab1001-members",
+    "target_config": "config.strict.json",
+    "record": true,
+    "steps": [
+      {
+        "argv": [
+          "strict",
+          "mode",
+          "--base",
+          "main"
+        ],
+        "exit": 0,
+        "out": {
+          "mode": "strict",
+          "source": "target branch"
+        }
+      },
+      {
+        "argv": [
+          "gate",
+          "1001",
+          "--offline",
+          "--base",
+          "main"
+        ],
+        "exit": 0,
+        "out": {
+          "blocking": false,
+          "config": "target branch (strict)"
+        }
+      },
+      {
+        "argv": [
+          "strict",
+          "check",
+          "1001",
+          "--phase",
+          "pr",
+          "--base",
+          "main"
+        ],
+        "exit": 0,
+        "out": {
+          "phase": "pr",
+          "mode": "strict",
+          "ok": true
+        }
+      },
+      {
+        "argv": [
+          "strict",
+          "verify",
+          "1001",
+          "--no-record",
+          "--base",
+          "main"
+        ],
+        "exit": 0,
+        "out": {
+          "mode": "strict",
+          "ok": true,
+          "recorded": false
+        }
+      }
+    ]
+  },
+  "d": {
+    "title": "a faked green SHA fails strict verify",
+    "branch": "ab1001-members",
+    "target_config": "config.strict.json",
+    "claimed_green": "wip",
+    "steps": [
+      {
+        "argv": [
+          "strict",
+          "verify",
+          "1001",
+          "--no-record",
+          "--base",
+          "main"
+        ],
+        "exit": 2,
+        "rules": [
+          "green-fails"
+        ],
+        "out": {
+          "mode": "strict",
+          "ok": false
+        }
+      }
+    ]
+  },
+  "e": {
+    "title": "the story closes (preview) and the decisions cross-check passes",
+    "branch": "ab1001-members",
+    "target_config": "config.strict-approvers.json",
+    "record": true,
+    "decisions": "decisions_clean.md",
+    "steps": [
+      {
+        "argv": [
+          "strict",
+          "check",
+          "1001",
+          "--phase",
+          "done",
+          "--base",
+          "main"
+        ],
+        "exit": 0,
+        "out": {
+          "phase": "done",
+          "mode": "strict",
+          "ok": true
+        }
+      },
+      {
+        "argv": [
+          "done",
+          "1001",
+          "--base",
+          "main"
+        ],
+        "exit": 0,
+        "out": {
+          "ready": true,
+          "applied": false,
+          "unticked": []
+        }
+      }
+    ]
+  },
+  "f": {
+    "title": "a forged posted marker refuses the close",
+    "branch": "ab1001-members",
+    "target_config": "config.strict-approvers.json",
+    "record": true,
+    "decisions": "decisions_forged.md",
+    "steps": [
+      {
+        "argv": [
+          "done",
+          "1001",
+          "--base",
+          "main"
+        ],
+        "exit": 2,
+        "rules": [
+          "decisions-xcheck-marker"
+        ],
+        "out": {
+          "phase": "done",
+          "mode": "strict",
+          "ok": false
+        }
+      }
+    ]
+  }
+}

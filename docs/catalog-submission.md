@@ -409,7 +409,8 @@ GitHub no-reply address).
 0. **Release prep merged first** (separate tasks, one commit each, not part of this draft): the 0.3.0 version bump
    everywhere including the `catalog/` files and the `@v0.3.0` / `/v0.3.0/` URLs, `ado >=0.3.0`, the Spec Kit floor decision,
    the description length, the tag-pinned documentation links, the CHANGELOG date, an "Upgrading to 0.3.0" section, and the
-   release checklist (a document that does not exist yet) run on hosted runners once Actions is unlocked.
+   [release checklist](release-checklist.md) (written, never run: it is run on hosted runners once Actions is unlocked, and its steps 1 to 5 come
+   before the commands below).
 
 1. **Publish from a fresh repository, never from the old history.** `praveenlavu/spec-kit-ado` was already recreated as a
    private repository with one squashed commit (the older history is kept out of it on purpose and must not be published). The 0.3 work sits on top of that commit. Check what the flip would publish before anything else:
@@ -425,17 +426,26 @@ GitHub no-reply address).
 
 2. **Tag locally and check that the tag serves every file.** The catalog URLs are pinned to the tag and release tags never
    move ([VERSIONING.md](../VERSIONING.md)), so tag locally, check every file the tag must serve, and abort if one is missing;
-   push the tag only after that, and move `v0` to it last (step 11):
+   push the tag only after that, and move `v0` to it last (step 11). The tag goes on `RC`, the release-candidate SHA that the
+   [release checklist](release-checklist.md) proved (`RC=$(git rev-parse origin/main)` when that run began), never on whatever
+   `main` is now; the check below refuses a tag on any other commit:
 
    ```bash
-   git tag -a v0.3.0 -m "spec-kit-ado 0.3.0" main
-   for f in extension.yml bundle/bundle.yml catalog/extensions.json catalog/workflows.json \
-            workflows/ado-lifecycle/workflow.yml workflows/ado-lifecycle/README.md README.md LICENSE; do
-     git cat-file -e "v0.3.0:$f" || { echo "MISSING $f - do not push"; exit 1; }
-   done
-   git show v0.3.0:extension.yml | grep -E 'version: "0.3.0"'
-   git push origin v0.3.0
+   (
+     set -e
+     git tag -a v0.3.0 -m "spec-kit-ado 0.3.0" "$RC"
+     test "$(git rev-parse 'v0.3.0^{commit}')" = "$RC" || { echo "the tag is not the release candidate - do not push"; exit 1; }
+     for f in extension.yml bundle/bundle.yml catalog/extensions.json catalog/workflows.json \
+              workflows/ado-lifecycle/workflow.yml workflows/ado-lifecycle/README.md README.md LICENSE; do
+       git cat-file -e "v0.3.0:$f" || { echo "MISSING $f - do not push"; exit 1; }
+     done
+     git show v0.3.0:extension.yml | grep -E 'version: "0.3.0"'
+     git push origin v0.3.0
+   )
    ```
+
+   The block is a subshell, so a refusal (`exit 1`) ends only the subshell and never closes the shell you pasted it into; the push is its last line, so
+   it runs only when every check above it passed.
 
 3. **Build the bundle from the tag, not the working tree:**
 
@@ -443,7 +453,8 @@ GitHub no-reply address).
    tmp=$(mktemp -d) && git worktree add "$tmp/src" v0.3.0
    specify bundle validate --path "$tmp/src/bundle" --offline
    specify bundle build --path "$tmp/src/bundle" --output "$tmp/out"     # writes ado-0.3.0.zip
-   shasum -a 256 "$tmp/out/ado-0.3.0.zip" | tee "$tmp/out/SHA256SUMS"
+   (cd "$tmp/out" && shasum -a 256 ado-0.3.0.zip | tee SHA256SUMS)
+   (cd "$tmp/out" && shasum -a 256 -c SHA256SUMS)
    ```
 
 4. **Make the repository public** only after steps 1 to 3 pass. Then enable private vulnerability reporting, branch protection
@@ -456,8 +467,10 @@ GitHub no-reply address).
 
    ```bash
    gh release create v0.3.0 "$tmp/out/ado-0.3.0.zip" "$tmp/out/SHA256SUMS" \
-     -R praveenlavu/spec-kit-ado --title "v0.3.0" --notes-file <file holding the CHANGELOG 0.3.0 section>
+     -R praveenlavu/spec-kit-ado --title "v0.3.0" --notes-file <file holding the CHANGELOG 0.3.0 section> --verify-tag
    ```
+
+   `--verify-tag` aborts the release unless the tag is already on the remote, so GitHub never creates one at the tip of the default branch.
 
 6. **Confirm each URL returns HTTP 200,** and record the extension archive's checksum (`EXT_SHA`, for the catalog entry) and that
    the release asset matches `SHA256SUMS`:

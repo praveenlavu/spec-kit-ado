@@ -10,19 +10,43 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: actions/python-versions has no Python 3.9 build for ubuntu-26.04, so the 3.9 leg would break when the label moves.
+    # The other jobs (scrub, actionlint) use no Python version that depends on it and keep ubuntu-latest.
+    runs-on: ubuntu-24.04
+    strategy:
+      # The supported floor (requires-python >=3.9) and the newest Python we test on. A failure on one leg must not hide the other.
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (the commit speckit-contract.yml pins)
         with:
-          python-version: "3.11"
+          # Full history: the byte-identity regression tests compare against baseline commits (a0b3c9e, f83c868) that a depth-1 clone lacks.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0 (the commit speckit-contract.yml pins)
+        with:
+          python-version: ${{ matrix.python-version }}
       - name: Install package + dev deps
         run: pip install --quiet ".[dev]"
       # Real-repo tests (tests/test_ci_speckit_repo.py) need the Spec Kit CLI; pinned by commit to upstream release v1.2.1
       # (9dca9bf42a031765ee5e5f2371137f2f26967e11), because tags can move. Bump on purpose, not by drift. With CI=true they fail rather than skip.
+      # Spec Kit itself needs Python 3.11 or later, so it is installed on the 3.13 leg only; the 3.9 leg runs the rest of the suite
+      # with CI blanked, so those tests skip there (as they do on a machine without `specify`) and cannot be skipped on the 3.13 leg.
       - name: Install Spec Kit CLI (pinned)
+        if: matrix.python-version != '3.9'
         run: pip install --quiet "git+https://github.com/github/spec-kit.git@9dca9bf42a031765ee5e5f2371137f2f26967e11"
+      # ADO_REQUIRE_BASELINE makes a missing baseline commit a failure on both legs (the 3.9 leg blanks CI), never a silent skip.
       - name: Run the test suite
+        if: matrix.python-version != '3.9'
+        env:
+          ADO_REQUIRE_BASELINE: "1"
+        run: pytest -q
+      - name: Run the test suite (Python 3.9, without the Spec Kit tests)
+        if: matrix.python-version == '3.9'
+        env:
+          CI: ""
+          ADO_REQUIRE_BASELINE: "1"
         run: pytest -q
 
   scrub:

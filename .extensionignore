@@ -21,6 +21,7 @@ bundle/
 catalog/
 workflows/
 docs/catalog-submission.md
+docs/release-checklist.md
 CONTRIBUTING.md
 VERSIONING.md
 CLAUDE.md

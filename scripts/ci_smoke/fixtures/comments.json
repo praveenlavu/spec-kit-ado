@@ -1,0 +1,56 @@
+[
+ {
+  "id": 10,
+  "text": "[spec-kit-ado:decisions]<br>Decisions and assumptions made during development; please validate or reject:<br>D1 (decision): Use cursor paging — why: the story names no page size<br>D2 (assumption): Cap at 50 rows — why: the story is silent",
+  "createdDate": "2026-10-01T10:00:00Z",
+  "modifiedDate": "2026-10-01T10:00:00Z",
+  "version": 1,
+  "format": "html",
+  "mentions": [],
+  "url": "https://dev.azure.com/contoso/_apis/x",
+  "createdBy": {
+   "id": "4444444a-4444-4444-8444-44444444444b",
+   "displayName": "Dana Fictional"
+  },
+  "modifiedBy": {
+   "id": "4444444a-4444-4444-8444-44444444444b",
+   "displayName": "Dana Fictional"
+  }
+ },
+ {
+  "id": 11,
+  "text": "<p>/approve D1</p>",
+  "createdDate": "2026-10-01T11:00:00Z",
+  "modifiedDate": "2026-10-01T11:00:00Z",
+  "version": 1,
+  "format": "html",
+  "mentions": [],
+  "url": "https://dev.azure.com/contoso/_apis/x",
+  "createdBy": {
+   "id": "55555555-5555-4555-8555-555555555555",
+   "displayName": "Dana Fictional"
+  },
+  "modifiedBy": {
+   "id": "55555555-5555-4555-8555-555555555555",
+   "displayName": "Dana Fictional"
+  }
+ },
+ {
+  "id": 12,
+  "text": "<p>/approve D2</p>",
+  "createdDate": "2026-10-01T12:00:00Z",
+  "modifiedDate": "2026-10-01T12:00:00Z",
+  "version": 1,
+  "format": "html",
+  "mentions": [],
+  "url": "https://dev.azure.com/contoso/_apis/x",
+  "createdBy": {
+   "id": "55555555-5555-4555-8555-555555555555",
+   "displayName": "Dana Fictional"
+  },
+  "modifiedBy": {
+   "id": "55555555-5555-4555-8555-555555555555",
+   "displayName": "Dana Fictional"
+  }
+ }
+]

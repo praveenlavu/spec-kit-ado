@@ -2845,4 +2845,6 @@ def test_pack_and_boundary_claims_are_honest():
     assert "nothing below 1.2.1 was tried" in readme and "arrives later in 0.3.0" not in readme
     for f in ("docs/catalog-submission.md", "docs/tracker-boundary.md", "bundle/README.md"):
         text = _flat(f).lower()
-        assert "runbook" not in text and "release-checklist" not in text and "backup" not in text, f
+        assert "runbook" not in text and "backup" not in text, f
+        if f != "docs/catalog-submission.md":  # the pack links docs/release-checklist.md (P4-18); the others do not mention it
+            assert "release-checklist" not in text, f

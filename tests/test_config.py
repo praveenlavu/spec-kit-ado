@@ -896,8 +896,8 @@ def test_absent_keys_byte_identical_outputs(tmp_path):
     import tarfile
     from tests import test_advisory_regression as ar
     before = "f83c868"
-    if subprocess.run(["git", "-C", str(ar.ROOT), "cat-file", "-e", f"{before}^{{commit}}"], capture_output=True).returncode:
-        pytest.skip(f"commit {before} is not in this clone")
+    from tests.conftest import require_commit
+    require_commit(before)  # skips locally in a shallow clone, fails under CI
     tar = subprocess.run(["git", "-C", str(ar.ROOT), "archive", "--format=tar", before, "src"], check=True, capture_output=True).stdout
     base = tmp_path / "before"
     base.mkdir()

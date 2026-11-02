@@ -248,3 +248,17 @@ def test_missing_specify_skips_locally_and_fails_under_ci(monkeypatch):
         require_specify()
     monkeypatch.setattr("shutil.which", lambda name: "/bin/specify")
     assert require_specify() == "/bin/specify"
+
+
+def test_a_missing_baseline_commit_skips_locally_and_fails_under_ci(monkeypatch):
+    from tests.conftest import require_commit
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.delenv("ADO_REQUIRE_BASELINE", raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        require_commit("0" * 40)
+    for var in ("CI", "ADO_REQUIRE_BASELINE"):  # ci.yml sets CI on the 3.13 leg and ADO_REQUIRE_BASELINE on both (the 3.9 leg blanks CI)
+        monkeypatch.delenv("CI", raising=False)
+        monkeypatch.setenv(var, "1")
+        with pytest.raises(pytest.fail.Exception):
+            require_commit("0" * 40)
+    require_commit("HEAD")  # a commit that exists returns

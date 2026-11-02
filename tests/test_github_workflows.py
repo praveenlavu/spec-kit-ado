@@ -1812,3 +1812,29 @@ def test_speckit_contract_workflow_is_a_secret_free_weekly_canary():  # P4-15
     assert run["env"] == {"SPECKIT_CONTRACT": "1"} and "tests/test_speckit_contract.py" in run["run"]
     assert "| tee" in run["run"] and run["shell"] == "bash"  # bash brings pipefail: without it a failing pytest would show green behind `| tee`
     assert any("skipped" in s.get("run", "") for s in steps(wf))  # an all-skipped run is a failure, not a pass
+
+
+# ---- P4-18: the ci matrix ----
+def test_ci_test_job_runs_on_python_3_9_and_3_13_with_the_pins_kept():
+    wf = load("ci")
+    job = wf["jobs"]["test"]
+    assert job["strategy"]["matrix"] == {"python-version": ["3.9", "3.13"]} and job["strategy"]["fail-fast"] is False
+    assert 'requires-python = ">=3.9"' in (WF_DIR.parent.parent / "pyproject.toml").read_text()  # the matrix floor is the declared floor
+    setup = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/setup-python@"))
+    assert re.fullmatch(r"actions/setup-python@[0-9a-f]{40}", setup["uses"])
+    assert setup["uses"] == next(s for s in steps(load("speckit-contract")) if s.get("uses", "").startswith("actions/setup-python@"))["uses"]
+    assert setup["with"] == {"python-version": "${{ matrix.python-version }}"}  # the matrix value is an expression in `with`, never in a `run`
+    # Spec Kit needs Python 3.11 or later: installed on the 3.13 leg only, where CI=true makes a missing `specify` fail instead of skip
+    install = next(s for s in job["steps"] if s.get("name") == "Install Spec Kit CLI (pinned)")
+    assert install["if"] == "matrix.python-version != '3.9'" and "9dca9bf42a031765ee5e5f2371137f2f26967e11" in install["run"]
+    runs = [s for s in job["steps"] if s.get("run") == "pytest -q"]
+    base = {"ADO_REQUIRE_BASELINE": "1"}  # a missing baseline commit fails the byte-identity tests on both legs instead of skipping them
+    assert [(s["if"], s.get("env")) for s in runs] == [("matrix.python-version != '3.9'", base), ("matrix.python-version == '3.9'", {"CI": "", **base})]
+    # a hosted runner label with a Python 3.9 build, and a full-history, credential-free, sha-pinned checkout (the contract workflow's)
+    assert job["runs-on"] == "ubuntu-24.04"
+    checkout = next(s for s in job["steps"] if s.get("uses", "").startswith("actions/checkout@"))
+    assert re.fullmatch(r"actions/checkout@[0-9a-f]{40}", checkout["uses"]) and checkout["with"] == {"fetch-depth": 0, "persist-credentials": False}
+    assert checkout["uses"] == next(s for s in steps(load("speckit-contract")) if s.get("uses", "").startswith("actions/checkout@"))["uses"]
+    # the rest of the workflow is as before: same jobs, read-only permissions, no secret in the matrix job
+    assert sorted(wf["jobs"]) == ["actionlint", "scrub", "test"] and wf["permissions"] == {"contents": "read"}
+    assert "secrets." not in json.dumps(job) and "permissions" not in job
