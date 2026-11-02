@@ -315,6 +315,7 @@ def sync(md, comment_rows, approvers, excluded, client, story_id, now, assume_af
     `now` ValueError. `ignored` lists the ANSWERED questions on which an approver's newest valid `/answer` is not the comment named by the line's `(PO comment <id>)` (or the line names none): never applied, only reported. Due questions are only listed: `plan --close-assumed` is the only thing that closes one. ValueError (nothing written) for a malformed ledger
     (`check_ledger`) or when an approver's valid answer cannot be written (inline comment on the line, a result over MAX_LEDGER_LINE or one that does not read back)."""
     from . import approvals
+    comment_rows = approvals.cached(comment_rows)  # every comment is parsed once for all the questions
     parsed = check_ledger(md)
     hours = assume_after_hours
     if hours is not None:

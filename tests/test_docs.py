@@ -2902,3 +2902,13 @@ def test_pr_bound_to_review_is_documented():
         assert "the step-2a `--check-committed` runs without `--base`" in doc
     assert "writes no ledger line (step 1a, `rule-unconfirmed`, `rule-changed`)" in wf
     assert "the other files of the diff" not in wf and "the content of files other than the ledger's review block" not in cfg
+
+
+def test_parse_once_and_size_cap_are_documented():
+    """F4 (P4-20 I-4): each comment is parsed once per run; a raw comment over the cap is never a command."""
+    cfg, log = _flat("docs/configuration.md"), _flat("CHANGELOG.md")
+    from ado import approvals
+    assert approvals.MAX_RAW_HTML == 1 << 18
+    assert "(F4, P4-20 I-4)" in cfg and "`approvals.MAX_RAW_HTML` (256 KiB" in cfg and "parsed for a command ONCE per run" in cfg and "never be an approval" in cfg
+    assert "(F4, P4-20 I-4)" in log and "`approvals.MAX_RAW_HTML` (256 KiB, counted in characters, not bytes" in log
+    assert "approves again in a short comment" in log and "must approve again in a short comment" in cfg and "counts characters, not bytes" in cfg

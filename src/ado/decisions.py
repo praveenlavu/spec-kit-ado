@@ -494,6 +494,7 @@ def sync(md, comment_rows, approvers, excluded, client, story_id):
     ids = [f"D{m.group(2)}" for ln in _visible(md)[0].splitlines() if (m := _CAND.match(ln))]
     if parsed["unparsed"] or len(ids) != len(set(ids)) or not all(re.fullmatch(r"D[0-9]{1,9}", i) for i in ids):  # ids are printed: ASCII digits only
         raise ValueError("the decisions file is malformed (a line that breaks the grammar, an unclosed fence or comment, or a repeated id); nothing written")
+    comment_rows = approvals.cached(comment_rows)  # every comment is parsed once for all the decisions
     rows, skip, edits = {str(c.get("id")): c for c in comment_rows}, {str(e).lower() for e in excluded}, {}
     index = posting_index(comment_rows)
     applied, skipped, status, bad_newer, blocked, out = [], {}, {}, {}, [], md

@@ -1070,6 +1070,7 @@ def _xc_hits(md, rows, approvers, excluded, client, story_id):
     ids = [f"D{m.group(2)}" for ln in dod._visible(md)[0].splitlines() if (m := decisions._CAND.match(ln))]
     if parsed["unparsed"] or len(ids) != len(set(ids)) or not all(re.fullmatch(r"D[0-9]{1,9}", i) for i in ids):
         return {"dropped": {0}}  # hidden or repeated lines: nothing else can be judged
+    rows = approvals.cached(rows)  # every comment is parsed once for all the decisions
     skip, byid, newest_post = {str(e).lower() for e in excluded}, {str(c.get("id")): c for c in rows}, {}
     index = decisions.posting_index(rows)
     for c in rows:  # every decisions comment of the story: its lines must still be in the file

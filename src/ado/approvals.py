@@ -15,6 +15,7 @@ from .stack import _clean
 
 KIT_MARKER = "[spec-kit-ado:"  # every comment the kit posts starts with one (questions, decisions, ...)
 MAX_HTML = 16384  # a command comment is tiny; more than this (after quotes are cut) is not parsed: `dod._text` is quadratic on long whitespace runs
+MAX_RAW_HTML = comments.MAX_KIT_TEXT  # 256 KiB, counted in characters (len of the str), not bytes: a raw comment over this is never read for a command (`_parse` -> `(None, "")`), before `strip_quotes` runs
 NOTE_CAP, ANSWER_CAP = 300, 500
 MAX_REVISION_PAGES = 50
 PERM_NAMESPACE, BYPASS_BIT, PERM_API = "52d39943-cb85-4d7f-8fa8-c6baac873819", 1048576, "7.1"  # R:17
@@ -203,6 +204,8 @@ def _parse(html):
     the word it names as its target, as typed ("" when there is none): the caller decides whether that line is about its target."""
     if not isinstance(html, str):
         return None, None
+    if len(html) > MAX_RAW_HTML:  # oversized: not a command from anyone (an approver's cannot approve), counted as a malformed line like the over-MAX_HTML case
+        return None, ""
     s = strip_quotes(html)
     if len(s) > MAX_HTML:
         return None, ""
@@ -233,6 +236,33 @@ def _parse(html):
     if note is not None and not text:
         return None, named
     return {"verb": verb, "target": target, "hash": hash_, "text": text}, None
+
+
+class Rows(list):
+    """A list of comment rows that remembers what `_parse` made of each one (`parsed`: id(row) -> (row, html, result)), so every comment is parsed ONCE per run
+    however many targets `newest` is asked about. Per run by construction (the cache lives on the list a caller got from one fetch, never in the module); a row whose
+    `html` is no longer the same string is parsed again. `cached` wraps a plain list, and a filtered copy shares the cache."""
+
+    def __init__(self, rows=(), parsed=None):
+        super().__init__(rows)
+        self.parsed = {} if parsed is None else parsed
+
+
+def cached(rows):
+    """`rows` as `Rows` (the same object when it already is one)."""
+    return rows if isinstance(rows, Rows) else Rows(rows)
+
+
+def _parsed(rows, c):
+    """`_parse(c["html"])`, once per row and html string for the `Rows` it comes from."""
+    html = c.get("html")
+    hit = getattr(rows, "parsed", {}).get(id(c))
+    if hit is not None and hit[0] is c and hit[1] is html:
+        return hit[2]
+    res = _parse(html)
+    if isinstance(rows, Rows):
+        rows.parsed[id(c)] = (c, html, res)
+    return res
 
 
 def parse_command(html):
@@ -348,7 +378,7 @@ def newest(client, story_id, comments, target, approvers, excluded, tally=None):
     wanted, found, bads = {str(a).lower() for a in approvers}, [], []
     skip = {str(e).lower() for e in excluded}
     for c in comments:
-        cmd, bad = _parse(c.get("html")) if isinstance(c, dict) else (None, None)
+        cmd, bad = _parsed(comments, c) if isinstance(c, dict) else (None, None)
         if bad is not None:
             count("bad")
             author = c["author"].lower() if isinstance(c.get("author"), str) else None
@@ -409,6 +439,7 @@ def _decide(client, trust_cfg, story_id, make_hashes, ci_identity=None):
     comment_mode_allowed(client)
     hashes = make_hashes()
     found, skip = _load(client, trust_cfg, story_id, ci_identity)
+    found = cached(found)
 
     def scan(rows):
         wins, bad = {}, 0
@@ -427,7 +458,7 @@ def _decide(client, trust_cfg, story_id, make_hashes, ci_identity=None):
         stale = best["verb"] == "approve" and not (None not in reqs and all(r < cut for r in reqs))
         if None not in reqs and all(r < cut for r in reqs):
             # a malformed approver line anywhere in the set newer than the winner: the comments newer than it are read again, so a line older than the approval is harmless
-            _, bad = scan([c for c in found if (k := _order(c)) is None or k > cut])
+            _, bad = scan(Rows([c for c in found if (k := _order(c)) is None or k > cut], found.parsed))
             if not bad:
                 return best["verb"], 0, hashes, found, skip, False
     return None, bad, hashes, found, skip, stale
@@ -453,7 +484,7 @@ def _load(client, trust_cfg, story_id, ci_identity=None):
     if truncated:
         raise ApprovalMissing(E_UNREADABLE)
     try:
-        return found, excluded(client, found, ci_identity)
+        return Rows(found), excluded(client, found, ci_identity)
     except ValueError:  # `questions._me` puts the client's error text into its message
         raise ApprovalMissing(E_IDENTITY) from None
 
@@ -571,6 +602,7 @@ def _wait_answers(client, story_id, trust_cfg, found, skip):
     guards) that is newer than the version that started to show it, with no newer malformed approver line, or until it is due (`assume_after_hours` by
     `client.server_now()`, counted from that version); a question that vanished from the current text is not answered by vanishing."""
     from . import questions
+    found = cached(found)
     marked = [c for c in found if comments.marked(c.get("text"), questions.MARKER)]
     if not marked:
         return [], 0
@@ -649,6 +681,7 @@ def _wait_validation(client, story_id, trust_cfg, found, skip, decisions_md=None
     tree's decisions file; it can only keep an id OPEN, never close one) a decision whose `posted:` marker is not its NEWEST posting, or whose line differs from
     what that posting shows, stays open too (`decisions.superseded` over `decisions.posting_index`, the rule `--sync` and the cross-check use): the approver answered other words."""
     from . import decisions, questions
+    found = cached(found)
     posts = {}  # D<n> -> the newest kit decisions comment that shows it
     marked = [c for c in found if comments.marked(c.get("text"), decisions.MARKER)]
     if not marked:
