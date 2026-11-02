@@ -12,7 +12,7 @@ import yaml
 WF_DIR = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 REUSABLE = ["ado-link-on-merge", "ado-gate", "ado-branch-guard"]
 SECRETFREE = ["ado-strict-verify"]  # V3-14b: reusable, but declares no secret at all
-ALL = REUSABLE + SECRETFREE + ["ci", "commit-lint"]
+ALL = REUSABLE + SECRETFREE + ["ci", "commit-lint", "speckit-contract"]
 UNTRUSTED = re.compile(
     r"\$\{\{[^}]*(github\.event\.pull_request\.(title|body|head\.ref)|github\.head_ref)[^}]*\}\}"
 )
@@ -1784,3 +1784,31 @@ def test_azure_an_unexpected_answer_of_the_history_check_is_refused(tmp_path, mo
     stub.chmod(0o755)
     rc, out, calls = _az_close(tmp_path, shell_flags)
     assert rc == 1 and "close refused" in out and not [c for c in calls if c.startswith("done 7")], out
+
+
+def test_speckit_contract_workflow_is_a_secret_free_weekly_canary():  # P4-15
+    wf = load("speckit-contract")
+    text = (WF_DIR / "speckit-contract.yml").read_text()
+    t = triggers(wf)
+    assert set(t) == {"schedule", "workflow_dispatch"} and re.fullmatch(r"\S+ \S+ \S+ \S+ \S+", t["schedule"][0]["cron"])
+    assert wf["permissions"] == {"contents": "read"}
+    assert "secrets." not in text and "github.token" not in text and "GH_TOKEN" not in text and "pull_request" not in text
+    job = wf["jobs"]["contract"]
+    rows = {r["speckit"]: r["ref"] for r in job["strategy"]["matrix"]["include"]}
+    assert set(rows) == {"minimum", "latest"} and job["strategy"]["fail-fast"] is False
+    assert rows["minimum"] == "9dca9bf42a031765ee5e5f2371137f2f26967e11"  # the commit ci.yml installs: v1.2.1, the supported floor
+    assert rows["minimum"] in (WF_DIR / "ci.yml").read_text() and rows["latest"] == ""
+    for step in steps(wf):  # every action pinned by commit sha, no credentials kept in the checkout
+        if "uses" in step:
+            assert re.fullmatch(r"actions/[a-z-]+@[0-9a-f]{40}", step["uses"]), step["uses"]
+    checkout = [s for s in steps(wf) if s.get("uses", "").startswith("actions/checkout@")]
+    assert checkout and checkout[0]["with"]["persist-credentials"] is False
+    # Spec Kit comes from an explicit sha or a validated release tag, never a branch; the matrix value reaches the shell through env only
+    resolve = next(s for s in steps(wf) if s.get("name") == "Resolve the Spec Kit ref")
+    assert resolve["env"] == {"REF": "${{ matrix.ref }}"} and "[0-9a-f]{40}" in resolve["run"]
+    install = next(s for s in steps(wf) if s.get("name") == "Install Spec Kit CLI")
+    assert "spec-kit.git@${SPECKIT_REF}" in install["run"] and "@main" not in text
+    run = next(s for s in steps(wf) if s.get("name") == "Run the contract tests")
+    assert run["env"] == {"SPECKIT_CONTRACT": "1"} and "tests/test_speckit_contract.py" in run["run"]
+    assert "| tee" in run["run"] and run["shell"] == "bash"  # bash brings pipefail: without it a failing pytest would show green behind `| tee`
+    assert any("skipped" in s.get("run", "") for s in steps(wf))  # an all-skipped run is a failure, not a pass

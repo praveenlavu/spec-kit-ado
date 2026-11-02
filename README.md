@@ -413,7 +413,7 @@ branch names is cut to one line with control characters replaced by spaces.
 - GitHub Actions reusable workflows: [docs/ci-github.md](docs/ci-github.md)
 - Azure Pipelines templates: [docs/ci-azure-pipelines.md](docs/ci-azure-pipelines.md)
 
-Configuration keys are listed in [docs/configuration.md](docs/configuration.md).
+Configuration keys are listed in [docs/configuration.md](docs/configuration.md). Spec Kit versions this kit was tried against: [docs/compatibility.md](docs/compatibility.md).
 
 ### CI secrets
 

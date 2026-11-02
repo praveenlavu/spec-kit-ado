@@ -162,9 +162,9 @@ The workflow is the same file in both modes:
   file that does not exist at all (nothing posted: nothing to sync). Every other refusal stops the run: a link, an oversized or non-UTF-8 decisions file, a missing or unreadable
   ledger, no approvers, a token that can bypass rules, comments cut off, an ADO error. `ado done`'s cross-check is the backstop for a decisions file nobody synced.
 - **`review_model`** needs nothing else: leave it empty for the integration's default.
-- **Spec Kit version.** `verdict_input` came with Spec Kit 0.15.1 (the retry/enum validation with 0.15.2); CI pins v1.2.1. **A Spec Kit older than 0.15.1 ignores the key**: the gate
+- **Spec Kit version.** `verdict_input` came with Spec Kit 0.15.1 (the retry/enum validation with 0.15.2), but comment mode needs **Spec Kit 1.2.1 or later**: on 0.15.1 `state.json` has no `inputs` or `execution`, so `ado status` shows no run and `ado approvals sync` refuses (fixed text), and a resume inside a loop re-runs the loop head (docs/compatibility.md has the results; CI pins v1.2.1). **A Spec Kit older than 0.15.1 ignores the key**: the gate
   stays paused, so a comment-mode poller resumes the run, the gate pauses again at the same step, and this repeats on every poll with no error. Use 1.2.1 or later for comment mode.
-  `requires.speckit_version` still says `>=0.9.0` (release preparation raises it); terminal runs work on older versions.
+  `requires.speckit_version` still says `>=0.9.0` (release preparation, P4-18, raises it to `>=1.2.1`); terminal runs work on older versions.
 - **Recovery.** A check that exits 2 ends the run FAILED at that check step; get the approver's comment, then `specify workflow resume <run id>` re-runs the check
   (the poller only resumes a run that is paused at a gate). A sync step that fails is fixed the same way. A killed run stays `running`: see the recovery
   list above. A persisted verdict whose apply refuses ends the run FAILED: start a new run.

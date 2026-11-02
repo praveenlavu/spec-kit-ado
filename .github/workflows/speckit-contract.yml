@@ -1,0 +1,63 @@
+name: speckit-contract
+
+# Weekly canary: do the Spec Kit workflow-engine behaviours this kit relies on still hold? Drives the real `specify` CLI (tests/test_speckit_contract.py,
+# SPECKIT_CONTRACT=1). No secrets, no ADO access, read-only token. Not part of the PR checks: a red run here means "read docs/compatibility.md", not "block a PR".
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # minimum: upstream v1.2.1, the supported floor for comment mode (the commit ci.yml installs; 0.15.1 has verdict_input but no `inputs` or
+          # `execution` in state.json, see docs/compatibility.md). latest: an empty ref, resolved below to the newest vX.Y.Z release tag (the one deliberately
+          # floating entry).
+          - speckit: minimum
+            ref: 9dca9bf42a031765ee5e5f2371137f2f26967e11
+          - speckit: latest
+            ref: ""
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+      - name: Install package + dev deps
+        run: pip install --quiet ".[dev]"
+      - name: Resolve the Spec Kit ref
+        env:
+          REF: ${{ matrix.ref }}
+        run: |
+          if [ -z "$REF" ]; then
+            REF=$(git ls-remote --tags --refs --sort=-v:refname https://github.com/github/spec-kit | sed -n 's|.*refs/tags/\(v[0-9]*\.[0-9]*\.[0-9]*\)$|\1|p' | head -n 1)
+          fi
+          if ! printf '%s' "$REF" | grep -Eq '^([0-9a-f]{40}|v[0-9]+\.[0-9]+\.[0-9]+)$'; then
+            echo "could not resolve a Spec Kit ref" >&2
+            exit 1
+          fi
+          echo "SPECKIT_REF=$REF" >> "$GITHUB_ENV"
+      - name: Install Spec Kit CLI
+        run: |
+          pip install --quiet "git+https://github.com/github/spec-kit.git@${SPECKIT_REF}"
+          specify --version
+      - name: Run the contract tests
+        shell: bash  # explicit: brings pipefail, so a failing pytest is not hidden by `| tee`
+        env:
+          SPECKIT_CONTRACT: "1"
+        run: pytest -q -rs tests/test_speckit_contract.py 2>&1 | tee "$RUNNER_TEMP/contract.log"
+      - name: Fail if any contract test was skipped
+        run: |
+          if grep -Eq '[0-9]+ skipped' "$RUNNER_TEMP/contract.log"; then
+            echo "contract tests were skipped" >&2
+            exit 1
+          fi

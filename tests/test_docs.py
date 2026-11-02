@@ -2655,7 +2655,7 @@ def test_workflow_wiring_is_documented():
                    "`check-review-plan`", "`check-review-review`", "`check-wait-po-answers`", "`sync-po-answers`", "`sync-po-validation`", "`check-wait-po-validation`",
                    "A verdict **only un-pauses**", "**The authority is the CLI.**", "**Terminal mode is unchanged, with or without approvers.**", "Spec Kit 0.15.1",
                    "`ado approvals check <id> --gate review-spec`", "`ado questions <id> --sync --if-comment-mode`", "`ado decisions <id> --sync --if-comment-mode`",
-                   "**A Spec Kit older than 0.15.1 ignores the key**", "pauses again at the same step", "with or without approvers", "even an admin PAT that can bypass rules changes nothing",
+                   "**A Spec Kit older than 0.15.1 ignores the key**", "pauses again at the same step", "needs **Spec Kit 1.2.1 or later**", "`>=1.2.1`", "with or without approvers", "even an admin PAT that can bypass rules changes nothing",
                    "only thing they skip is a decisions file that does not exist at all"):
         assert needle in wf, needle
     assert "swallow" not in wf and "in a later task of this version" not in _flat("docs/configuration.md")
@@ -2665,7 +2665,7 @@ def test_workflow_wiring_is_documented():
     for doc in ("workflows/ado-lifecycle/README.md", "commands/done.md", "rules/hitl.md"):  # no doc tells approvers-configured users to use --resolve
         assert "`ado decisions <id> --sync`" in _flat(doc), doc
     for doc in (log, wlog):
-        assert "older ignores `verdict_input`" in doc
+        assert "`verdict_input` exists from Spec Kit 0.15.1" in doc and "the poller and `ado status` need 1.2.1 or later" in doc and "`>=1.2.1`" in doc
     readme_txt, plan_txt = _flat("README.md"), _flat("commands/plan.md")
     assert "with approvers configured, `--resolve` is refused and `ado decisions <id> --sync` records the approvers' `/approve D<n>` and `/reject D<n>` comments" in readme_txt
     assert "with `approvers` configured `--resolve` is refused and `ado decisions <id> --sync` records the approvers' `/approve D<n>` and `/reject D<n>` comments" in plan_txt
@@ -2686,3 +2686,15 @@ def test_workflow_wiring_is_documented():
     assert "`/approve review-review <hash>`" in rev and "HEAD's full SHA" in rev and "`review_model`" in rev
     pr = _flat("commands/pr.md")
     assert "`wait-po-validation` gate is met by the approvers' `/approve D<n>` and `/reject D<n>` comments" in pr and "`ado decisions <id> --sync`" in pr
+
+
+def test_compatibility_matrix_is_documented():
+    """P4-15: the contract tests, the weekly workflow and the honest result rows are named."""
+    doc = _flat("docs/compatibility.md")
+    for needle in ("SPECKIT_CONTRACT=1", "tests/test_speckit_contract.py", "tests/fixtures/contract-workflow.yml", "`approvals.resume_argv`", "execution.version",
+                   ".github/workflows/speckit-contract.yml", "1.2.4.dev0", "**10 passed**", "**11 passed**", "9dca9bf4", "0.15.1", "489a3d51", "**6 failed, 4 passed.**", "no `inputs` and no `execution`",
+                   "re-runs the loop head", "supported floor for comment mode (the poller and `ado status`) is Spec Kit 1.2.1", "`>=1.2.1`", "P4-18", "1.2.5", "none of those is claimed",
+                   "test_a_saved_verdict_survives_a_plain_resume", "## Not tested"):
+        assert needle in doc, needle
+    assert "docs/compatibility.md" in _flat("README.md") and "compatibility.md" in _flat("docs/unattended.md")
+    assert "docs/compatibility.md" in _flat("CHANGELOG.md") and "tests/test_speckit_contract.py" in _flat("CHANGELOG.md")

@@ -6,7 +6,7 @@ residuals at the end.
 
 ## Spec Kit version
 
-The verdict inputs of the `ado-lifecycle` workflow rely on the gate's `verdict_input`, which Spec Kit has had since 0.15.1; this kit is tested with 1.2.1 and later. **A
+The verdict inputs of the `ado-lifecycle` workflow rely on the gate's `verdict_input`, which Spec Kit has had since 0.15.1. **Comment mode (the poller and `ado status`) needs Spec Kit 1.2.1 or later**: 0.15.1 honours `verdict_input`, but its `state.json` has no `inputs` or `execution`, so `ado status` finds no run and `ado approvals sync` refuses every run (a fixed refusal, nothing is resumed), and a resume inside a loop re-runs the loop head. 0.15.1 is the only version below 1.2.1 that was run; none between is claimed (what was actually run: [compatibility.md](compatibility.md)). **A
 Spec Kit older than 0.15.1 ignores `verdict_input`**: `ado approvals sync --resume` resumes the run, the gate pauses again at the same step, and this repeats on every
 poll with no error and no progress. Nothing is approved wrongly (the gate stays paused), but nothing moves either. If a run is paused at the same gate after several polls with
 an approval in place, check `specify --version`.
