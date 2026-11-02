@@ -14,15 +14,14 @@ workflow, which runs an Azure DevOps story from spec to an open pull request.
 
 It does **not** install the `ado` command-line program (the extension and the workflow's shell steps call it): install that
 from the same tag with `pipx`, step 1 below. The bundle, the extension, the workflow and the CLI are released together and
-carry the same version; mixing versions is not supported. Spec Kit 0.9.0 or later is declared and Python 3.9 or later is required (nothing below 1.2.1 was tried;
-comment-mode approvals and the unattended poller need Spec Kit 1.2.1 or later, see
-[docs/compatibility.md](../docs/compatibility.md)).
+carry the same version; mixing versions is not supported. Spec Kit 1.2.1 or later (the supported floor; nothing below it was tried, see
+[docs/compatibility.md](../docs/compatibility.md)) and Python 3.9 or later are required.
 
 **Status: unreleased.** 0.3.0 is the target release. It is not tagged, no `ado-0.3.0.zip` exists on any release, the
 repository is private, and there is no bundle catalog entry (no submission has been made). The URLs below start to work
 only after the owner publishes the release ([go-public checklist](../docs/catalog-submission.md#go-public-checklist)).
 Until then, from a checkout: `specify bundle build --path bundle --output <dir>` writes `ado-<bundle.yml version>.zip`,
-which is `ado-0.2.0.zip` today; after the release-prep version bump it writes `ado-0.3.0.zip`. The pinned components come from
+which is `ado-0.3.0.zip`. The pinned components come from
 the two catalogs below, which do not exist yet, so a build installs only where the extension and the workflow are already
 present: install those two first with `specify extension add --dev <path-to-spec-kit-ado>` and
 `specify workflow add --dev <path-to-spec-kit-ado>/workflows/ado-lifecycle`.

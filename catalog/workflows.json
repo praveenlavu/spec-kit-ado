@@ -1,26 +1,26 @@
 {
   "schema_version": "1.0",
-  "updated_at": "2026-10-29T00:00:00Z",
-  "catalog_url": "https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/workflows.json",
+  "updated_at": "2026-11-02T00:00:00Z",
+  "catalog_url": "https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/workflows.json",
   "workflows": {
     "ado-lifecycle": {
       "id": "ado-lifecycle",
       "name": "ADO story lifecycle",
       "description": "Azure DevOps story to an open PR: spec, plan, tasks, push, implement, gate, review, PR. Every board or PR change is preview, human gate, apply. The story closes after merge.",
       "author": "praveenlavu",
-      "version": "0.2.0",
-      "url": "https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/workflows/ado-lifecycle/workflow.yml",
+      "version": "0.3.0",
+      "url": "https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/workflows/ado-lifecycle/workflow.yml",
       "repository": "https://github.com/praveenlavu/spec-kit-ado",
       "license": "MIT",
       "requires": {
-        "speckit_version": ">=0.9.0",
+        "speckit_version": ">=1.2.1",
         "integrations": {
           "any": ["alquimia", "claude", "copilot", "gemini", "opencode"]
         }
       },
       "tags": ["azure-devops", "issue-tracking", "hitl", "workflow", "governance"],
       "created_at": "2026-10-29T00:00:00Z",
-      "updated_at": "2026-10-29T00:00:00Z"
+      "updated_at": "2026-11-02T00:00:00Z"
     }
   }
 }

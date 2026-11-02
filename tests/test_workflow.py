@@ -88,7 +88,7 @@ def test_versions_match():
     bundle = yaml.safe_load((ROOT / "bundle/bundle.yml").read_text(encoding="utf-8"))
     ext = yaml.safe_load((ROOT / "extension.yml").read_text(encoding="utf-8"))
     v = ado.__version__
-    assert wf["workflow"]["id"] == "ado-lifecycle" and wf["requires"]["speckit_version"] == ">=0.9.0"
+    assert wf["workflow"]["id"] == "ado-lifecycle" and wf["requires"]["speckit_version"] == ">=1.2.1"
     assert wf["workflow"]["version"] == bundle["bundle"]["version"] == ext["extension"]["version"] == v
     assert bundle["bundle"]["id"] == "ado" and bundle["bundle"]["role"] == "developer"
     assert bundle["provides"]["extensions"] == [{"id": "ado", "version": v}]
@@ -487,13 +487,13 @@ def test_workflow_docs_describe_stack_check(path):
 
 
 # ---- piece 3 (P3-11): business rules change prompts and docs, never the workflow ----
-BASE_WORKFLOW_SHA256 = "84d0647110bb0c69ca36ba434a8f60fb532cfed08fa17958a35ca4685c16a0de"  # workflow.yml at the P4-14 base, version line blanked; F7 then dropped "; F11 ruling" from one comment (no step, input or shell line)
+BASE_WORKFLOW_SHA256 = "b83660e69c37946537c37e518e5dd467f8a6c2cc51c0a3572fb12b1a4f9cdd73"  # workflow.yml at the P4-14 base, version and speckit_version lines blanked (R-1 raised the floor); F7 then dropped "; F11 ruling" from one comment (no step, input or shell line)
 
 
 def test_workflow_unchanged_by_rules():
     import hashlib
     raw = (ROOT / "workflows/ado-lifecycle/workflow.yml").read_bytes()
-    norm = re.sub(rb'(?m)^  version: "[^"]*"$', b'  version: "X"', raw)  # the release bump may change the version line, nothing else
+    norm = re.sub(rb'(?m)^  (version|speckit_version): "[^"]*"$', rb'  \1: "X"', raw)  # the release bump changes the version and floor lines, nothing else
     assert hashlib.sha256(norm).hexdigest() == BASE_WORKFLOW_SHA256, "workflow.yml changed: business rules add no step, input or shell line"
     # the step graph is the one before the rules: no step id, shell line, gate message or argument names a rule
     steps = _steps()

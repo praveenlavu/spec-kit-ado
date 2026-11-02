@@ -10,7 +10,7 @@ and a decisions file, and the process is only reported on. When you want more, [
 
 ## What you need
 
-- Python 3.9 or later, `git`, and [Spec Kit](https://github.com/github/spec-kit) 0.9.0 or later (`specify`).
+- Python 3.9 or later, `git`, and [Spec Kit](https://github.com/github/spec-kit) 1.2.1 or later (`specify`).
 - A Spec Kit project (a git repository where `specify init` has run) with an AI agent set up in it.
 - An Azure DevOps story with acceptance criteria, and its id. This page uses `1001`, in the organization `contoso` and the
   project `Fabrikam`: use your own.

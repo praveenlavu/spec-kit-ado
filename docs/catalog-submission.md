@@ -14,16 +14,6 @@ command-line program is a separate thing and has 26 top-level CLI verbs (`ado --
 `ado calibrate` are among them); those are not counted in the catalog entry. A doc test pins both numbers to
 `extension.yml` and `ado --help`.
 
-**Values that change at release prep (not done in this draft, which only mirrors the repository as it is today).**
-The code is still at the previous version until the release-prep task bumps it; everything below is written for 0.3.0. Before filing,
-the release-prep fixes must land and the values here must be re-copied from the then-current
-[extension.yml](../extension.yml): the version in `extension.yml`, `pyproject.toml`, the workflow, the bundle and both
-catalogs; the tool floor `ado >=0.3.0` (shown below, but `extension.yml` and `catalog/extensions.json`
-still carry the old floor); the Spec Kit floor, which is `>=0.9.0` here because that is what `extension.yml` says, and which is to
-be raised to the tested floor, 1.2.1, or tested lower (the three manifests and both catalogs must then carry the same
-string); the extension description, which is 106 characters here against the guide's "under 100"; and `documentation`
-links pinned to the tag.
-
 **Unverified in live runs (state these in Testing Details; do not claim them).**
 
 - What another user's edit or delete of a comment does to an approval (only the posting identity's authorship was proven live).
@@ -61,15 +51,15 @@ components from them. The release therefore carries two install-allowed catalogs
 | Extension ID | `ado` |
 | Extension Name | `Spec Kit for Azure DevOps — human-gated lifecycle` |
 | Version | `0.3.0` |
-| Description | `Run the full Spec Kit lifecycle from an ADO story back to Done, with human sign-off on every board change.` |
+| Description | `Azure DevOps story to Done through Spec Kit, with a human sign-off before every board change.` |
 | Author | `praveenlavu` |
 | Repository URL | `https://github.com/praveenlavu/spec-kit-ado` |
 | Download URL | `https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip` |
 | License | `MIT` |
 | Homepage | `https://github.com/praveenlavu/spec-kit-ado` |
-| Documentation URL | `https://github.com/praveenlavu/spec-kit-ado/blob/main/README.md` |
-| Changelog URL | `https://github.com/praveenlavu/spec-kit-ado/blob/main/CHANGELOG.md` |
-| Required Spec Kit Version | `>=0.9.0` |
+| Documentation URL | `https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.0/README.md` |
+| Changelog URL | `https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.0/CHANGELOG.md` |
+| Required Spec Kit Version | `>=1.2.1` |
 | Number of Commands | `13` |
 | Number of Hooks | `2` |
 | Tags | `azure-devops, issue-tracking, hitl, workflow, governance` |
@@ -155,17 +145,17 @@ specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/arc
   "ado": {
     "name": "Spec Kit for Azure DevOps — human-gated lifecycle",
     "id": "ado",
-    "description": "Run the full Spec Kit lifecycle from an ADO story back to Done, with human sign-off on every board change.",
+    "description": "Azure DevOps story to Done through Spec Kit, with a human sign-off before every board change.",
     "author": "praveenlavu",
     "version": "0.3.0",
     "download_url": "https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip",
     "repository": "https://github.com/praveenlavu/spec-kit-ado",
     "homepage": "https://github.com/praveenlavu/spec-kit-ado",
-    "documentation": "https://github.com/praveenlavu/spec-kit-ado/blob/main/README.md",
-    "changelog": "https://github.com/praveenlavu/spec-kit-ado/blob/main/CHANGELOG.md",
+    "documentation": "https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.0/README.md",
+    "changelog": "https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.0/CHANGELOG.md",
     "license": "MIT",
     "requires": {
-      "speckit_version": ">=0.9.0",
+      "speckit_version": ">=1.2.1",
       "tools": [
         { "name": "ado", "version": ">=0.3.0", "required": true },
         { "name": "git", "required": true },
@@ -211,7 +201,7 @@ keeping the `workflows` object sorted by ID.
 | Version | `0.3.0` |
 | Repository | `https://github.com/praveenlavu/spec-kit-ado` |
 | Workflow URL | `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/workflows/ado-lifecycle/workflow.yml` |
-| Documentation | `https://github.com/praveenlavu/spec-kit-ado/blob/main/workflows/ado-lifecycle/README.md` |
+| Documentation | `https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.0/workflows/ado-lifecycle/README.md` |
 
 **Catalog entry** — **TO CONFIRM** `created_at` / `updated_at` (release date). `requires`
 must equal the `requires` block of `workflow.yml`: a version-pinned install (as `specify bundle
@@ -228,7 +218,7 @@ install` does) rejects a downloaded workflow whose requirements differ from the 
   "repository": "https://github.com/praveenlavu/spec-kit-ado",
   "license": "MIT",
   "requires": {
-    "speckit_version": ">=0.9.0",
+    "speckit_version": ">=1.2.1",
     "integrations": {
       "any": ["alquimia", "claude", "copilot", "gemini", "opencode"]
     }
@@ -276,9 +266,9 @@ Its shell steps run the ado CLI from the same repository and tag; the README lis
 | Author | `praveenlavu` |
 | Repository URL | `https://github.com/praveenlavu/spec-kit-ado` |
 | Download URL | `https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.0/ado-0.3.0.zip` |
-| Documentation URL | `https://github.com/praveenlavu/spec-kit-ado/blob/main/bundle/README.md` |
+| Documentation URL | `https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.0/bundle/README.md` |
 | License | `MIT` |
-| Required Spec Kit Version | `>=0.9.0` |
+| Required Spec Kit Version | `>=1.2.1` |
 | Integration Target | _(leave empty; integration-agnostic)_ |
 | Tags | `azure-devops, issue-tracking, hitl, workflow, governance` |
 
@@ -381,7 +371,7 @@ specify workflow run ado-lifecycle -i story_id=1001
     "download_url": "https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.0/ado-0.3.0.zip",
     "repository": "https://github.com/praveenlavu/spec-kit-ado",
     "requires": {
-      "speckit_version": ">=0.9.0"
+      "speckit_version": ">=1.2.1"
     },
     "provides": {
       "extensions": 1,
@@ -414,11 +404,11 @@ changes something public (the tag push, making the repo public, the release, the
 Run everything as the `praveenlavu` identity (`gh auth switch -u praveenlavu` before, switch back after; commits use the
 GitHub no-reply address).
 
-0. **Release prep merged first** (separate tasks, one commit each, not part of this draft): the 0.3.0 version bump
-   everywhere including the `catalog/` files and the `@v0.3.0` / `/v0.3.0/` URLs, `ado >=0.3.0`, the Spec Kit floor decision,
-   the description length, the tag-pinned documentation links, the CHANGELOG date, an "Upgrading to 0.3.0" section, and the
-   [release checklist](release-checklist.md) (written, never run: it is run on hosted runners once Actions is unlocked, and its steps 1 to 5 come
-   before the commands below).
+0. **Release prep is merged**: the 0.3.0 version bump everywhere including the `catalog/` files and the `@v0.3.0` / `/v0.3.0/` URLs,
+   `ado >=0.3.0`, the Spec Kit floor `>=1.2.1`, the description under 100 characters, the tag-pinned documentation links and the
+   README's upgrade section. Then date the 0.3.0 headings of both changelogs and take the release candidate (checklist "Before you
+   start", item 3). The [release checklist](release-checklist.md) (written, never run: it is run on hosted runners once Actions is
+   unlocked, and its steps 1 to 5 come before the commands below).
 
 1. **Publish from a fresh repository, never from the old history.** `praveenlavu/spec-kit-ado` was already recreated as a
    private repository with one squashed commit (the older history is kept out of it on purpose and must not be published). The 0.3 work sits on top of that commit. Check what the flip would publish before anything else:
@@ -468,7 +458,8 @@ GitHub no-reply address).
 4. **Make the repository public** only after steps 1 to 3 pass. Then enable private vulnerability reporting, branch protection
    on `main` and secret scanning with push protection. Then a docs task after the flip: drop the "while private" text and the
    `TOOLKIT_READ_TOKEN` wording from the CI docs, and delete the "Status of the release: nothing is published yet" paragraph in
-   the README Quick start and the "Status: unreleased" paragraph in `bundle/README.md` (the install-command doc test pins the
+   the README Quick start, the "Status: unreleased" paragraph in `bundle/README.md` and the "0.3.0 is not tagged yet" paragraph in
+   `docs/quickstart.md` section 1 (the install-command doc test pins the
    words "not published", "private" and "no PyPI package", so edit that test in the same commit).
 
 5. **Create the GitHub release** `v0.3.0` with the zip and the checksums attached (the notes are the CHANGELOG 0.3.0 section):

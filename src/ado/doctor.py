@@ -15,7 +15,7 @@ from .client import AdoClient, AdoError, is_anonymous
 from .config import Config, ConfigError, ConfigInvalid
 
 GIT_FLOOR = (2, 24)  # `--end-of-options`
-SPECKIT_FLOOR = ">=0.9.0"  # used when the installed extension.yml cannot say; a test pins it to the repo's extension.yml
+SPECKIT_FLOOR = ">=1.2.1"  # used when the installed extension.yml cannot say; a test pins it to the repo's extension.yml
 TIMEOUT = 10  # seconds per git/specify call
 MAX_MANIFEST = 256 * 1024
 EXT_PATH = ".specify/extensions/ado/extension.yml"

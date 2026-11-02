@@ -25,8 +25,7 @@ SPECKIT_CONTRACT=1 .venv/bin/python -m pytest tests/test_speckit_contract.py -q
 
 ## Results
 
-**The supported floor for comment mode (the poller and `ado status`) is Spec Kit 1.2.1.** `requires.speckit_version` still says `>=0.9.0`; release prep
-raises it to `>=1.2.1` in `extension.yml`, `workflow.yml` and the bundle before 0.3.0 is tagged.
+**The supported floor for comment mode (the poller and `ado status`) is Spec Kit 1.2.1.** `requires.speckit_version` says `>=1.2.1` in `extension.yml`, `workflow.yml`, the bundle and both catalogs.
 
 | Spec Kit | How it was tried | Result |
 |---|---|---|

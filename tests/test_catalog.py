@@ -6,15 +6,16 @@ from pathlib import Path
 import yaml
 
 import ado
+from tests.conftest import CHANGELOG_030_HEADING, heading_030_index
 
 ROOT = Path(__file__).resolve().parent.parent
 V = ado.__version__
 REPO = "https://github.com/praveenlavu/spec-kit-ado"
 RAW = f"https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v{V}"
 # The submission pack is written for the release target; the code moves to it at release prep (no bump before).
-# Release prep must flip RELEASE_PREP_PENDING to False in the same commit that bumps every version to DOC_V:
-# the tests below then require the code, manifests, catalogs and the pack's tool floor to agree on DOC_V.
-RELEASE_PREP_PENDING = True
+# Release prep (R-1) flipped RELEASE_PREP_PENDING to False in the commit that bumped every version to DOC_V:
+# the tests below require the code, manifests, catalogs and the pack's tool floor to agree on DOC_V.
+RELEASE_PREP_PENDING = False
 PREV_V = "0.2.0"  # the only code version accepted while RELEASE_PREP_PENDING is True
 DOC_V = "0.3.0"
 DOC_RAW = f"https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v{DOC_V}"
@@ -35,7 +36,7 @@ def test_workflow_folder_has_readme_license_changelog():
     assert "story_id" in readme and "integration" in readme
     assert f"{REPO}/blob/main/README.md" in readme
     changelog = (wf_dir / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert re.findall(r"^## (\d+\.\d+\.\d+)", changelog, re.M) == [V, "0.1.1", "0.1.0"]
+    assert re.findall(r"^## (\d+\.\d+\.\d+)", changelog, re.M) == [V, "0.2.0", "0.1.1", "0.1.0"]
 
 
 def test_workflow_readme_names_every_gate():
@@ -165,3 +166,92 @@ def test_release_prep_state_is_consistent():
         assert set(versions.values()) == {DOC_V}, versions
         assert _manifest_floor() == f">={DOC_V}" and pack == _manifest_floor()
         assert PREV_V not in (ROOT / "bundle/README.md").read_text(encoding="utf-8")  # drop the "ado-0.2.0.zip today" sentence
+
+
+def test_release_floors_and_links_agree_everywhere():
+    """R-1: one Spec Kit floor (1.2.1) in every manifest, catalog, the pack and doctor; one short description; tag-pinned doc links."""
+    from ado import doctor
+    floor = ">=1.2.1"
+    assert doctor.SPECKIT_FLOOR == floor
+    assert _yaml("extension.yml")["requires"]["speckit_version"] == floor
+    assert _yaml("workflows/ado-lifecycle/workflow.yml")["requires"]["speckit_version"] == floor
+    assert _yaml("bundle/bundle.yml")["requires"]["speckit_version"] == floor
+    assert _json("catalog/extensions.json")["extensions"]["ado"]["requires"]["speckit_version"] == floor
+    assert _json("catalog/workflows.json")["workflows"]["ado-lifecycle"]["requires"]["speckit_version"] == floor
+    pack = (ROOT / "docs/catalog-submission.md").read_text(encoding="utf-8")
+    assert pack.count(f"| Required Spec Kit Version | `{floor}` |") == 2 and "0.9.0" not in pack
+    desc = _yaml("extension.yml")["extension"]["description"]
+    assert len(desc) < 100 and desc == _json("catalog/extensions.json")["extensions"]["ado"]["description"]
+    assert pack.count(desc) == 2  # the field table and the proposed catalog entry
+    entry = _json("catalog/extensions.json")["extensions"]["ado"]
+    assert entry["documentation"] == f"{REPO}/blob/v{V}/README.md" and entry["changelog"] == f"{REPO}/blob/v{V}/CHANGELOG.md"
+    assert "/blob/main/" not in pack
+
+
+def _flat(doc):
+    return " ".join((ROOT / doc).read_text(encoding="utf-8").split())
+
+
+def test_changelog_headings_are_unreleased_or_dated_and_the_dating_step_is_in_the_checklist():
+    """R-1: the date is set in the pre-RC step of docs/release-checklist.md; until then (and after) the pins accept both forms."""
+    for log in ("CHANGELOG.md", "workflows/ado-lifecycle/CHANGELOG.md"):
+        assert len(re.findall("^" + CHANGELOG_030_HEADING.pattern + "$", (ROOT / log).read_text(encoding="utf-8"), re.M)) == 1, log  # a line of its own, once
+    assert heading_030_index("x\n## 0.3.0 — unreleased\n") == 2 and heading_030_index("## 0.3.0 — 2026-11-09\n") == 0
+    for bad in ("## 0.3.0 — 2026-11-9", "## 0.3.0 — soon", "## 0.3.0 – unreleased", "## 0.3.1 — unreleased"):
+        assert not CHANGELOG_030_HEADING.search(bad), bad
+    chk = _flat("docs/release-checklist.md")
+    assert "**Date the 0.3.0 headings** before you pick `RC`" in chk and "`workflows/ado-lifecycle/CHANGELOG.md`" in chk
+    assert "set `updated_at` in `catalog/extensions.json` and `catalog/workflows.json` (the top level and the entry in each, four values)" in chk
+    assert "the tests accept both the `unreleased` and the dated heading" in chk
+
+
+def test_catalog_updated_at_is_a_valid_iso_date_and_follows_a_dated_heading():
+    import datetime
+    dates = set()
+    for path, kind, key in (("catalog/extensions.json", "extensions", "ado"), ("catalog/workflows.json", "workflows", "ado-lifecycle")):
+        cat = _json(path)
+        entry = cat[kind][key]
+        for value in (cat["updated_at"], entry["updated_at"]):
+            assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T00:00:00Z", value), (path, value)
+            dates.add(datetime.datetime.strptime(value, "%Y-%m-%dT00:00:00Z").date())
+        assert cat["updated_at"] == entry["updated_at"], path
+        assert datetime.datetime.strptime(entry["created_at"], "%Y-%m-%dT00:00:00Z").date() <= datetime.datetime.strptime(entry["updated_at"], "%Y-%m-%dT00:00:00Z").date()
+    assert len(dates) == 1, dates  # the four values are set together
+    for log in ("CHANGELOG.md", "workflows/ado-lifecycle/CHANGELOG.md"):
+        m = CHANGELOG_030_HEADING.search((ROOT / log).read_text(encoding="utf-8"))
+        if m.group(1) != "unreleased":  # after the pre-RC dating step the catalogs carry the same date
+            assert m.group(1) == dates.copy().pop().isoformat(), log
+
+
+def test_init_fallback_version_equals_pyproject():
+    """`ado.__version__` reads the installed metadata; the source-tree fallback must still agree with pyproject.toml."""
+    fallback = re.search(r'except PackageNotFoundError:.*\n\s+__version__ = "([^"]+)"', (ROOT / "src/ado/__init__.py").read_text(encoding="utf-8"))
+    pyproject = re.search(r'^version = "([^"]+)"', (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.M)
+    assert fallback and pyproject and fallback.group(1) == pyproject.group(1) == DOC_V
+
+
+def test_docs_carry_the_spec_kit_floor_and_the_v0_3_0_install_tags():
+    """R-1: every consumer doc names Spec Kit 1.2.1 and the v0.3.0 tag; none still installs the previous tag outside the upgrade history."""
+    floors = {"README.md": "Requires Spec Kit 1.2.1 or later",
+              "docs/quickstart.md": "[Spec Kit](https://github.com/github/spec-kit) 1.2.1 or later",
+              "docs/configuration.md": "`specify --version` is at least `>=1.2.1`",
+              "bundle/README.md": "Spec Kit 1.2.1 or later (the supported floor",
+              "workflows/ado-lifecycle/README.md": "Spec Kit `>=1.2.1` and a project initialized"}
+    for doc, needle in floors.items():
+        assert needle in _flat(doc), doc
+    assert "`ado --version` — required, `>= 0.3.0`" in _flat("commands/setup.md")
+    tags = {"AGENTS.md": ("@v0.3.0", 2), "commands/setup.md": ("@v0.3.0", 1), "docs/ci-github.md": ("v0.3.0", 2), "docs/ci-azure-pipelines.md": ("refs/tags/v0.3.0", 1),
+            "VERSIONING.md": ("@v0.3.0", 1), "workflows/ado-lifecycle/README.md": ("@v0.3.0", 1)}
+    for doc, (needle, n) in tags.items():
+        text = (ROOT / doc).read_text(encoding="utf-8")
+        assert text.count(needle) == n, (doc, needle)
+        assert "v0.2.0" not in text, doc
+    assert "archive/refs/tags/v0.3.0.zip" in (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+
+def test_post_flip_removal_list_names_the_quickstart_paragraph():
+    """R-1 M-3: docs/quickstart.md says 0.3.0 is not tagged yet; the post-flip removal lists must name it."""
+    assert "0.3.0 is not tagged yet" in _flat("docs/quickstart.md")
+    for doc in ("docs/release-checklist.md", "docs/catalog-submission.md"):
+        flat = _flat(doc)
+        assert '"0.3.0 is not tagged yet"' in flat and "`docs/quickstart.md`" in flat, doc

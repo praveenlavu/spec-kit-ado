@@ -28,8 +28,8 @@ Consider the user input before proceeding (for example, a kit to prefer, or "rec
 Run each and report a short table (tool, found version, required/optional):
 
 - `python3 --version` — required.
-- `ado --version` — required, `>= 0.2.0`. Missing → tell the user to install it
-  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0`) and stop.
+- `ado --version` — required, `>= 0.3.0`. Missing → tell the user to install it
+  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0`) and stop.
 - `git --version` — required. Missing → stop.
 - `gh --version` and `az --version` — optional; note which repo host each enables.
 

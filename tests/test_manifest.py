@@ -21,8 +21,8 @@ def test_manifest_fields():
     assert m["schema_version"] == "1.0"
     assert ext["id"] == "ado"
     assert ext["version"] == ado.__version__
-    assert m["requires"]["speckit_version"] == ">=0.9.0"
-    assert len(ext["description"]) < 200
+    assert m["requires"]["speckit_version"] == ">=1.2.1"
+    assert len(ext["description"]) < 100  # the Spec Kit publishing guide: "under 100 characters"
 
 
 def test_every_command_file_exists_and_name_matches_pattern():

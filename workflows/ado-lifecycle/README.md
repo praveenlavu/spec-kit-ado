@@ -166,7 +166,7 @@ The workflow is the same file in both modes:
 - **`review_model`** needs nothing else: leave it empty for the integration's default.
 - **Spec Kit version.** `verdict_input` came with Spec Kit 0.15.1 (the retry/enum validation with 0.15.2), but comment mode needs **Spec Kit 1.2.1 or later**: on 0.15.1 `state.json` has no `inputs` or `execution`, so `ado status` shows no run and `ado approvals sync` refuses (fixed text), and a resume inside a loop re-runs the loop head (docs/compatibility.md has the results; CI pins v1.2.1). **A Spec Kit older than 0.15.1 ignores the key**: the gate
   stays paused, so a comment-mode poller resumes the run, the gate pauses again at the same step, and this repeats on every poll with no error. Use 1.2.1 or later for comment mode.
-  `requires.speckit_version` still says `>=0.9.0` (release prep raises it to `>=1.2.1` before 0.3.0 is tagged); terminal runs work on older versions.
+  `requires.speckit_version` says `>=1.2.1`, the supported floor.
 - **Recovery.** A check that exits 2 ends the run FAILED at that check step; get the approver's comment, then `specify workflow resume <run id>` re-runs the check
   (the poller only resumes a run that is paused at a gate). A sync step that fails is fixed the same way. A killed run stays `running`: see the recovery
   list above. A persisted verdict whose apply refuses ends the run FAILED: start a new run.
@@ -174,10 +174,10 @@ The workflow is the same file in both modes:
 
 ## Requirements
 
-- Spec Kit `>=0.9.0` and a project initialized with any integration.
+- Spec Kit `>=1.2.1` and a project initialized with any integration.
 - The `ado` CLI 0.3.0 or later on `PATH` (the new steps need strict mode and `ado decisions --post --if-any`; with a 0.2.0 CLI
   `decisions-preview` fails on the unknown flag), and the extension, connected with `ado setup`
-  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0` installs the 0.2.0 release, which lacks them). The requirement 'CLI 0.3.0 or later' is satisfied once the release bump to 0.3.0 happens: the CLI reports 0.2.0 until then, although a build of the development branch already has every verb the workflow needs.
+  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0`).
 - `git`; `gh` only when the PR goes to GitHub.
 
 The shell steps run `ado` with your token and privileges. Read them in
@@ -189,7 +189,7 @@ Install it with the extension through the `ado` bundle (see the
 [bundle README](https://github.com/praveenlavu/spec-kit-ado/blob/main/bundle/README.md)), or on its own:
 
 ```bash
-specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/workflows.json --name ado
+specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/workflows.json --name ado
 specify workflow add ado-lifecycle
 ```
 

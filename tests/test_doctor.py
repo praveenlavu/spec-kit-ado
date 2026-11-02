@@ -81,10 +81,10 @@ def test_specify_below_floor_fails(env):
     repo, bindir = env
     ext = repo / ".specify" / "extensions" / "ado"
     ext.mkdir(parents=True)
-    (ext / "extension.yml").write_text('schema_version: "1.0"\nextension:\n  id: "ado"\n  version: "0.2.0"\nrequires:\n  speckit_version: ">=0.9.0"\n')
-    tool(bindir, "specify", "specify 0.8.9")
+    (ext / "extension.yml").write_text('schema_version: "1.0"\nextension:\n  id: "ado"\n  version: "0.3.0"\nrequires:\n  speckit_version: ">=1.2.1"\n')
+    tool(bindir, "specify", "specify 1.2.0")
     r, _ = run(repo)
-    assert r["specify"]["status"] == "fail" and "0.8.9" in r["specify"]["fix"] and "0.9.0" in r["specify"]["fix"]
+    assert r["specify"]["status"] == "fail" and "1.2.0" in r["specify"]["fix"] and "1.2.1" in r["specify"]["fix"]
     tool(bindir, "specify", "specify 1.2.4.dev0")
     assert run(repo)[0]["specify"]["status"] == "ok"
     tool(bindir, "specify", "SECRET-banner without a version")
@@ -257,11 +257,11 @@ def test_checkout_cannot_lower_the_specify_floor(env):
     ext = repo / ".specify" / "extensions" / "ado"
     ext.mkdir(parents=True)
     tool(bindir, "specify", "specify 0.1.0")
-    (ext / "extension.yml").write_text('extension:\n  version: "0.2.0"\nrequires:\n  speckit_version: ">=0.0.1"\n')
-    assert run(repo)[0]["specify"]["status"] == "fail"  # the built-in >=0.9.0 still applies
-    tool(bindir, "specify", "specify 0.9.5")
+    (ext / "extension.yml").write_text('extension:\n  version: "0.3.0"\nrequires:\n  speckit_version: ">=0.0.1"\n')
+    assert run(repo)[0]["specify"]["status"] == "fail"  # the built-in >=1.2.1 still applies
+    tool(bindir, "specify", "specify 1.2.1")
     assert run(repo)[0]["specify"]["status"] == "ok"
-    (ext / "extension.yml").write_text('extension:\n  version: "0.2.0"\nrequires:\n  speckit_version: ">=2.0.0"\n')
+    (ext / "extension.yml").write_text('extension:\n  version: "0.3.0"\nrequires:\n  speckit_version: ">=2.0.0"\n')
     assert run(repo)[0]["specify"]["status"] == "fail"  # a checkout can raise it
 
 
@@ -277,7 +277,7 @@ def test_workflow_cli_version_mismatch_fails(env):
     wf, ext = repo / ".specify" / "workflows" / "ado-lifecycle", repo / ".specify" / "extensions" / "ado"
     for d in (wf, ext):
         d.mkdir(parents=True)
-    (wf / "workflow.yml").write_text('schema_version: "1.0"\nworkflow:\n  id: "ado-lifecycle"\n  version: "9.9.9"\nrequires:\n  speckit_version: ">=0.9.0"\n')
+    (wf / "workflow.yml").write_text('schema_version: "1.0"\nworkflow:\n  id: "ado-lifecycle"\n  version: "9.9.9"\nrequires:\n  speckit_version: ">=1.2.1"\n')
     (ext / "extension.yml").write_text(f'schema_version: "1.0"\nextension:\n  id: "ado"\n  version: "{__version__}"\n')
     r, _ = run(repo)
     assert r["workflow"]["status"] == "fail" and "9.9.9" in r["workflow"]["fix"] and __version__ in r["workflow"]["fix"]

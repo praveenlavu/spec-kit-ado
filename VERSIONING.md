@@ -13,9 +13,8 @@
   (`...@v0`, `ref: refs/tags/v0`). It becomes `v1` at 1.0.0. Release tags never move.
 - **`v0` and breaking changes.** While the major version is 0, SemVer allows breaking changes in a minor release, and
   `v0` follows them (0.2.0 changed config keys and CI behaviour; see its Breaking notes in the CHANGELOG). A consumer who
-  needs stability pins an exact tag (`@v0.2.0`). Rollback: move `v0` back to the previous release tag
+  needs stability pins an exact tag (`@v0.3.0`). Rollback: move `v0` back to the previous release tag
   (`git tag -f v0 v0.1.1 && git push -f origin v0`); release tags themselves never move.
-- **Release checklist for 0.3.0.** Bump the version in `pyproject.toml`, `src/ado/__init__.py`, `extension.yml`, `workflows/ado-lifecycle/workflow.yml`, the bundle and the catalogs: the workflow README's 'CLI 0.3.0 or later' is satisfied once the release bump to 0.3.0 happens (the CLI reports 0.2.0 until then).
 - **No docs-only releases.** Changes that touch only documentation, comments or the
   changelog do not get a release or move `v0`; they sit under an `Unreleased` heading in
   [CHANGELOG.md](CHANGELOG.md) until the next behavioural release.

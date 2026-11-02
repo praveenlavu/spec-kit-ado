@@ -394,3 +394,13 @@ def speckit_repo(speckit_template, tmp_path, git_env):
     repo = tmp_path / "repo"
     shutil.copytree(speckit_template, repo, symlinks=True)
     return repo
+
+
+# The 0.3.0 CHANGELOG heading is `unreleased` until the pre-RC dating step of docs/release-checklist.md, then a date: pins accept both.
+CHANGELOG_030_HEADING = re.compile(r"## 0\.3\.0 — (unreleased|\d{4}-\d{2}-\d{2})(?![\w-])")  # not line-anchored: some pins search whitespace-flattened text
+
+
+def heading_030_index(text):
+    m = CHANGELOG_030_HEADING.search(text)
+    assert m, "no `## 0.3.0 — unreleased` or `## 0.3.0 — YYYY-MM-DD` heading"
+    return m.start()

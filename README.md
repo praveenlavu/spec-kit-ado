@@ -48,7 +48,7 @@ through PR review.
 
 ## Quick start
 
-Requires Spec Kit 0.9.0 or later (declared, but nothing below 1.2.1 was tried; comment mode and the unattended poller need 1.2.1 or later, see [docs/compatibility.md](docs/compatibility.md)), Python 3.9 or later, and `git`. `gh` is needed only
+Requires Spec Kit 1.2.1 or later (the supported floor; nothing below it was tried, see [docs/compatibility.md](docs/compatibility.md)), Python 3.9 or later, and `git`. `gh` is needed only
 to open PRs on GitHub.
 
 **Status of the release: nothing is published yet.** 0.3.0 is the target release and is not tagged, the repository is private, the release is not published,
@@ -143,9 +143,71 @@ yourself, or run `speckit.ado.pull` interactively. The workflow ends at the open
 Closing happens after merge: CI link-on-merge with `close-story: true` (`closeStory: true` on Azure Pipelines),
 or `speckit.ado.done` run by hand.
 
+## Upgrading from 0.2.0
+
+0.3.0 removes no command and renames no config key, and its new features are all opt-in. It does change behaviour for existing
+users, though, with or without any new config key: the [changelog](CHANGELOG.md) lists eighteen such changes under "Advisory-mode
+additions in 0.3.0" (read all of it), and "Changed" lists the strict-mode ones. The ones a 0.2.0 user is most likely to notice:
+
+- **Refusals instead of a pass** (exit 2, or 3 for `gate`, before anything is sent to Azure DevOps):
+  `ado attach` and `ado done` refuse a symlink, a file that is not a regular file and a file over 5 MiB, and `done` refuses a
+  symlinked or over-1-MiB ledger; `done`, the five applies (`questions --post`, `push`, `decisions --post`, `pr create`,
+  `branch --link`), `decisions --resolve`, `approvals`, and `questions` / `decisions --sync` read the target branch's config and
+  stop on an unreadable or invalid one, on a dangling `origin/HEAD`, on trust keys (`approvers`, `approval`, `unattended`) in the
+  working-tree config of a checkout without `origin/HEAD`, and on those keys in a config file that is not the repo-root
+  `ado.config.json` (`ADO_CONFIG`, `config-path`); `gate` exits 3 on an invalid target-branch config when `--base` is given;
+  `done --base REF` (new, and what the shipped CI close steps pass) exits 2 when REF is no commit here or names different
+  `approvers` than `origin/HEAD`; a trust key already in your config now has to be valid (0.2.0 ignored it); a decisions line
+  containing ` · via:` is now malformed; and `ado update --state <done_state>` is refused in strict mode (use `ado done`).
+- **Terminal-mode workflow runs and prompts stop earlier.** The workflow runs `approvals check` and the two `--sync --if-comment-mode`
+  steps in every mode, so a terminal-mode run on a checkout whose `origin/HEAD` dangles stops at its first `check-*` step; the
+  `speckit.ado.review` and `speckit.ado.pr` prompts run `ado pr create <id> --check-committed`, so a terminal user who runs either
+  outside the workflow stops there too.
+- **A comment and a commit you did not get before.** When a decisions file exists, the plan and implement prompts record decisions
+  and the workflow posts them behind a gate in every mode, so the product owner gets a `[spec-kit-ado:decisions]` comment; the review
+  step's one commit now also carries the spec directory, the decisions file and the story's rules files (the PR step's commit had them);
+  new ledgers get a sentence pointing at `Decisions_<id>.md`; `gate` and `done` add decisions fields, and `done` attaches the decisions
+  file when it exists (its plan renumbers a step and makes a second attachment request).
+- **Output and prompt text.** The usage text lists the new verbs and flags; `pr create --apply` on GitHub passes the PR body to `gh` on
+  stdin; `ado setup` shows an existing value of about 79 characters or more, a secret-looking one or one with non-ASCII characters
+  JSON-quoted or as "existing value, too long to show" instead of echoing it; text read from ADO is scrubbed in linear time, with over-long
+  addresses cut; `speckit.ado.status` starts with `ado status <id>` and `speckit.ado.setup` suggests `ado setup --profile starter`.
+
+**What is new, all opt-in.** New verbs: `doctor` (checks the setup and prints a fix per row), `status` (the stage and the next
+command), `approvals`, `decisions`, `strict`, `stack`, `kits`, `rules` and `calibrate`. Strict mode (`"mode": "strict"`), stack
+profiles and pinned kits, business rules, comment approvals (`"approval": "comment"` with `approvers`) and the unattended poller
+(`unattended`) do nothing until you configure them.
+
+**Floors.** Spec Kit 1.2.1 or later (the supported floor; 0.2.0 declared 0.9.0 and nothing below 1.2.1 was tried) and the `ado` CLI
+0.3.0 or later (the extension's commands call `status`, `doctor` and `--sync`). Python 3.9 or later, as before. With a Spec Kit older
+than 1.2.1, `specify extension add` refuses the 0.3.0 extension (the 0.2.0 one you have installed keeps running) and `ado doctor`
+shows `fail` on its `specify` row whatever extension is installed.
+
+Run `ado doctor` after upgrading. It covers part of the list above only: its `config-target` and `approvers` rows show an unreadable
+target-branch config or a dangling `origin/HEAD`, and `specify` shows the floor; it has no row for symlinked or oversized files,
+attachments or decisions lines, so those show up as the refusals described above.
+
+In each project:
+
+1. **CLI.** `pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0` (or
+   `uv tool install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0`), then check `ado --version`. Do this first:
+   the 0.3.0 extension requires `ado` 0.3.0 or later.
+2. **Spec Kit.** `specify --version` must be 1.2.1 or later; upgrade it first if not.
+3. **Extension.** `specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip`.
+4. **Workflow**, if you use it: `specify workflow remove ado-lifecycle`, then add it again (the bundle install above, or
+   `specify workflow add --dev <path-to-spec-kit-ado>/workflows/ado-lifecycle` from a v0.3.0 checkout). It has new steps, gates and
+   inputs: start new runs with it (resuming a run begun on 0.2.0 was not tried).
+5. **CI consumers.** `@v0` and `toolkit-ref: v0` follow the latest `v0.Y.Z` tag. To stay on a reviewed version, pin
+   `uses: praveenlavu/spec-kit-ado/.github/workflows/ado-gate.yml@v0.3.0` with `toolkit-ref: v0.3.0` (GitHub), or
+   `ref: refs/tags/v0.3.0` on the `spec-kit-ado` repository resource (Azure Pipelines). CI's `ADO_TOKEN` should be a service
+   identity that is not an approver and cannot bypass rules; see [docs/ci-github.md](docs/ci-github.md).
+6. **Config and ledgers.** Keep `ado.config.json` and your ledgers as they are; no refresh is needed. To use comment mode,
+   follow [docs/configuration.md](docs/configuration.md) and run the agent as a Contributor identity without the bypass-rules
+   permission, never as an approver.
+
 ## Upgrading from 0.1.1
 
-*History.* 0.2.0 was tagged only on the private repository and has not been released publicly, so the `@v0.2.0` URLs below do not resolve for anyone else yet. These steps are for 0.1.1 users of the old repository; a 0.3.0 upgrade section is written at release prep.
+*History.* 0.2.0 was tagged only on the private repository and has not been released publicly, so the `@v0.2.0` URLs below do not resolve for anyone else yet. These steps are for 0.1.1 users of the old repository; 0.2.0 users read the section above.
 
 0.2.0 changes behaviour for existing users: read the **Breaking** list in the [changelog](CHANGELOG.md) first.
 Then, in each project:

@@ -34,15 +34,15 @@ Hard rules (summary of `rules/hitl.md`):
 Run `ado --version`. If it is missing:
 
 ```bash
-pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0
+pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0
 ```
 
 If `pipx` is missing: `python3 -m pip install --user pipx && python3 -m pipx ensurepath`,
-then restart the shell. `uv tool install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0`
+then restart the shell. `uv tool install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0`
 works too.
 
 Check the extension is installed: `specify extension list` should show `ado`. If not:
-`specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.2.0.zip`.
+`specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip`.
 
 ## 2. Repo config check
 

@@ -4,6 +4,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.conftest import heading_030_index
+
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRED = [
     "README.md", "AGENTS.md", "CLAUDE.md", "CONTRIBUTING.md", "VERSIONING.md", "CHANGELOG.md",
@@ -578,6 +580,23 @@ def test_readme_has_upgrade_section_from_0_1_1():
         assert needle in text, needle
 
 
+def test_readme_has_upgrade_section_from_0_2_0():
+    """R-1: what changes for a 0.2.0 user, the floors, the honest 'nothing breaks unless', and the install lines at v0.3.0."""
+    raw = (ROOT / "README.md").read_text(encoding="utf-8")
+    assert "## Upgrading from 0.2.0" in raw and raw.index("## Upgrading from 0.2.0") < raw.index("## Upgrading from 0.1.1")
+    sec = " ".join(raw.split("## Upgrading from 0.2.0", 1)[1].split("\n## ", 1)[0].split())
+    for needle in ("Advisory-mode additions in 0.3.0", "eighteen such changes", "all opt-in", "`doctor`", "`status`", "Spec Kit 1.2.1 or later", "`ado` CLI 0.3.0 or later",
+                   "a symlink, a file that is not a regular file and a file over 5 MiB", "`done --base REF`", "(`ADO_CONFIG`, `config-path`)", "a dangling `origin/HEAD`",
+                   "terminal-mode run on a checkout whose `origin/HEAD` dangles stops at its first `check-*` step", "`ado pr create <id> --check-committed`", "` · via:`",
+                   "`[spec-kit-ado:decisions]` comment", "`specify extension add` refuses the 0.3.0 extension", "`config-target` and `approvers` rows", "no row for symlinked or oversized files",
+                   "`ado doctor` after upgrading", "pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0",
+                   "specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip", "toolkit-ref: v0.3.0",
+                   "without the bypass-rules permission, never as an approver"):
+        assert needle in sec, needle
+    assert "a 0.3.0 upgrade section is written at release prep" not in raw
+    assert "behaves as it did on 0.2.0" not in sec and "Nothing breaks unless" not in sec and "shows which of these applies" not in sec
+
+
 def test_changelog_breaking_lists_every_behaviour_change_for_existing_users():
     breaking = " ".join(_changelog_020("Breaking").split())
     for needle in ("acceptance criteria are now counted from the `### Acceptance Criteria` lines in ledger section 1",
@@ -711,7 +730,7 @@ def test_configuration_documents_mode_and_strict_keys():
     for needle in ("| `mode` |", "| `strict` |", "`strict.test_command`", "`strict.test_timeout`",
                    "`mode` must be `advisory` or `strict`"):
         assert needle in text, needle
-    assert "## 0.3.0 — unreleased" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    heading_030_index((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"))
 
 
 def test_configuration_documents_rules_object():
@@ -1241,10 +1260,12 @@ def test_test_command_examples_use_python3_and_the_runner_path_documented():
 
 
 def test_cli_version_requirement_and_release_bump_documented():
+    """R-1: the bump happened; no doc says the CLI still reports 0.2.0 or that a release step is to come."""
     for doc in ("workflows/ado-lifecycle/README.md", "VERSIONING.md"):
         text = _flat(doc)
-        assert "'CLI 0.3.0 or later' is satisfied once the release bump to 0.3.0 happens" in text, doc
-    assert "the CLI reports 0.2.0 until then" in _flat("workflows/ado-lifecycle/README.md")
+        assert "reports 0.2.0" not in text and "release bump" not in text and "Release checklist for 0.3.0" not in text, doc
+    wf = _flat("workflows/ado-lifecycle/README.md")
+    assert "The `ado` CLI 0.3.0 or later on `PATH`" in wf and "pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0" in wf
 
 
 def test_stack_detect_documented_read_only_with_fixed_texts():
@@ -1258,7 +1279,7 @@ def test_stack_detect_documented_read_only_with_fixed_texts():
         assert needle in docs, needle
     assert "`ado stack detect`" in _flat("AGENTS.md") and "`ado stack detect` (read-only, local" in _flat("rules/hitl.md")
     log = _flat("CHANGELOG.md")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack detect [--repo DIR]`") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`ado stack detect [--repo DIR]`") < log.index("## 0.2")
 
 
 def test_stack_detect_folding_incomplete_note_and_git_environment_documented():
@@ -1285,7 +1306,7 @@ def test_stack_init_documented_as_a_local_draft_write():
     assert "which needs the human's explicit yes: the agent passes the flag itself, so it must ask first" in _flat("rules/hitl.md")
     assert "the agent passes the flag itself, so it must ask first" in _flat("AGENTS.md") and "All three shipped seeds are researched drafts" in docs and "PLACEHOLDERS" not in docs and "`org_only`" in docs and "is kept on any failure" not in docs
     log = _flat("CHANGELOG.md")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack init (--from FILE | --seed NAME [--seed NAME ...] [--root R]) [--stack ID] [--apply] [--force]`") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`ado stack init (--from FILE | --seed NAME [--seed NAME ...] [--root R]) [--stack ID] [--apply] [--force]`") < log.index("## 0.2")
 
 
 def test_stack_show_documented_with_exposure_rules_and_tripwire_wording():
@@ -1305,7 +1326,7 @@ def test_stack_show_documented_with_exposure_rules_and_tripwire_wording():
     assert "`ado stack show`" in _flat("AGENTS.md") and "ado stack show [--json|--md] [--check]" in _flat("AGENTS.md")
     assert "`ado stack show` (read-only, local" in _flat("rules/hitl.md")
     log = _flat("CHANGELOG.md")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack show [--json|--md] [--check]`") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`ado stack show [--json|--md] [--check]`") < log.index("## 0.2")
 
 
 def test_stack_approve_documented_as_a_terminal_only_write_that_sets_the_test_command():
@@ -1326,7 +1347,7 @@ def test_stack_approve_documented_as_a_terminal_only_write_that_sets_the_test_co
     hitl = _flat("rules/hitl.md")
     assert "`ado stack approve --apply`) | ⛔ Human only" in hitl and "changes what strict CI runs" in hitl and "it is not a security boundary" in hitl
     log = _flat("CHANGELOG.md")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`ado stack approve [--story ID] [--by ROLE] [--apply]`") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`ado stack approve [--story ID] [--by ROLE] [--apply]`") < log.index("## 0.2")
 
 
 def test_the_approval_code_is_documented_honestly_for_approve_and_pin():
@@ -1466,7 +1487,7 @@ def test_kits_scan_documented_as_a_heuristic_aid_not_a_verdict():
                    "`\"unreadable\": true`", "`<relpath>:<line>`", "a heuristic aid for the human reviewer, not a security verdict", "a count of 0 proves nothing"):
         assert phrase in docs, phrase
     log = _flat("CHANGELOG.md")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`kits.scan(root, id)`") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`kits.scan(root, id)`") < log.index("## 0.2")
     assert "heuristic aid, not a security verdict" in log and "`unreadable: true`" in log
 
 
@@ -1485,7 +1506,7 @@ def test_kits_pin_documented_as_a_terminal_only_approval_record():
         assert "stdin and stdout" in text.lower() and "not a sandbox" in text or doc == "AGENTS.md", doc
     assert "never run it yourself" in _flat("AGENTS.md") and "Human only" in _flat("rules/hitl.md")
     log = _flat("CHANGELOG.md")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`kits.plan_pin`") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`kits.plan_pin`") < log.index("## 0.2")
     assert "not a sandbox" in log and "`<id>-config.yml` is not vetted" in log
 
 
@@ -1510,7 +1531,7 @@ def test_kit_rules_documented_with_what_ci_checks_and_what_is_local_only():
     readme = _flat("README.md")
     assert "**Kit rules**" in readme and "**What CI checks and what runs locally:**" in readme and "trust-introducing PR: review ado.kits.lock.json as code" in readme
     log = _flat("CHANGELOG.md")
-    assert log.index("## 0.3.0 — unreleased") < log.index("Strict kit rules") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("Strict kit rules") < log.index("## 0.2")
     assert "kits_trust_note" in log and "Process enforcement, not a security boundary" in log
     assert "never edit `ado.kits.lock.json` or a kit file to silence them" in _flat("AGENTS.md")
     for phrase in ("**only when the registry file exists**", "it cannot see an unpinned kit, nor an edit to an agent copy", "a symlinked `<id>-config.yml`",
@@ -1558,7 +1579,7 @@ def test_stack_command_documented_everywhere():
     assert "`speckit.ado.stack`" in _flat("rules/hitl.md") and ".ado/stack-draft.json" in _flat("rules/hitl.md")
     assert "`speckit.ado.stack`" in _flat("README.md")
     log = _flat("CHANGELOG.md")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`speckit.ado.stack`") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`speckit.ado.stack`") < log.index("## 0.2")
     assert "13 `speckit.ado.*` commands" in _flat("bundle/README.md") and "12 `speckit.ado" not in _flat("bundle/README.md")
 
 
@@ -2309,7 +2330,7 @@ def test_doctor_doc_pins():
     cfg, readme, agents = _flat("docs/configuration.md"), _flat("README.md"), _flat("AGENTS.md")
     assert "## Checking your setup" in (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
     log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert log.index("## 0.3.0 \u2014 unreleased") < log.index("`ado doctor [--json] [--probe-item ID]` (P4-2)") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`ado doctor [--json] [--probe-item ID]` (P4-2)") < log.index("## 0.2")
     for r in rows:
         assert f"`{r}`" in cfg and f"`{r}`" in readme
     assert "never shown as `ok`" in cfg and "`unknown` means" in readme and "anonymous `connectionData`" in readme
@@ -2323,7 +2344,7 @@ def test_status_doc_pins():
     cfg, readme, agents, hitl = _flat("docs/configuration.md"), _flat("README.md"), _flat("AGENTS.md"), _flat("rules/hitl.md")
     assert "## Where a story is" in (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
     log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`ado status ID [--json] [--offline] [--catch-up]` (P4-4)") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`ado status ID [--json] [--offline] [--catch-up]` (P4-4)") < log.index("## 0.2")
     for i in ids:
         assert f"`{i}`" in cfg and f"`{i}`" in readme, i
     assert "Story 1001: <stage>. Next: <command>" in readme and "`board not checked`" in cfg and "never `done`" in cfg
@@ -2339,7 +2360,7 @@ def test_status_doc_pins():
 def test_status_run_awareness_doc_pins():
     cfg, readme, agents, wfr, status_md = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "workflows/ado-lifecycle/README.md", "commands/status.md"))
     log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert log.index("## 0.3.0 — unreleased") < log.index("`ado status` run awareness and `--catch-up` (P4-5)") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`ado status` run awareness and `--catch-up` (P4-5)") < log.index("## 0.2")
     for t in (cfg, readme):
         for needle in ("specify workflow resume <run-id>", "`output`", "`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`", "<loop>:<step>:<n>", "**server's**", "never read or printed",
                        "not readable by this ado version; use specify workflow status", "`--catch-up` prints", "fixed templates"):
@@ -2444,7 +2465,7 @@ def test_quickstart_step_order_matches_the_status_stages():
 def test_trust_keys_doc_pins():
     cfg, readme, agents, hitl, glossary = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "docs/glossary.md"))
     log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert log.index("## 0.3.0 \u2014 unreleased") < log.index("(P4-7a)") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("(P4-7a)") < log.index("## 0.2")
     for needle in ("| `approvers` | list of strings | `[]` |", "| `approval` |", "| `unattended` |", "`assume_after_hours`", "`approval_requests`",
                    "0 to 20", "the anonymous identity", "a duplicate is rejected", "Read only from the target branch", "`config.trusted(repo, base)`",
                    "set origin/HEAD or pass --base", "`Trust(approvers, approval, unattended)`", "not a plain ref name", "a `warn` row would not change the exit code", "### Approvers and comment mode: the recommended setup",
@@ -2699,7 +2720,7 @@ def test_compatibility_matrix_is_documented():
     doc = _flat("docs/compatibility.md")
     for needle in ("SPECKIT_CONTRACT=1", "tests/test_speckit_contract.py", "tests/fixtures/contract-workflow.yml", "`approvals.resume_argv`", "execution.version",
                    ".github/workflows/speckit-contract.yml", "1.2.4.dev0", "**10 passed**", "**11 passed**", "9dca9bf4", "0.15.1", "489a3d51", "**6 failed, 4 passed.**", "no `inputs` and no `execution`",
-                   "re-runs the loop head", "supported floor for comment mode (the poller and `ado status`) is Spec Kit 1.2.1", "`>=1.2.1`", "release prep", "1.2.5", "none of those is claimed",
+                   "re-runs the loop head", "supported floor for comment mode (the poller and `ado status`) is Spec Kit 1.2.1", "`>=1.2.1`", "1.2.5", "none of those is claimed",
                    "test_a_saved_verdict_survives_a_plain_resume", "## Not tested"):
         assert needle in doc, needle
     assert "docs/compatibility.md" in _flat("README.md") and "compatibility.md" in _flat("docs/unattended.md")
@@ -2718,7 +2739,7 @@ def test_calibrate_doc_pins():
     assert "`soft_pass`" in agents and "`soft_pass`" in _flat("CHANGELOG.md")
     assert "ado calibrate --emit .ado/calibrate.md | --score .ado/answer.json" in agents and "you never edit `src/ado/golden/fidelity.json`" in agents
     log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert log.index("## 0.3.0 \u2014 unreleased") < log.index("`ado calibrate (--emit PATH | --score FILE)` (P4-16, D\u00a74.6)") < log.index("## 0.2")
+    assert heading_030_index(log) < log.index("`ado calibrate (--emit PATH | --score FILE)` (P4-16, D\u00a74.6)") < log.index("## 0.2")
 
 
 # ---- P4-17: Azure-only positioning, tracker boundary, install commands, submission pack ----
@@ -3052,11 +3073,12 @@ def test_f7_ci_token_identity_and_checklist_expectations():
     assert "`decisions-xcheck-unreachable` in (f) instead of `-marker` means it can bypass" in chk and "On Azure the `ADO_TOKEN` is the build service identity" in chk
 
 
-def test_f7_release_prep_floor_wording_is_not_a_finished_task():
-    """F7 (C I-3): the floor is raised by release prep before the tag, not by a task that already shipped."""
+def test_f7_release_prep_floor_wording_is_the_final_state():
+    """R-1 (C I-3): the floor is raised; the docs say what is (the supported floor is 1.2.1), not what release prep will do."""
     comp, wf = _flat("docs/compatibility.md"), _flat("workflows/ado-lifecycle/README.md")
-    assert "release prep raises it to `>=1.2.1` in `extension.yml`, `workflow.yml` and the bundle before 0.3.0 is tagged" in comp
-    assert "(release prep raises it to `>=1.2.1` before 0.3.0 is tagged)" in wf
+    assert "`requires.speckit_version` says `>=1.2.1` in `extension.yml`, `workflow.yml`, the bundle and both catalogs" in comp
+    assert "`requires.speckit_version` says `>=1.2.1`, the supported floor." in wf
+    assert "release prep" not in comp and "release prep" not in wf and "still says `>=0.9.0`" not in comp + wf
     assert "P4-18" not in comp and "P4-18" not in wf and "raises the Spec Kit floor" not in comp
 
 

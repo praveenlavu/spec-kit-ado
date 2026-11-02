@@ -353,7 +353,7 @@ an email or a config value (a config error names the key by position).
 | Row | `ok` when | Otherwise |
 |---|---|---|
 | `git` | git 2.24 or newer | `fail` if older or missing |
-| `specify` | `specify --version` is at least `>=0.9.0` and at least `requires.speckit_version` of the installed `.specify/extensions/ado/extension.yml` (a checkout can raise the floor, never lower it) | `warn` if not installed, `fail` if older |
+| `specify` | `specify --version` is at least `>=1.2.1` and at least `requires.speckit_version` of the installed `.specify/extensions/ado/extension.yml` (a checkout can raise the floor, never lower it) | `warn` if not installed, `fail` if older |
 | `shallow` | the clone is complete | `fail`: run `git fetch --unshallow` |
 | `config` | `ado.config.json` validates | `fail`, naming the key |
 | `config-target` | the target branch's (`origin/HEAD`) `ado.config.json` validates | `fail` if unreadable or invalid, `warn` if absent, `unknown` without `origin/HEAD` |

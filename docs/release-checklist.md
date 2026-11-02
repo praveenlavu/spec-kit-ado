@@ -34,8 +34,12 @@ All of these must be true. If one is not, stop: the later steps would prove noth
    run on the 3.13 leg. Both legs check out the full history and set `ADO_REQUIRE_BASELINE=1`, so a missing baseline commit makes the byte-identity
    tests fail instead of skipping: **a green leg means they ran**. Step 1 is what shows both legs green on a hosted runner; nothing is tagged
    before that.
-3. **The release-prep task has merged**: version 0.3.0 everywhere, the catalog files, the CHANGELOG date. This checklist does not do that.
-   `git show origin/main:extension.yml | grep 'version: "0.3.0"'` prints the line.
+3. **The release-prep task has merged**: version 0.3.0 everywhere and the catalog files. This checklist does not do that.
+   `git show origin/main:extension.yml | grep 'version: "0.3.0"'` prints the line. **Date the 0.3.0 headings** before you pick `RC`:
+   `CHANGELOG.md` and `workflows/ado-lifecycle/CHANGELOG.md` say `## 0.3.0 — unreleased`; replace `unreleased` with the release date
+   (`## 0.3.0 — YYYY-MM-DD`) and set `updated_at` in `catalog/extensions.json` and `catalog/workflows.json` (the top level and the entry in each,
+   four values) to the same date (`YYYY-MM-DDT00:00:00Z`); commit that to `main`, and only then take `RC` (the date is part of the release candidate;
+   the tests accept both the `unreleased` and the dated heading).
 4. **The contract canary** (`speckit-contract.yml`) has a green run on the minimum and the latest Spec Kit for this `RC`. Step 2 does that run.
 5. **The go-public audit** is done, and the scrub check passes with the real denylist on the full history:
    `python3 scripts/scrub_check.py --require-denylist --history` exits 0. The denylist is never printed or pasted anywhere.
@@ -331,6 +335,10 @@ gh repo view praveenlavu/spec-kit-ado --json visibility --jq .visibility
 ```
 
 *Expected:* the second command prints `PUBLIC`. *Rollback:* [Global rollback](#global-rollback), "Making the repository private again".
+
+*After the flip* (one docs commit): remove the text that says nothing is published: the README "Status of the release" paragraph, the
+"Status: unreleased" paragraph of `bundle/README.md`, the "0.3.0 is not tagged yet" paragraph in `docs/quickstart.md` section 1 (it ships to
+consumers) and the DRAFT banner of `docs/catalog-submission.md`, and drop the "while private" / `TOOLKIT_READ_TOKEN` wording from the CI docs.
 
 **6.5 Re-run the (c) and (d) strict-verify legs through the shipped file.** Who: Controller, after 6.4. The consumer's `strict-verify` job now calls the real
 reusable workflow with no vendored copy and no token: `uses: praveenlavu/spec-kit-ado/.github/workflows/ado-strict-verify.yml@<RC>` with
