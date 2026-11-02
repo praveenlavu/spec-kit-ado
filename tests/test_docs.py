@@ -1054,15 +1054,17 @@ def test_prompts_strict_rules_and_workflow_wiring_documented():
             "behind a gate: never run `ado decisions <id> --post` yourself.") in plan
     assert "In strict mode only, a choice the change makes that neither the story, an answered `Q<n>` nor a `D<n>` line in `Decisions_<id>.md` settles" in rev
     assert "`unrecorded decision`" in rev and "`ado decisions <id>` (read-only;" in rev and "advisory mode: skip it silently" in rev
-    assert ("In the workflow the last gate, `wait-po-validation`, is where you wait for the product owner's verdicts: a human records each with "
-            "`ado decisions <id> --resolve` in their own terminal, then this command runs; `ado done` refuses while any decision is open.") in done
+    assert ("In the workflow the last gate, `wait-po-validation`, is where you wait for the product owner's verdicts: in terminal mode a human "
+            "records each with `ado decisions <id> --resolve` in their own terminal (in comment mode the workflow's next step records the approvers' comments with "
+            "`ado decisions <id> --sync`), then this command runs; `ado done` refuses while any decision is open.") in done
     assert "In strict mode run `ado strict check <id> --phase pr`" in _flat("commands/pr.md")  # already there since V3-12: pinned, not duplicated
     assert "the gate take a strict `ado.config.json` from the target branch instead of the PR's" in _flat("commands/gate.md")
     wf, readme = _flat("workflows/ado-lifecycle/README.md"), _flat("README.md")
     for step in ("strict-check-implement", "decisions-loop", "approve-decisions", "strict-verify", "wait-po-validation"):
         assert f"`{step}`" in wf and f"`{step}`" in readme, step
     assert "`ado decisions <id> --post --if-any`" in wf and "timeout: 7200" in wf and "300 s" in wf
-    assert "`ado decisions <id> --resolve` and commit and push the resolved lines to the PR branch before the merge" in wf
+    assert "`ado decisions <id> --resolve`; in comment mode (approvers configured, `--resolve` refused)" in wf
+    assert "Either way commit and push the resolved lines to the PR branch before the merge" in wf
     assert "In strict mode `ado done` refuses while any is open" in wf and "if nothing was posted just approve" in wf
     assert "does not re-run `decisions-loop`" in wf and "post them by hand first" in wf
     assert "The `ado` CLI 0.3.0 or later" in wf and "0.2.0 CLI" in wf
@@ -2644,3 +2646,43 @@ def test_poller_is_documented():
     assert "the only kit write without a preview and a gate" in hitl and "docs/unattended.md" in hitl and "ADO_TOKEN" not in un.replace("`ADO_TOKEN` or", "")
     assert "(P4-13, D§4.2)" in log and "approvals.post_request" in log and "approvals.resume_argv" in log and "start a new run" in log
     assert "poller (P4-13) must" not in cfg and "the poller comes with a later task" not in cfg
+
+
+def test_workflow_wiring_is_documented():
+    """P4-14: the verdict inputs, the five checks, the two sync steps, the swallowed refusal, review_model and the comment-mode notes of the four prompts."""
+    wf, log, wlog = (_flat(n) for n in ("workflows/ado-lifecycle/README.md", "CHANGELOG.md", "workflows/ado-lifecycle/CHANGELOG.md"))
+    for needle in ("`verdict_<gate>`", "`verdict_review_spec`", "`verdict_wait_po_validation`", "**one `--input` per pair**", "`review_model`", "`check-review-spec`",
+                   "`check-review-plan`", "`check-review-review`", "`check-wait-po-answers`", "`sync-po-answers`", "`sync-po-validation`", "`check-wait-po-validation`",
+                   "A verdict **only un-pauses**", "**The authority is the CLI.**", "**Terminal mode is unchanged, with or without approvers.**", "Spec Kit 0.15.1",
+                   "`ado approvals check <id> --gate review-spec`", "`ado questions <id> --sync --if-comment-mode`", "`ado decisions <id> --sync --if-comment-mode`",
+                   "**A Spec Kit older than 0.15.1 ignores the key**", "pauses again at the same step", "with or without approvers", "even an admin PAT that can bypass rules changes nothing",
+                   "only thing they skip is a decisions file that does not exist at all"):
+        assert needle in wf, needle
+    assert "swallow" not in wf and "in a later task of this version" not in _flat("docs/configuration.md")
+    assert "`--if-comment-mode`" in _flat("README.md") and "--sync --if-comment-mode`" in _flat("docs/configuration.md") and "`--if-comment-mode`" in log
+    un = _flat("docs/unattended.md")
+    assert "A Spec Kit older than 0.15.1 ignores `verdict_input`" in un and "same step" in un and "no error" in un
+    for doc in ("workflows/ado-lifecycle/README.md", "commands/done.md", "rules/hitl.md"):  # no doc tells approvers-configured users to use --resolve
+        assert "`ado decisions <id> --sync`" in _flat(doc), doc
+    for doc in (log, wlog):
+        assert "older ignores `verdict_input`" in doc
+    readme_txt, plan_txt = _flat("README.md"), _flat("commands/plan.md")
+    assert "with approvers configured, `--resolve` is refused and `ado decisions <id> --sync` records the approvers' `/approve D<n>` and `/reject D<n>` comments" in readme_txt
+    assert "with `approvers` configured `--resolve` is refused and `ado decisions <id> --sync` records the approvers' `/approve D<n>` and `/reject D<n>` comments" in plan_txt
+    assert "terminal mode only) or, with `approvers` configured, the approvers' comments recorded by `ado decisions <id> --sync`" in plan_txt
+    assert "a human records each with `ado decisions <id> --resolve` and must commit" not in readme_txt
+    assert "the wiring task of this version" not in wf
+    for doc in (log, wlog):
+        for needle in ("P4-14", "`verdict_<gate>`", "`review_model`", "`sync-po-answers`", "`check-wait-po-validation`", "Spec Kit 0.15.1"):
+            assert needle in doc, needle
+    assert "`status.SHIPPED_STEPS` lists the seven new step ids" in log
+    for name in ("plan", "implement", "review", "pr"):
+        text = _flat(f"commands/{name}.md")
+        assert "Comment mode (`approval: \"comment\"` on the target branch)" in text, name
+    assert "never run `ado approvals sync`" in _flat("commands/plan.md") and "`ado questions <id> --sync`" in _flat("commands/plan.md")
+    assert "`/approve approve-decisions <hash>` / `approve-sync <hash>`" in _flat("commands/implement.md")
+    assert "`verdict_*` input" in _flat("commands/implement.md") and "`verdict_*` input" in _flat("commands/pr.md") and "`verdict_*` input" in _flat("commands/plan.md")
+    rev = _flat("commands/review.md")
+    assert "`/approve review-review <hash>`" in rev and "HEAD's full SHA" in rev and "`review_model`" in rev
+    pr = _flat("commands/pr.md")
+    assert "`wait-po-validation` gate is met by the approvers' `/approve D<n>` and `/reject D<n>` comments" in pr and "`ado decisions <id> --sync`" in pr

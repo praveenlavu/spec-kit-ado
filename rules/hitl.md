@@ -90,8 +90,8 @@ identity, a kit posting identity, a non-approver, an edited comment or one carry
   `decisions-loop` after `implement`, with the gate `approve-decisions`. `strict-check-implement` and `strict-verify` are
   read-only or local steps (no gate: `ado strict verify` writes only the verification record into the ledger) and no-ops in an
   advisory project; `decisions-loop` is a no-op when there is no decisions file; when there is one the post happens in every mode, behind the gate. The last gate, `wait-po-validation`, comes after the PR loop: the PO answers in the
-  story's comment thread, a human records each verdict with `ado decisions <id> --resolve` in their own terminal (never an
-  agent) and must commit and push the resolved lines to the PR branch before the merge; in strict mode `ado done` refuses while any decision is open.
+  story's comment thread; in terminal mode a human records each verdict with `ado decisions <id> --resolve` in their own terminal (never an
+  agent), in comment mode the approvers' `/approve D<n>` and `/reject D<n>` comments are recorded by `ado decisions <id> --sync`, and either way you must commit and push the resolved lines to the PR branch before the merge; in strict mode `ado done` refuses while any decision is open.
 
 ## Three layers of enforcement
 

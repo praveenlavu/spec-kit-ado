@@ -33,13 +33,14 @@ RUN_IGNORED = "Run: {n} run file(s) ignored (oversized, a symlink or not valid J
 RUN_TRUNCATED = "Run: older runs not examined (more than 2000 run directories); use specify workflow status"
 _LOOP_N = re.compile(r"[0-9]{1,6}")  # ASCII digits only (R:33: nested loop steps are `<loop>:<step>:<n>`)
 SHIPPED_STEPS = (
-    "pull", "stack-check", "review-spec", "questions-loop", "questions-preview", "approve-questions", "questions-apply", "questions-applied", "plan",
+    "pull", "stack-check", "review-spec", "check-review-spec", "questions-loop", "questions-preview", "approve-questions", "questions-apply", "questions-applied", "plan",
     "plan-questions-loop", "plan-questions-preview", "approve-plan-questions", "plan-questions-apply", "plan-questions-applied", "wait-po-answers",
-    "plan-with-answers", "answers-questions-loop", "answers-questions-preview", "approve-answers-questions", "answers-questions-apply",
-    "answers-questions-applied", "review-plan", "tasks", "push-loop", "push-preview", "approve-push", "push-apply", "push-applied",
+    "check-wait-po-answers", "sync-po-answers", "plan-with-answers", "answers-questions-loop", "answers-questions-preview", "approve-answers-questions", "answers-questions-apply",
+    "answers-questions-applied", "review-plan", "check-review-plan", "tasks", "push-loop", "push-preview", "approve-push", "push-apply", "push-applied",
     "strict-check-implement", "implement", "decisions-loop", "decisions-preview", "approve-decisions", "decisions-apply", "decisions-applied",
     "strict-verify", "sync-loop", "sync-preview", "approve-sync", "sync-apply", "sync-applied", "gate", "gate-check", "refresh-context", "review",
-    "review-review", "pr-clear", "pr-prepare", "pr-loop", "pr-preview", "approve-pr", "pr-apply", "pr-applied", "wait-po-validation",
+    "review-review", "check-review-review", "pr-clear", "pr-prepare", "pr-loop", "pr-preview", "approve-pr", "pr-apply", "pr-applied", "wait-po-validation",
+    "sync-po-validation", "check-wait-po-validation",
 )
 SHIPPED_GATES = (
     "review-spec", "approve-questions", "approve-plan-questions", "wait-po-answers", "approve-answers-questions", "review-plan", "approve-push",

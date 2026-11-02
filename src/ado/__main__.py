@@ -499,13 +499,22 @@ def _sync_questions(client, args):
     return {"id": args.id, **report, **({"notice": notice} if notice else {})}
 
 
+E_NOT_COMMENT_MODE = "terminal mode (`approval` is not \"comment\" on the target branch): nothing to sync"
+E_NO_DECISIONS_FILE = "there is no decisions file for this story: nothing to sync"
+
+
+def _comment_mode(trust):
+    """True when the TARGET branch's `approval` is "comment": the one condition `approvals check` and the `--if-comment-mode` sync steps share."""
+    return trust.approval == "comment"
+
+
 def _approvals_check(args):
     """`approvals check ID --gate G` (P4-12b): terminal mode is a no-op that reads nothing from ADO (not even a token); comment mode needs the approvers' comments
     (`approvals.check`). Exit 2 with a fixed text when the gate is unknown, not checkable here or not met."""
     if args.gate not in approvals.GATES:
         raise ValueError(approvals.E_GATE)
     trust = trusted(".")
-    if trust.approval != "comment":
+    if not _comment_mode(trust):
         return approvals.check(None, trust, args.id, args.gate, None)
     client = AdoClient(_config(args))
     return approvals.check(client, trust, args.id, args.gate, client.config)
@@ -851,6 +860,8 @@ def main(argv=None):
                    help="with --apply: refuse (exit 2) unless the plan re-renders identical to this approved file")
     p.add_argument("--sync", action="store_true", help="record the approvers' `/answer Q<n>: text` comments of the story as the PO's answers in the "
                    "ledger and list the questions due under unattended.assume_after_hours (a local write, no ADO write; needs approvers on the target branch)")
+    p.add_argument("--if-comment-mode", action="store_true", help="with --sync: exit 0 with a note, before any token or request, unless `approval` is "
+                   "\"comment\" on the target branch (the workflow's sync step uses it, so a terminal-mode run is unchanged)")
     p = sub.add_parser("rules", help="Pull the business rules of the story's Epic/Feature ancestors into <dod_path>/Rules_<id>.md "
                        "(reads ADO with GET only)")
     p.add_argument("id", type=int)
@@ -879,6 +890,9 @@ def main(argv=None):
     p.add_argument("--force", action="store_true", help="with --resolve: overwrite the verdict of a resolved line")
     p.add_argument("--sync", action="store_true", help="record the approvers' `/approve D<n>` and `/reject D<n>` comments of the story as verdicts in "
                    "the decisions file (a local write, no ADO write; needs approvers on the target branch; with them, --resolve is refused)")
+    p.add_argument("--if-comment-mode", action="store_true", help="with --sync: exit 0 with a note, before any token or request, unless `approval` is "
+                   "\"comment\" on the target branch; then also when the decisions file does not exist at all (any other refusal stays exit 2). "
+                   "The workflow's sync step uses it, so a terminal-mode run is unchanged")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--validated", dest="verdict", action="store_const", const="validated")
     g.add_argument("--rejected", dest="verdict", action="store_const", const="rejected")
@@ -1030,6 +1044,8 @@ def main(argv=None):
         parser.error("--expect-plan needs --apply")
     if args.command in ("questions", "decisions") and args.apply and not args.post:
         parser.error("--apply needs --post")
+    if args.command in ("questions", "decisions") and args.if_comment_mode and not args.sync:
+        parser.error("--if-comment-mode needs --sync")
     if args.command == "questions" and args.sync and (args.post or args.apply or args.plan_out or args.expect_plan):
         parser.error("--sync cannot be combined with --post, --apply, --plan-out or --expect-plan")
     if args.command == "decisions":
@@ -1099,6 +1115,11 @@ def main(argv=None):
             out = _resolve_decision(args)
         elif args.command == "rules" and args.confirm:  # local only: no token, no request
             out = _rules_confirm(args)
+        elif args.command in ("questions", "decisions") and args.sync and args.if_comment_mode and not _comment_mode(trusted(".")):
+            out = {"id": args.id, "synced": False, "note": E_NOT_COMMENT_MODE}  # terminal mode: no token, no client, no file read
+        elif (args.command == "decisions" and args.sync and args.if_comment_mode
+              and not os.path.lexists(decisions.decisions_file(_config(args).dod_path, args.id))):  # a link, even a dangling one, is a file that cannot be read
+            out = {"id": args.id, "synced": False, "note": E_NO_DECISIONS_FILE}
         elif args.command == "approvals":  # `check` reads only (terminal mode needs no token); `sync` is the poller
             out = _approvals_check(args) if args.approvals_command == "check" else _approvals_sync(args)
         elif args.command == "comments" and args.author_ids:  # reads only; stdout lines, no file

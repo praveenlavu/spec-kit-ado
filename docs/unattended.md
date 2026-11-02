@@ -4,6 +4,13 @@ This page is for running the `ado-lifecycle` workflow with nobody at a terminal.
 command, `ado approvals sync`, reads those comments and resumes the paused run. It is process enforcement, not a security boundary: read the
 residuals at the end.
 
+## Spec Kit version
+
+The verdict inputs of the `ado-lifecycle` workflow rely on the gate's `verdict_input`, which Spec Kit has had since 0.15.1; this kit is tested with 1.2.1 and later. **A
+Spec Kit older than 0.15.1 ignores `verdict_input`**: `ado approvals sync --resume` resumes the run, the gate pauses again at the same step, and this repeats on every
+poll with no error and no progress. Nothing is approved wrongly (the gate stays paused), but nothing moves either. If a run is paused at the same gate after several polls with
+an approval in place, check `specify --version`.
+
 ## Where it can run
 
 **On a local or persistent machine only (v0.3.0). Never on an ephemeral CI runner.** A Spec Kit run keeps its state in

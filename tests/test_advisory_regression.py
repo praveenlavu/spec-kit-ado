@@ -141,6 +141,10 @@ def compare(tmp_path):
     def decisions_help(t):
         """P4-9 adds `--sync` to `decisions`. Remove exactly what it adds: its usage token (argparse re-wraps the two usage lines it sits in) and its four help
         lines. Everything else is still compared byte for byte."""
+        t = (t.replace(" [--sync] [--if-comment-mode]\n", " [--sync]\n")  # P4-14 adds `--if-comment-mode` after `--sync`: remove its usage token and its five help lines
+             .replace("  --if-comment-mode   with --sync: exit 0 with a note, before any token or\n                      request, unless `approval` is \"comment\" on the target\n"
+                      "                      branch; then also when the decisions file does not exist\n                      at all (any other refusal stays exit 2). The workflow's\n"
+                      "                      sync step uses it, so a terminal-mode run is unchanged\n", ""))
         return (t.replace("[--resolve D<n>] [--force] [--sync]\n                     [--validated | --rejected] [--by BY] [--note NOTE]",
                           "[--resolve D<n>] [--force] [--validated | --rejected]\n                     [--by BY] [--note NOTE]")
                 .replace("  --sync              record the approvers' `/approve D<n>` and `/reject D<n>`\n                      comments of the story as verdicts in the decisions file\n"
@@ -148,6 +152,9 @@ def compare(tmp_path):
     def questions_help(t):
         """P4-10 adds `--sync` to `questions`. Remove exactly what it adds: its usage token (argparse puts it at the end of the second usage line) and its five help lines.
         Everything else is still compared byte for byte."""
+        t = (t.replace("[--sync] [--if-comment-mode]\n", "[--sync]\n")  # P4-14 adds `--if-comment-mode` after `--sync`: remove its usage token and its four help lines
+             .replace("  --if-comment-mode   with --sync: exit 0 with a note, before any token or\n                      request, unless `approval` is \"comment\" on the target\n"
+                      "                      branch (the workflow's sync step uses it, so a terminal-\n                      mode run is unchanged)\n", ""))
         return (t.replace("[--expect-plan PATH] [--sync]\n", "[--expect-plan PATH]\n")
                 .replace("  --sync              record the approvers' `/answer Q<n>: text` comments of\n                      the story as the PO's answers in the ledger and list the\n"
                          "                      questions due under unattended.assume_after_hours (a\n                      local write, no ADO write; needs approvers on the target\n"

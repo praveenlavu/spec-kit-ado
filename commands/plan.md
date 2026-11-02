@@ -159,7 +159,7 @@ them into a shell line. Do not run `ado rules <id>` here (a re-pull after the pl
    full stop). Never record one on your own, and never to clear a finding. An exclusion counts at `pr` only once it is posted, and
    at `done` only once the PO validated it: with `--workflow` the workflow's `decisions-loop` posts it (never run `--post`
    yourself); by hand, offer `ado decisions <id> --post --plan-out .ado/plan-decisions.md`, show the file, wait for an explicit
-   yes, then `--apply --expect-plan`. A human records the PO's verdict with `ado decisions <id> --resolve`. If `ado strict check <id> --phase pr` reports
+   yes, then `--apply --expect-plan`. In terminal mode a human records the PO's verdict with `ado decisions <id> --resolve`; with `approvers` configured `--resolve` is refused and `ado decisions <id> --sync` records the approvers' `/approve D<n>` and `/reject D<n>` comments. If `ado strict check <id> --phase pr` reports
    `rules-problem` naming a `D<n>`, that exclusion line breaks its grammar and lifts nothing: add a corrected `out of scope:` line
    with `--add` and post it with `--post`; never edit a line the PO answered. A rejected exclusion puts the rule back in scope:
    never delete or re-word that line; raise the AC question again (item 3) and tag the AC row once the story has one.
@@ -230,8 +230,9 @@ double-check; with `--close-assumed`, list each `Q<n>` closed as `assumed:`. Whe
 
 ## HITL checkpoints
 
+- Comment mode (`approval: "comment"` on the target branch): in the `ado-lifecycle` workflow `ado questions <id> --sync` is a workflow step that runs right before the second plan run (after the `wait-po-answers` check), so the approvers' `/answer Q<n>: text` comments are already in the ledger when you start; never write a `(PO comment …)` answer yourself, and never run `ado approvals sync`, `ado approvals check` or `specify workflow resume --input verdict_…` or set a `verdict_*` input: an approval is an approver's comment, not an agent action.
 - The only ADO write is the optional, gated posting of open questions (step 1). Plan files and the ledger are local and go through PR review.
 - Answers to open questions come from the human; do not invent them to clear a
   placeholder.
 - Business rules: tags, `--add` and the first `--confirm` are local and free. Posting an exclusion is the ⛔ decisions post; a
-  re-confirm and the PO's verdict (`--resolve`) are the human's, in their own terminal.
+  re-confirm is the human's, in their own terminal; the PO's verdict is `--resolve` (the human's, in their own terminal, terminal mode only) or, with `approvers` configured, the approvers' comments recorded by `ado decisions <id> --sync`.

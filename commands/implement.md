@@ -143,6 +143,7 @@ open questions), end the summary with a final line `INCOMPLETE: <task ids>` (for
 
 ## HITL checkpoints
 
+- Comment mode (`approval: "comment"` on the target branch): the decisions post and the Task sync are applies that also need an approver's `/approve approve-decisions <hash>` / `approve-sync <hash>` comment for exactly that plan (the workflow runs them after this command, behind their gates). You never approve, resume or supply a `verdict_*` input yourself, and with approvers configured `ado decisions <id> --resolve` is refused (the verdicts come from `ado decisions <id> --sync`, which the workflow runs).
 - ⛔ Step 4 is the only ADO write: one preview, one yes, one apply per batch. It is
   skipped with `--workflow`.
 - Commits are local. Pushing a branch or opening a PR is not part of this command and

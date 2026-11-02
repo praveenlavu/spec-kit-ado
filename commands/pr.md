@@ -282,6 +282,7 @@ uncommitted; the next ledger commit (gate, review or step 2a) carries it.
 
 ## HITL checkpoints
 
+- Comment mode (`approval: "comment"` on the target branch): the `approve-pr` gate's apply also needs the approver's comment for exactly the plan in `.ado/plan-pr.md` (step 5), and after the PR is open the workflow's `wait-po-validation` gate is met by the approvers' `/approve D<n>` and `/reject D<n>` comments (the workflow then runs `ado decisions <id> --sync`; commit and push the decisions file to the PR branch before the merge). You never approve for them or supply a `verdict_*` input.
 - Step 2a is a local commit (spec dir + ledger + decisions file only): no gate.
 - ⛔ Step 2b: the Development-section branch link is its own board write and its own yes.
 - ⛔ Step 4: one yes covers the branch push (`--push`) and the PR, and on Azure the story's Pull Request link if Azure left it out (the plan says so), nothing else.

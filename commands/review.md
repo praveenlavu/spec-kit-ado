@@ -287,6 +287,7 @@ check" list. Suggest fixing, then re-running `speckit.ado.gate` and this review,
 
 ## HITL checkpoints
 
+- Comment mode (`approval: "comment"` on the target branch): the `review-review` gate is approved by an approver's `/approve review-review <hash>` comment, and the hash covers the newest `### Review` block (and the `### AC fidelity` block in strict mode) of ledger section 4 plus HEAD's full SHA. A review block you write, or a commit you make (the ledger commit included), after the approval makes it stale: do not rewrite or re-run the review once the findings are posted for approval unless the human asks for it. The workflow's `review_model` input only chooses the model that runs this command; it never changes what is reviewed or who approves.
 - No ADO writes and no code changes. The ledger is a local file; committing it (the review block and, in
   strict mode, the AC fidelity block) is local and needs no gate.
 - Findings are reported, never fixed silently. Fixes need the user's go-ahead.
