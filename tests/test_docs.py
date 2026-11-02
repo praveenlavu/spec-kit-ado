@@ -2713,3 +2713,136 @@ def test_calibrate_doc_pins():
     assert "ado calibrate --emit .ado/calibrate.md | --score .ado/answer.json" in agents and "you never edit `src/ado/golden/fidelity.json`" in agents
     log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert log.index("## 0.3.0 \u2014 unreleased") < log.index("`ado calibrate (--emit PATH | --score FILE)` (P4-16, D\u00a74.6)") < log.index("## 0.2")
+
+
+# ---- P4-17: Azure-only positioning, tracker boundary, install commands, submission pack ----
+AZURE_ONLY = "Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported."
+# The pack is written for the release target; the version bump itself is release prep.
+TARGET = "0.3.0"
+_INSTALL_PROGRAMS = ("pipx", "uv", "uvx", "specify", "curl")
+
+
+def test_azure_only_sentence_is_pinned_in_the_docs():
+    readme = _flat("README.md")
+    assert AZURE_ONLY in readme and readme.index(AZURE_ONLY) < 1500  # near the top, before the lifecycle diagram
+    for f in ("docs/tracker-boundary.md", "docs/catalog-submission.md"):
+        assert AZURE_ONLY in _flat(f), f
+    assert "Jira" not in _flat("extension.yml")  # the one-line manifest description stays as is
+
+
+def _boundary_names():
+    rows = [ln for ln in (ROOT / "docs/tracker-boundary.md").read_text(encoding="utf-8").splitlines() if ln.startswith("| `")]
+    return rows, re.findall(r"`([a-z_]+)\.([A-Za-z_]+)`", "\n".join(r.split("|")[1] for r in rows))
+
+
+def test_every_tracker_boundary_function_is_defined_in_src_ado():
+    import importlib
+    expected = {
+        "workitems": ["get", "query", "children", "create", "update", "comment", "link", "add_relation"],
+        "comments": ["fetch"], "questions": ["_me", "plan_post", "apply_post"], "decisions": ["apply_post"],
+        "attachments": ["upload", "attach", "fetch"], "push": ["plan_push", "apply_push"],
+        "done": ["_has", "_status", "apply"], "prs": ["ensure_work_item_links", "with_ab_ref"], "rules": ["walk", "_parent"],
+    }
+    rows, named = _boundary_names()
+    assert len(rows) >= 9
+    for mod, funcs in expected.items():
+        for fn in funcs:
+            assert (mod, fn) in named, f"docs/tracker-boundary.md does not list {mod}.{fn}"
+    for mod, fn in named:  # every name the doc gives must be a real function
+        assert callable(getattr(importlib.import_module(f"ado.{mod}"), fn, None)), f"{mod}.{fn}"
+        assert re.search(rf"^def {fn}\(", (ROOT / f"src/ado/{mod}.py").read_text(encoding="utf-8"), re.M), f"{mod}.{fn}"
+    text = _flat("docs/tracker-boundary.md")
+    for needle in ("No adapter is built", "`AB#`", "does not do"):
+        assert needle in text, needle
+
+
+def _install_lines():
+    out = []
+    for f in ("README.md", "bundle/README.md", "docs/catalog-submission.md"):
+        for block in re.findall(r"^[ ]*```bash\n(.*?)^[ ]*```", (ROOT / f).read_text(encoding="utf-8"), re.M | re.S):
+            for ln in re.sub(r"\\\n\s*", " ", block).splitlines():
+                ln = ln.strip()
+                if ln.split(" ", 1)[0] in _INSTALL_PROGRAMS:
+                    out.append((f, ln))
+    return out
+
+
+def test_install_commands_parse_and_have_no_placeholders():
+    import shlex
+    lines = _install_lines()
+    assert len(lines) >= 12
+    for f, ln in lines:
+        argv = shlex.split(ln.split(" | ")[0])
+        assert argv[0] in _INSTALL_PROGRAMS, (f, ln)
+        if argv[0] in ("pipx", "uv", "specify") and "--dev" not in argv:  # --dev takes the reader's own checkout path
+            assert not any(set("<>") & set(a) or "..." in a for a in argv), (f, ln)
+    for f in ("README.md", "bundle/README.md", "docs/catalog-submission.md"):
+        mine = [shlex.split(ln) for g, ln in lines if g == f]
+        assert ["pipx", "install", f"git+https://github.com/praveenlavu/spec-kit-ado@v{TARGET}"] in mine, f
+        assert ["specify", "bundle", "install", f"./ado-{TARGET}.zip"] in mine, f
+    readme = [shlex.split(ln) for g, ln in lines if g == "README.md"]
+    ext = ["specify", "extension", "add", "ado", "--from", f"https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v{TARGET}.zip"]
+    assert ext in readme
+    # --from comes before the catalog route in the README, and the docs say what is not published yet
+    r = _flat("README.md")
+    assert r.index("--from https://github.com/praveenlavu/spec-kit-ado/archive") < r.index("specify extension catalog add")
+    for needle in ("not published", "private", "no PyPI package"):
+        assert needle in r, needle
+
+
+def test_readme_links_the_positioning_docs():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    for link in ("docs/quickstart.md", "docs/glossary.md", "docs/unattended.md", "docs/compatibility.md", "docs/tracker-boundary.md"):
+        assert f"]({link})" in readme, link
+    assert "not affiliated" in _flat("README.md").lower() and "GitHub or Microsoft" in _flat("README.md")
+
+
+def test_catalog_submission_has_no_020():
+    text = (ROOT / "docs/catalog-submission.md").read_text(encoding="utf-8")
+    assert "0.2.0" not in text
+
+
+def test_catalog_submission_matches_the_manifest_and_the_cli():
+    import subprocess
+    import sys
+    text = _flat("docs/catalog-submission.md")
+    m = yaml.safe_load((ROOT / "extension.yml").read_text(encoding="utf-8"))
+    n_cmd, n_hook = len(m["provides"]["commands"]), len(m["hooks"])
+    assert f"| Number of Commands | `{n_cmd}` |" in text and f"| Number of Hooks | `{n_hook}` |" in text
+    import json
+    blocks = re.findall(r"^```json\n(.*?)^```", (ROOT / "docs/catalog-submission.md").read_text(encoding="utf-8"), re.M | re.S)
+    entry = next(json.loads(b)["ado"] for b in blocks if '"download_url": "https://github.com/praveenlavu/spec-kit-ado/archive' in b)
+    assert entry["provides"] == {"commands": n_cmd, "hooks": n_hook}
+    help_text = subprocess.run([sys.executable, "-m", "ado", "--help"], capture_output=True, text=True, cwd=ROOT, check=True).stdout
+    n_verbs = len(re.search(r"\{([a-z,-]+)\}", help_text).group(1).split(","))
+    assert f"{n_cmd} extension commands" in text and f"{n_verbs} top-level CLI verbs" in text
+    assert f"{n_cmd} `speckit.ado.*` commands" in _flat("bundle/README.md")
+    # every piece 1-4 feature appears in Key Features
+    key = text.split("**Key Features**")[1].split("**Testing Checklist**")[0].lower()
+    for needle in ("strict mode", "stack profile", "pinned kit", "business rules", "epic", "feature", "adoption", "comment approval",
+                   "unattended", "ado doctor", "ado status", "catch-up", "calibrat", "azure devops boards only"):
+        assert needle in key, needle
+    # the Go-public checklist is for the target release, ordered, and nothing in it is claimed as done
+    gp = text.split("## Go-public checklist")[1]
+    assert f"git tag -a v{TARGET}" in gp and f"specify bundle build" in gp and "gh release create" in gp
+    for a, b in (("scrub_check.py", "git tag -a"), ("git tag -a", "specify bundle build"), ("specify bundle build", "gh release create"),
+                 ("gh release create", "curl -sLo /dev/null"), ("curl -sLo /dev/null", "File the extension"), ("File the extension", "git tag -f v0")):
+        assert gp.index(a) < gp.index(b), (a, b)
+    assert "nothing here has been run" in text.lower() and "not published" in text.lower()
+
+
+def test_pack_and_boundary_claims_are_honest():
+    pack, tb = _flat("docs/catalog-submission.md"), _flat("docs/tracker-boundary.md")
+    for needle in ("not built in 0.3.0", "no model has been scored yet", "**Unverified in live runs", "never run on a hosted runner",
+                   "L3 is a model reading and runs locally only", "not yet run end to end on a real story", "not a security boundary"):
+        assert needle in pack, needle
+    assert "never from the agent" not in pack and "exactly what is missing" not in pack
+    for needle in ("single-item verbs (`ado create`, `update`, `comment`, `link`) write immediately", "The lifecycle never creates, deletes or re-parents",
+                   "it cannot tell whether the list is complete", "never run on a hosted runner"):
+        assert needle in tb, needle
+    assert "The only writers" not in tb and "so this list cannot drift" not in tb
+    readme = _flat("README.md")
+    assert "nothing below 1.2.1 was tried" in readme and "arrives later in 0.3.0" not in readme
+    for f in ("docs/catalog-submission.md", "docs/tracker-boundary.md", "bundle/README.md"):
+        text = _flat(f).lower()
+        assert "runbook" not in text and "release-checklist" not in text and "backup" not in text, f

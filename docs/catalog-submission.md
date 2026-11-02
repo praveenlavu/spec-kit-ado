@@ -1,9 +1,34 @@
 # Catalog submissions (DRAFT)
 
-> **DRAFT for the owner to file after publishing.** Do not file these while the repo is
-> private. Work through [Go-public checklist](#go-public-checklist) first, then file the three
-> submissions in this order: extension, workflow, bundle. Items marked **TO CONFIRM** need a
-> value or a check that only exists after publishing.
+> **DRAFT for 0.3.0, for the owner to file after publishing.** Nothing here has been run against published
+> URLs: nothing is published yet (the repository is private, `v0.3.0` is not tagged, there is no release, the extension is not published and
+> there is no catalog listing), and no submission has been made. Do not file these while the repo is private. Work through
+> [Go-public checklist](#go-public-checklist) first, then file the three submissions in this order: extension,
+> workflow, bundle. Items marked **TO CONFIRM** need a value or a check that only exists after publishing.
+
+Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.
+
+**Counts, so the right number goes in the right field.** The catalog entry's `provides.commands` counts the
+**extension commands** registered from `extension.yml`: 13 extension commands (`speckit.ado.*`), 2 hooks. The `ado`
+command-line program is a separate thing and has 26 top-level CLI verbs (`ado --help`; `ado doctor`, `ado status` and
+`ado calibrate` are among them); those are not counted in the catalog entry. A doc test pins both numbers to
+`extension.yml` and `ado --help`.
+
+**Values that change at release prep (not done in this draft, which only mirrors the repository as it is today).**
+The code is still at the previous version until the release-prep task bumps it; everything below is written for 0.3.0. Before filing,
+the release-prep fixes must land and the values here must be re-copied from the then-current
+[extension.yml](../extension.yml): the version in `extension.yml`, `pyproject.toml`, the workflow, the bundle and both
+catalogs; the tool floor `ado >=0.3.0` (shown below, but `extension.yml` and `catalog/extensions.json`
+still carry the old floor); the Spec Kit floor, which is `>=0.9.0` here because that is what `extension.yml` says, and which is to
+be raised to the tested floor, 1.2.1, or tested lower (the three manifests and both catalogs must then carry the same
+string); the extension description, which is 106 characters here against the guide's "under 100"; and `documentation`
+links pinned to the tag.
+
+**Unverified in live runs (state these in Testing Details; do not claim them).** What another user's edit or delete of a
+comment does to an approval (only the posting identity's authorship was proven live); that Azure DevOps stores comment line
+breaks as `<br>` (assumed); the Azure repository's merge-type policy that the one-parent guard needs (Merge no fast-forward
+or Squash only); and the CI templates on a hosted runner, which have never run (the account's billing is blocked). The
+unattended run on a real story is not yet proven either.
 
 The extension and the bundle are GitHub issue forms in `github/spec-kit` ("Extension
 Submission" and "Bundle Submission"). There is no workflow issue form: a workflow is submitted
@@ -17,8 +42,8 @@ components from them. The release therefore carries two install-allowed catalogs
 [catalog/extensions.json](../catalog/extensions.json) and
 [catalog/workflows.json](../catalog/workflows.json), served from the tag:
 
-- `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/extensions.json`
-- `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/workflows.json`
+- `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/extensions.json`
+- `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/workflows.json`
 
 ## 1. Extension Submission
 
@@ -27,11 +52,11 @@ components from them. The release therefore carries two install-allowed catalogs
 | Issue title | `[Extension]: Add ado` |
 | Extension ID | `ado` |
 | Extension Name | `Spec Kit for Azure DevOps — human-gated lifecycle` |
-| Version | `0.2.0` |
+| Version | `0.3.0` |
 | Description | `Run the full Spec Kit lifecycle from an ADO story back to Done, with human sign-off on every board change.` |
 | Author | `praveenlavu` |
 | Repository URL | `https://github.com/praveenlavu/spec-kit-ado` |
-| Download URL | `https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.2.0.zip` |
+| Download URL | `https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip` |
 | License | `MIT` |
 | Homepage | `https://github.com/praveenlavu/spec-kit-ado` |
 | Documentation URL | `https://github.com/praveenlavu/spec-kit-ado/blob/main/README.md` |
@@ -44,22 +69,30 @@ components from them. The release therefore carries two install-allowed catalogs
 **Required Tools**
 
 ```markdown
-- ado (>=0.2.0) - required; the CLI from this repo: pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0
-- python (>=3.9) - required by the ado CLI
+- ado (>=0.3.0) - required; the CLI from this repo: pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0
 - git - required
 - gh - optional; needed only to open PRs on GitHub (repo_host: github)
 ```
 
-**Key Features**
+(Python >=3.9 is needed by the `ado` CLI; say so under Additional Context, since the manifest does not list it.)
+
+**Key Features** (check each against the final 0.3.0 CHANGELOG before filing)
 
 ```markdown
-- Pulls an Azure DevOps story into a per-story DoD ledger with the acceptance criteria copied as verbatim text (ADO HTML converted to plain text), then routes specify/plan/tasks/implement to the installed stack kit or core Spec Kit
-- Mirrors tasks.md into child Tasks on the story; idempotent, dry run by default, applied only after an explicit yes
-- Gate: acceptance criterion to named test traceability, assertion-free tests, AC drift, missing evidence; advisory unless a check is opted in to blocking
-- Eight-plane review of the branch diff (the AC fidelity plane in strict mode only) with a verification pass, logged in the ledger
-- Opens the PR with AB#<id> on GitHub (gh) or Azure Repos, and closes the story with the ledger attached, each after an explicit yes
-- Human-in-the-loop contract (rules/hitl.md) linked from every command; optional ado-lifecycle workflow with preview -> gate -> apply for every board change
-- Reusable GitHub Actions workflows and Azure Pipelines templates: gate on PR, branch guard, link on merge
+- Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported
+- Pulls an Azure DevOps story into a per-story DoD ledger with the acceptance criteria copied verbatim, then routes specify/plan/tasks/implement to the installed stack kit or core Spec Kit
+- Mirrors tasks.md into child Tasks on the story; dry run by default, applied only after an explicit yes
+- DoD gate: acceptance criterion to named-test traceability, assertion-free tests, AC drift, missing evidence, business-rule coverage; advisory unless a check is opted in to blocking
+- Strict mode (SDD + TDD): the test command a human approved runs in a throwaway clone, red/green evidence per task, and the optional CI templates (shipped, but never run on a hosted runner) re-run the L1 and L2 checks against the target branch; L3 is a model reading and runs locally only
+- Stack detection and stack profiles a human approves, with pinned kits (a kit nobody pinned, or one that changed after pinning, is refused in strict mode); never installs a kit itself
+- Business rules read from the story's Epic and Feature chain and traced into the ledger
+- Adoption and resilience: `ado doctor` prints ok/warn/fail/unknown rows, each with a fix, for git, Spec Kit, config, token, identity, approvers, stack and kits (the PAT scope probes and `--probe-item` are not built in 0.3.0), `ado status` shows the stage and the next command, with a catch-up view for stories already in flight
+- Comment approvals: PO answers, decision verdicts and gate approvals can come as comments from allow-listed identities, with the agent's own comments ignored when it runs as a non-approver identity without the bypass-rules permission, and cross-checked against the story's comments at done; process enforcement, not a security boundary
+- Unattended runs: a poller resumes the ado-lifecycle workflow at Spec Kit's native gates (local or persistent machine only; built and unit- and contract-tested, not yet run end to end on a real story)
+- Calibration: `ado calibrate` measures a model's AC-fidelity readings against 12 labelled pairs (no model has been scored yet)
+- Eight-plane review of the branch diff with a verification pass, logged in the ledger
+- Opens the PR with AB#<id> (GitHub or Azure Repos) and closes the story with the ledger attached, each after an explicit yes
+- Optional ado-lifecycle workflow (submitted separately) with preview -> gate -> apply for every board or PR change
 ```
 
 **Testing Checklist** (tick only after doing each against the published release)
@@ -88,8 +121,8 @@ components from them. The release therefore carries two install-allowed catalogs
 **Test project:** a clean Spec Kit project connected to a test Azure DevOps project
 
 **Test scenarios:**
-1. Installed the ado CLI with pipx from the v0.2.0 tag
-2. Installed the extension with `specify extension add ado --from <download URL>`; 13 commands and 2 hooks registered
+1. Installed the ado CLI with pipx from the v0.3.0 tag
+2. Installed the extension with `specify extension add ado --from <download URL>`; 13 commands and 2 hooks registered (confirm the numbers against `specify extension list`)
 3. Ran /speckit.ado.setup and /speckit.ado.pull on a test story
 4. Ran ado push and ado done without --apply and confirmed no writes; applied after review
 5. Ran the unit test suite (no network): <N> passed
@@ -99,8 +132,8 @@ components from them. The release therefore carries two install-allowed catalogs
 
 ```bash
 # Install the CLI and the extension
-pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0
-specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.2.0.zip
+pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0
+specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip
 
 # Connect, then pull a story
 /speckit.ado.setup
@@ -116,8 +149,8 @@ specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/arc
     "id": "ado",
     "description": "Run the full Spec Kit lifecycle from an ADO story back to Done, with human sign-off on every board change.",
     "author": "praveenlavu",
-    "version": "0.2.0",
-    "download_url": "https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.2.0.zip",
+    "version": "0.3.0",
+    "download_url": "https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip",
     "repository": "https://github.com/praveenlavu/spec-kit-ado",
     "homepage": "https://github.com/praveenlavu/spec-kit-ado",
     "documentation": "https://github.com/praveenlavu/spec-kit-ado/blob/main/README.md",
@@ -126,7 +159,7 @@ specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/arc
     "requires": {
       "speckit_version": ">=0.9.0",
       "tools": [
-        { "name": "ado", "version": ">=0.2.0", "required": true },
+        { "name": "ado", "version": ">=0.3.0", "required": true },
         { "name": "git", "required": true },
         { "name": "gh", "required": false }
       ]
@@ -148,7 +181,8 @@ specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/arc
 **Additional Context**
 
 ```markdown
-The ado CLI is Python standard library only and ships in the same repo, at the same version.
+The ado CLI is Python standard library only (Python >=3.9) and ships in the same repo, at the same version.
+Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.
 The extension manifest cannot carry a workflow: the ado-lifecycle workflow is submitted to the
 workflow catalog, and the ado bundle installs both. Two other Azure DevOps extensions exist in the
 catalog (azure-devops, maqa-azure-devops) and focus on work-item sync; this one covers the
@@ -166,9 +200,9 @@ keeping the `workflows` object sorted by ID.
 | PR title | `Add ado-lifecycle to community workflow catalog` |
 | Workflow ID | `ado-lifecycle` |
 | Workflow Name | `ADO story lifecycle` |
-| Version | `0.2.0` |
+| Version | `0.3.0` |
 | Repository | `https://github.com/praveenlavu/spec-kit-ado` |
-| Workflow URL | `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/workflows/ado-lifecycle/workflow.yml` |
+| Workflow URL | `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/workflows/ado-lifecycle/workflow.yml` |
 | Documentation | `https://github.com/praveenlavu/spec-kit-ado/blob/main/workflows/ado-lifecycle/README.md` |
 
 **Catalog entry** — **TO CONFIRM** `created_at` / `updated_at` (release date). `requires`
@@ -181,8 +215,8 @@ install` does) rejects a downloaded workflow whose requirements differ from the 
   "name": "ADO story lifecycle",
   "description": "Azure DevOps story to an open PR: spec, plan, tasks, push, implement, gate, review, PR. Every board or PR change is preview, human gate, apply. The story closes after merge.",
   "author": "praveenlavu",
-  "version": "0.2.0",
-  "url": "https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/workflows/ado-lifecycle/workflow.yml",
+  "version": "0.3.0",
+  "url": "https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/workflows/ado-lifecycle/workflow.yml",
   "repository": "https://github.com/praveenlavu/spec-kit-ado",
   "license": "MIT",
   "requires": {
@@ -204,7 +238,7 @@ install` does) rejects a downloaded workflow whose requirements differ from the 
 
 **Workflow Name**: ADO story lifecycle
 **Workflow ID**: ado-lifecycle
-**Version**: 0.2.0
+**Version**: 0.3.0
 **Repository**: https://github.com/praveenlavu/spec-kit-ado
 
 The workflow lives in workflows/ado-lifecycle/ (workflow.yml, README.md, LICENSE, CHANGELOG.md).
@@ -228,35 +262,35 @@ Its shell steps run the ado CLI from the same repository and tag; the README lis
 | Issue title | `[Bundle]: Add ado` |
 | Bundle ID | `ado` |
 | Bundle Name | `Spec Kit for Azure DevOps` |
-| Version | `0.2.0` |
+| Version | `0.3.0` |
 | Role or Team | `developer` |
 | Description | `The ado extension plus the ado-lifecycle workflow: an ADO story to Done with a human gate on every board or PR change.` |
 | Author | `praveenlavu` |
 | Repository URL | `https://github.com/praveenlavu/spec-kit-ado` |
-| Download URL | `https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.2.0/ado-0.2.0.zip` |
+| Download URL | `https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.0/ado-0.3.0.zip` |
 | Documentation URL | `https://github.com/praveenlavu/spec-kit-ado/blob/main/bundle/README.md` |
 | License | `MIT` |
 | Required Spec Kit Version | `>=0.9.0` |
 | Integration Target | _(leave empty; integration-agnostic)_ |
 | Tags | `azure-devops, issue-tracking, hitl, workflow, governance` |
 
-`ado-0.2.0.zip` is the name `specify bundle build --path bundle` gives the artifact.
+`ado-0.3.0.zip` is the name `specify bundle build --path bundle` gives the artifact.
 
 **Components Provided**
 
 ```markdown
-- extensions: ado@0.2.0
-- workflows: ado-lifecycle@0.2.0
+- extensions: ado@0.3.0
+- workflows: ado-lifecycle@0.3.0
 ```
 
 **Required Component Catalogs**
 
-The bundle pins `ado@0.2.0` and `ado-lifecycle@0.2.0`; neither ships with Spec Kit and the
+The bundle pins `ado@0.3.0` and `ado-lifecycle@0.3.0`; neither ships with Spec Kit and the
 community catalogs are discovery-only, so "None" would fail the submission check. Users add:
 
 ```markdown
-- Extensions: https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/extensions.json (add with --install-allowed)
-- Workflows: https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/workflows.json
+- Extensions: https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/extensions.json (add with --install-allowed)
+- Workflows: https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/workflows.json
 ```
 
 **Key Features**
@@ -297,7 +331,7 @@ community catalogs are discovery-only, so "None" would fail the submission check
 **Test scenarios:**
 1. Added the two required catalogs (extension catalog with --install-allowed, workflow catalog)
 2. Validated the bundle manifest (`specify bundle validate --path bundle`)
-3. Built ado-0.2.0.zip with specify bundle build
+3. Built ado-0.3.0.zip with specify bundle build
 4. Installed the bundle from the artifact in a clean project; the extension and the workflow
    were installed from the two catalogs
 5. Installed by bundle ID in another clean project: a temporary install-allowed bundles.json
@@ -310,15 +344,15 @@ community catalogs are discovery-only, so "None" would fail the submission check
 
 ```bash
 # Install the ado CLI (the workflow's shell steps call it)
-pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0
+pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0
 
 # Add the required component catalogs (the bundle resolves its pinned components from them)
-specify extension catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/extensions.json --name ado --install-allowed
-specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/workflows.json --name ado
+specify extension catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/extensions.json --name ado --install-allowed
+specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/workflows.json --name ado
 
 # Install the bundle artifact (installs the extension and the workflow)
-curl -L -o ado-0.2.0.zip https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.2.0/ado-0.2.0.zip
-specify bundle install ./ado-0.2.0.zip
+curl -L -o ado-0.3.0.zip https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.0/ado-0.3.0.zip
+specify bundle install ./ado-0.3.0.zip
 
 # Run the lifecycle for story 1001
 specify workflow run ado-lifecycle -i story_id=1001
@@ -331,12 +365,12 @@ specify workflow run ado-lifecycle -i story_id=1001
   "ado": {
     "name": "Spec Kit for Azure DevOps",
     "id": "ado",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "role": "developer",
     "description": "The ado extension plus the ado-lifecycle workflow: an ADO story to Done with a human gate on every board or PR change.",
     "author": "praveenlavu",
     "license": "MIT",
-    "download_url": "https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.2.0/ado-0.2.0.zip",
+    "download_url": "https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.0/ado-0.3.0.zip",
     "repository": "https://github.com/praveenlavu/spec-kit-ado",
     "requires": {
       "speckit_version": ">=0.9.0"
@@ -359,7 +393,7 @@ specify workflow run ado-lifecycle -i story_id=1001
 The workflow's shell steps call the ado CLI, which is not a Spec Kit component; users install
 it with pipx from the same tag. The extension (Extension Submission form) and the workflow
 (workflow catalog pull request) are submitted separately. The two required catalogs are served
-from the v0.2.0 tag of the bundle's repository.
+from the v0.3.0 tag of the bundle's repository.
 
 This repository also hosts the extension and the workflow, so the bundle manifest and README live
 in bundle/ (bundle/bundle.yml, bundle/README.md); LICENSE is at the repository root.
@@ -367,65 +401,107 @@ in bundle/ (bundle/bundle.yml, bundle/README.md); LICENSE is at the repository r
 
 ## Go-public checklist
 
-The owner, in this order:
+For **v0.3.0**, the owner, in this order. **Nothing here has been run**: every command below is a plan, and each step that
+changes something public (the tag push, making the repo public, the release, the filings) is the owner's explicit decision.
+Run everything as the `praveenlavu` identity (`gh auth switch -u praveenlavu` before, switch back after; commits use the
+GitHub no-reply address).
 
-1. Publish from a fresh repository, not by flipping this one: the current history holds a merge commit with a
-   non-noreply author (reachable through the PR refs), home paths and internal wording, and the old `v0` / `v0.1.1`
-   tags ship `docs/superpowers/`. Recreate `praveenlavu/spec-kit-ado` under the same name (the install URLs keep
-   working), with one squashed commit of the final `main` tree:
+0. **Release prep merged first** (separate tasks, one commit each, not part of this draft): the 0.3.0 version bump
+   everywhere including the `catalog/` files and the `@v0.3.0` / `/v0.3.0/` URLs, `ado >=0.3.0`, the Spec Kit floor decision,
+   the description length, the tag-pinned documentation links, the CHANGELOG date, an "Upgrading to 0.3.0" section, and the
+   release checklist (a document that does not exist yet) run on hosted runners once Actions is unlocked.
+
+1. **Publish from a fresh repository, never from the old history.** `praveenlavu/spec-kit-ado` was already recreated as a
+   private repository with one squashed commit (the older history is kept out of it on purpose and must not be published). The 0.3 work sits on top of that commit. Check what the flip would publish before anything else:
 
    ```bash
-   # in a scratch clone of the final main (all v0.2 tasks merged), identity set to the GitHub no-reply address
-   git checkout --orphan release && git add -A && git commit -m "spec-kit-ado 0.2.0"
-   git log --format='%an <%ae>|%cn <%ce>' | sort -u        # must be only the no-reply identity
-   python3 scripts/scrub_check.py --require-denylist --history   # exit 0, with the real denylist
+   git log --format='%an <%ae>|%cn <%ce>' | sort -u                  # only the GitHub no-reply identity
+   python3 scripts/scrub_check.py --require-denylist --history        # exit 0, with the real denylist
    ```
 
-   Then delete the old repository and create the new one (private first), push `release` as `main`, set
-   `SCRUB_DENYLIST` (Settings → Secrets → Actions), and re-run the scrub check on the new repository's history.
-   Tag the squashed commit `v0.2.0` (annotated; the commit contains `catalog/` and
-   `workflows/ado-lifecycle/README.md`). The catalog URLs are pinned to the tag and release tags never move
-   ([VERSIONING.md](../VERSIONING.md)), so tag locally, check every file the tag must serve, and abort if one is
-   missing; push the tag; and move `v0` to it last, only after the checks and URL tests below pass:
+   If either fails, stop: do not publish this history; recreate the repository again as one squashed commit of the final
+   `main` tree (identity set to the no-reply address) and re-run both checks on it. Confirm the `SCRUB_DENYLIST` Actions
+   secret is set on the repository.
+
+2. **Tag locally and check that the tag serves every file.** The catalog URLs are pinned to the tag and release tags never
+   move ([VERSIONING.md](../VERSIONING.md)), so tag locally, check every file the tag must serve, and abort if one is missing;
+   push the tag only after that, and move `v0` to it last (step 11):
 
    ```bash
-   git tag -a v0.2.0 -m "spec-kit-ado 0.2.0" main
-   for f in catalog/extensions.json catalog/workflows.json workflows/ado-lifecycle/README.md \
-            workflows/ado-lifecycle/workflow.yml extension.yml bundle/bundle.yml; do
-     git cat-file -e "v0.2.0:$f" || { echo "MISSING $f - do not push"; exit 1; }
+   git tag -a v0.3.0 -m "spec-kit-ado 0.3.0" main
+   for f in extension.yml bundle/bundle.yml catalog/extensions.json catalog/workflows.json \
+            workflows/ado-lifecycle/workflow.yml workflows/ado-lifecycle/README.md README.md LICENSE; do
+     git cat-file -e "v0.3.0:$f" || { echo "MISSING $f - do not push"; exit 1; }
    done
-   git push origin v0.2.0
+   git show v0.3.0:extension.yml | grep -E 'version: "0.3.0"'
+   git push origin v0.3.0
    ```
 
-   Make the repository public only after the checks pass, then enable private vulnerability reporting, branch
-   protection on `main` and secret scanning with push protection, and drop the "while private" text and the
-   `TOOLKIT_READ_TOKEN` wording from the CI docs.
+3. **Build the bundle from the tag, not the working tree:**
 
-2. Build the bundle artifact: `specify bundle build --path bundle` (writes `ado-0.2.0.zip`), and
-   check `specify bundle validate --path bundle --offline`.
-3. Create the GitHub release `v0.2.0` with `ado-0.2.0.zip` attached.
-4. Confirm each URL returns HTTP 200:
-   - `https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.2.0.zip`
-   - `https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.2.0/ado-0.2.0.zip`
-   - `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/workflows/ado-lifecycle/workflow.yml`
-   - `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/extensions.json`
-   - `https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/workflows.json`
-5. In a clean Spec Kit project, run the bundle's Example Usage against the real URLs, then
-   `specify bundle validate --path <checkout>/bundle` (online) from that project.
-6. Test bundle-ID installation (a required checkbox) in another clean project: add the two
-   component catalogs, save the bundle's Proposed Catalog Entry under `"bundles"` in a temporary
-   `bundles.json` (with `"sha256"` of `ado-0.2.0.zip`), serve it locally
-   (`python3 -m http.server 8765 --bind 127.0.0.1`; bundle catalog URLs must be HTTPS or
-   localhost), then:
+   ```bash
+   tmp=$(mktemp -d) && git worktree add "$tmp/src" v0.3.0
+   specify bundle validate --path "$tmp/src/bundle" --offline
+   specify bundle build --path "$tmp/src/bundle" --output "$tmp/out"     # writes ado-0.3.0.zip
+   shasum -a 256 "$tmp/out/ado-0.3.0.zip" | tee "$tmp/out/SHA256SUMS"
+   ```
+
+4. **Make the repository public** only after steps 1 to 3 pass. Then enable private vulnerability reporting, branch protection
+   on `main` and secret scanning with push protection. Then a docs task after the flip: drop the "while private" text and the
+   `TOOLKIT_READ_TOKEN` wording from the CI docs, and delete the "Status of the release: nothing is published yet" paragraph in
+   the README Quick start and the "Status: unreleased" paragraph in `bundle/README.md` (the install-command doc test pins the
+   words "not published", "private" and "no PyPI package", so edit that test in the same commit).
+
+5. **Create the GitHub release** `v0.3.0` with the zip and the checksums attached (the notes are the CHANGELOG 0.3.0 section):
+
+   ```bash
+   gh release create v0.3.0 "$tmp/out/ado-0.3.0.zip" "$tmp/out/SHA256SUMS" \
+     -R praveenlavu/spec-kit-ado --title "v0.3.0" --notes-file <file holding the CHANGELOG 0.3.0 section>
+   ```
+
+6. **Confirm each URL returns HTTP 200,** and record the extension archive's checksum (`EXT_SHA`, for the catalog entry) and that
+   the release asset matches `SHA256SUMS`:
+
+   ```bash
+   for u in \
+     https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip \
+     https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.0/ado-0.3.0.zip \
+     https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/workflows/ado-lifecycle/workflow.yml \
+     https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/extensions.json \
+     https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/workflows.json; do
+     printf '%s %s\n' "$(curl -sLo /dev/null -w '%{http_code}' "$u")" "$u"; done
+   curl -sL https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip | shasum -a 256
+   curl -sL https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.0/ado-0.3.0.zip | shasum -a 256
+   ```
+
+7. **Clean-project tests,** each in a fresh `specify init` project, on the Spec Kit floor you chose and on the latest:
+   the extension (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0`, then
+   `specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip`;
+   `specify extension list` shows 13 commands and 2 hooks; run `/speckit.ado.setup` and `/speckit.ado.pull` on a test story);
+   the workflow (add the workflow catalog, `specify workflow add ado-lifecycle --version 0.3.0`, `specify workflow info
+   ado-lifecycle`, then `specify workflow run ado-lifecycle -i story_id=<test story>`, rejecting one gate and approving through
+   to the PR); the bundle from the artifact (the [bundle README](../bundle/README.md) steps verbatim, then `specify bundle list`).
+
+8. **Test bundle-ID installation** (a required checkbox) in another clean project: add the two component catalogs, save the
+   bundle's Proposed Catalog Entry under `"bundles"` in a temporary `bundles.json` (with `"sha256"` of `ado-0.3.0.zip`), serve
+   it locally (`python3 -m http.server 8765 --bind 127.0.0.1`; bundle catalog URLs must be HTTPS or localhost), then:
 
    ```bash
    specify bundle catalog add http://127.0.0.1:8765/bundles.json --id ado-test --policy install-allowed
    specify bundle install ado
+   specify bundle validate --path "$tmp/src/bundle"      # online, from this project
    ```
 
-   Fill in the **TO CONFIRM** testing details and dates.
-7. File the extension submission, then open the workflow catalog pull request, then file the
-   bundle submission.
-8. Move `v0` to `v0.2.0` (`git tag -f v0 v0.2.0 && git push -f origin v0`), then test an `@v0` consumer once.
-9. Remove the DRAFT banner from this file.
+9. **Fill in the TO CONFIRM testing details and dates truthfully** (operating system, Spec Kit versions, test counts), ticking only
+   the boxes for what was run, including the "tested on a real project" box.
 
+10. **File the extension submission** and wait for its validation to pass (usually 0 to 2 days; fix whatever it reports first).
+    Open the workflow catalog pull request (it can run in parallel; check you have fewer than three open pull requests on
+    `github/spec-kit`). Then file the bundle submission, after the extension validates.
+
+11. **Move `v0` to `v0.3.0` last** (`git tag -f v0 v0.3.0 && git push -f origin v0`), then test an `@v0` consumer once. This is
+    the only tag that moves ([VERSIONING.md](../VERSIONING.md)); if the artifact itself is wrong, cut `v0.3.1` instead of
+    moving `v0.3.0`.
+
+12. Add the "listed in the Spec Kit community catalog" line to the README once a listing exists, remove the "nothing is
+    published / repository is private" paragraphs (step 4) if not already done, and remove the DRAFT banner from this file.

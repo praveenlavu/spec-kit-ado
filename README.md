@@ -12,8 +12,15 @@ a named test in a per-story ledger. The gate reports problems first and only blo
 checks you opt in to. Specify, plan, tasks and implement are handed to whichever Spec Kit stack kit you
 have installed (or to core Spec Kit), so the extension works for any tech stack.
 
+**Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.** See [docs/tracker-boundary.md](docs/tracker-boundary.md) for what the kit does and what stays in the tracker.
+
 **New here?** [docs/quickstart.md](docs/quickstart.md) takes you from a story to pushed Tasks in about ten minutes with the
 lightest setup (`ado setup --profile starter`); [docs/glossary.md](docs/glossary.md) explains every word in one sentence.
+Running it with nobody at a terminal: [docs/unattended.md](docs/unattended.md). Which Spec Kit versions it was tried against:
+[docs/compatibility.md](docs/compatibility.md).
+
+This is a community project, not affiliated with or endorsed by GitHub or Microsoft; Spec Kit, GitHub and Azure DevOps are
+trademarks of their owners.
 
 ## Lifecycle
 
@@ -41,29 +48,35 @@ through PR review.
 
 ## Quick start
 
-Requires Spec Kit 0.9.0 or later, Python 3.9 or later, and `git`. `gh` is needed only
+Requires Spec Kit 0.9.0 or later (declared, but nothing below 1.2.1 was tried; comment mode and the unattended poller need 1.2.1 or later, see [docs/compatibility.md](docs/compatibility.md)), Python 3.9 or later, and `git`. `gh` is needed only
 to open PRs on GitHub.
+
+**Status of the release: nothing is published yet.** 0.3.0 is the target release and is not tagged, the repository is private, the release is not published,
+there is no PyPI package, and the project is not listed in the Spec Kit community catalog (no submission has been made).
+So the commands in this section (the two below and the bundle install after them) work only once 0.3.0 is released and the repository is public. Until then, install from a checkout:
+`pipx install .` (or `uv tool install .`) in this repository, then `specify extension add --dev <path-to-spec-kit-ado>` in your
+Spec Kit project.
 
 ```bash
 # 1. The ado CLI (stdlib only)
-pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0
-# or: uv tool install git+https://github.com/praveenlavu/spec-kit-ado@v0.2.0
+pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0
+# or: uv tool install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0
 
 # 2. The extension, in your Spec Kit project
-specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.2.0.zip
+specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip
 ```
 
 ### Install the bundle (workflow + extension)
 
 ```bash
-specify extension catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/extensions.json --name ado --install-allowed
-specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.2.0/catalog/workflows.json --name ado
-curl -L -o ado-0.2.0.zip https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.2.0/ado-0.2.0.zip
-specify bundle install ./ado-0.2.0.zip
+specify extension catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/extensions.json --name ado --install-allowed
+specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/workflows.json --name ado
+curl -L -o ado-0.3.0.zip https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.0/ado-0.3.0.zip
+specify bundle install ./ado-0.3.0.zip
 ```
 
 Install-allowed catalogs install what they list without the untrusted-source prompt (workflow
-catalogs always are); these list only `ado` and `ado-lifecycle` from the `v0.2.0` tag, so read
+catalogs always are); these list only `ado` and `ado-lifecycle` from the `v0.3.0` tag, so read
 them and `workflow.yml` first. Details: [bundle README](https://github.com/praveenlavu/spec-kit-ado/blob/main/bundle/README.md).
 
 The Spec Kit community catalog is for discovery only, so a bare `specify extension add ado`
@@ -131,6 +144,8 @@ Closing happens after merge: CI link-on-merge with `close-story: true` (`closeSt
 or `speckit.ado.done` run by hand.
 
 ## Upgrading from 0.1.1
+
+*History.* 0.2.0 was tagged only on the private repository and has not been released publicly, so the `@v0.2.0` URLs below do not resolve for anyone else yet. These steps are for 0.1.1 users of the old repository; a 0.3.0 upgrade section is written at release prep.
 
 0.2.0 changes behaviour for existing users: read the **Breaking** list in the [changelog](CHANGELOG.md) first.
 Then, in each project:
@@ -386,10 +401,9 @@ In short:
   `"comment"`) and `unattended`, are read **only from the target branch**, never from a pull request's own checkout: a PR that edits them
   changes nothing until it is merged. The agent never runs as an admin or approver: it runs as a Contributor without the "Bypass rules on work item updates"
   permission, approvers are separate human identities (a separate account, no approver PAT in the agent's environment) and the CI service
-  identity is never an approver. `ado doctor` fails when an approver is the token's own identity. In this build the keys are validated and
-  checked, and the comment reader exists (`/approve D<n>`, `/reject D<n>: note`, `/answer Q<n>: text` or `/approve <gate> <64 hex>` as the first
+  identity is never an approver. `ado doctor` fails when an approver is the token's own identity. Comment mode reads (`/approve D<n>`, `/reject D<n>: note`, `/answer Q<n>: text` or `/approve <gate> <64 hex>` as the first
   non-empty line of an approver's unedited comment; quoted text, the agent's own comments and comments carrying `createdOnBehalfOf` never count; comment mode
-  is refused while the token identity can bypass rules or that cannot be read); `ado decisions <id> --sync` and `ado questions <id> --sync` act on the approvers' comments, and with `approvers` set `ado done` (and the CI close step) cross-checks every verdict of the decisions file against those comments (`decisions-xcheck-*`, D§4.4), so a hand-written `validated` line is refused (strict) or warned (advisory); and with `approval: "comment"` the five ADO applies (`questions --post`, `push`, `decisions --post`, `pr create`, `branch --link`) refuse unless a trusted approver commented `/approve <gate> <hash>` on the story, the hash covering that exact plan; `done --apply`, `strict override`, any `--force` and the single-item verbs are never approvable by comment (the rest of comment mode arrives later in 0.3.0). Details and residuals: [configuration](docs/configuration.md#approvers-and-comment-mode-the-recommended-setup).
+  is refused while the token identity can bypass rules or that cannot be read); `ado decisions <id> --sync` and `ado questions <id> --sync` act on the approvers' comments, and with `approvers` set `ado done` (and the CI close step) cross-checks every verdict of the decisions file against those comments (`decisions-xcheck-*`, D§4.4), so a hand-written `validated` line is refused (strict) or warned (advisory); and with `approval: "comment"` the five ADO applies (`questions --post`, `push`, `decisions --post`, `pr create`, `branch --link`) refuse unless a trusted approver commented `/approve <gate> <hash>` on the story, the hash covering that exact plan; `done --apply`, `strict override`, any `--force` and the single-item verbs are never approvable by comment. The unattended poller is described in [docs/unattended.md](docs/unattended.md). Details and residuals: [configuration](docs/configuration.md#approvers-and-comment-mode-the-recommended-setup).
 
 Three layers enforce this: `type: gate` steps in the `ado-lifecycle` workflow (preview,
 gate, apply for every board change and PR; command steps make no ADO writes there), dry-run-by-default batch verbs in the CLI, and the
