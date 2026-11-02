@@ -2871,3 +2871,34 @@ def test_newest_posting_rule_is_documented():
         assert needle in cfg, needle
     assert "or whose text differs from it" in agents and "or whose text differs from it, which is a consistency check, not a security control" in _flat("docs/unattended.md")
     assert "a consistency check, not a security control" in hitl and "removing the marker or the file bypasses it" in readme
+
+
+def test_pr_bound_to_review_is_documented():
+    """F3 (P4-20 I-3): `pr create --apply` re-checks `review-review`, and the `approve-pr` plan shows the head commit."""
+    cfg, hitl, log, wf, cmd = (_flat(n) for n in ("docs/configuration.md", "rules/hitl.md", "CHANGELOG.md", "workflows/ado-lifecycle/README.md", "commands/pr.md"))
+    for doc in (cfg, hitl):
+        assert "(F3, P4-20 I-3)" in doc and "`| head commit | <40 hex> |`" in doc and "`approvals.check` for `review-review`" in doc and "terminal mode (no head row, no check: output unchanged)" in doc
+    assert "(F3, P4-20 I-3)" in log and "The `pr-prepare` ordering residual is closed" in log
+    assert "The `pr-prepare` ordering (closed in F3, P4-20 I-3)" in wf and "What is not: uncommitted files (never pushed)" in wf
+    assert "review-review` approved for the checked-out HEAD" in cmd
+    # fix round 1: the review step commits what step 2a would; comment mode verifies instead of committing; coverage and residuals stated precisely
+    assert "`ado pr create <id> --check-committed`" in cfg and "`ado pr create <id> --check-committed`" in wf and "--check-committed" in log
+    for doc in (cfg, hitl):
+        assert "Bound: the head commit, so every committed file" in doc and "Not covered: uncommitted files (they are never pushed)" in doc
+        for residual in ("read from the working tree while the pushed commit carries the committed one", "which is not compared with the checkout", "reads the trust keys from `origin/HEAD` only",
+                         "the push sends the branch tip at push time, not the verified commit"):
+            assert residual in doc, residual
+    assert "`pr-prepare` step 2a commits nothing" in wf and "by the review step's own commit" in cfg
+    assert "**this step commits nothing**" in cmd and "**in the same commit and in every mode**" in _flat("commands/review.md")
+    # fix round 2: one commit form (every path in `add` and in `commit --`), no mode-dependent paragraph, no ledger write after the approval, story-only paths
+    rev = _flat("commands/review.md")
+    assert "git diff --cached --quiet -- <those paths> || git commit -m \"docs: review log AB#<id>\" -- <those paths>" in rev and "In terminal mode commit the ledger alone" not in rev
+    assert "`ado pr create <id> --check-committed` (read-only)" in rev and "which tells you the mode" in rev
+    fixed = "Comment mode: the review approval covers the ledger as committed; fix this, then run the review step again."
+    assert cmd.count(fixed) == 2 and "**In comment mode**" in cmd and "do not edit the ledger here" in cmd and "Put the answer in the PR body instead" in cmd
+    assert "Any other exit 2 (trust, config or git problem)" in cmd and "The step-2a commit always lands after the review" not in cmd
+    for doc in (cfg, hitl):
+        assert "`Rules_<id>.md` for the ids of `Rules from:`" in doc and "other stories' rules files never block" in doc and "with `dod_path` `.` none is valid" in doc
+        assert "the step-2a `--check-committed` runs without `--base`" in doc
+    assert "writes no ledger line (step 1a, `rule-unconfirmed`, `rule-changed`)" in wf
+    assert "the other files of the diff" not in wf and "the content of files other than the ledger's review block" not in cfg

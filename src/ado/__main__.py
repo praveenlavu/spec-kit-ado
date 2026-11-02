@@ -203,6 +203,24 @@ def _task_status(client, args):
     return open_ids, ("draft", f"yes — {len(open_ids)} unticked task(s): {', '.join(open_ids)}")
 
 
+E_UNCOMMITTED = ("comment approval: the story's spec dir, ledger, decisions file or rules files have changes that are not committed: commit them before the review "
+                 "gate (run the review step again), so the review approval covers the commit that is pushed")
+
+
+def _require_committed(cfg, story_id):
+    """Comment mode: exit 2 (E_UNCOMMITTED) while any path `speckit.ado.pr` step 2a would commit is not committed (the review step commits them)."""
+    try:
+        ledger = (Path(dod.dod_file(cfg.dod_path, story_id))).read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        ledger = ""  # the ledger itself is still checked as a path; the review gate fails on an unreadable one
+    try:
+        n = prs.uncommitted(".", story_id, cfg.dod_path, dod.ledger_spec_dir(ledger), dod.ledger_rules_from(ledger)["ids"])
+    except prs._Refuse as e:
+        raise ValueError(str(e)) from None
+    if n:
+        raise ValueError(E_UNCOMMITTED)
+
+
 def _pr(client, args):
     cfg = client.config
     azure = cfg.repo_host == "azure"
@@ -214,6 +232,11 @@ def _pr(client, args):
         return prs.azure_comment(client, cfg.repository, args.pr_id, _read_body(args.body_file))
     if azure and not cfg.repository:
         raise ValueError("repo_host is azure but `repository` is not set in ado.config.json")
+    if args.check_committed:  # step 2a of speckit.ado.pr: does it still have something to commit? (comment mode: that is an error)
+        comment = _pr_trust(args.base).approval == "comment"
+        if comment:
+            _require_committed(cfg, args.id)
+        return {"comment_mode": comment, "committed": True}
     if args.from_prepared:
         if any((args.title, args.body_file, args.base, args.head)):
             raise ValueError("--from-prepared cannot be combined with --title/--body-file/--base/--head")
@@ -241,12 +264,25 @@ def _pr(client, args):
     body = _read_body(args.body_file)
     title = prs.with_ab_ref(args.title, args.id)
     host = "azure" if azure else "github"
-    text = prs.render_plan(host, title, prs.azure_description(body) if azure else body, args.base, args.head, [args.id], tasks_row)
+    try:
+        trust = _pr_trust(args.base)  # an unreadable trust is raised again by the apply below; a preview just carries no head commit
+    except (ValueError, ConfigError):
+        trust = None
+    head_sha = None
+    if trust is not None and trust.approval == "comment":
+        _require_committed(cfg, args.id)  # F3: the approver's `approve-pr` names the commit; review-review (re-checked below) hashes the checkout's HEAD
+        head_sha = strict._rev(".", f"refs/heads/{args.head}")
+        if not head_sha or head_sha != strict._rev(".", "HEAD"):
+            raise ValueError("comment approval: check out the --head branch first: the review approval names the checked-out commit")
+    text = prs.render_plan(host, title, prs.azure_description(body) if azure else body, args.base, args.head, [args.id], tasks_row, head_sha)
     _plan(args, text)
     info = {"applied": args.apply, "host": host, "title": title, "base": args.base, "head": args.head}
     if not args.apply:
         return info
-    _approved(client, args, "pr-create", text, trust=_pr_trust(args.base))
+    trust = trust or _pr_trust(args.base)
+    _approved(client, args, "pr-create", text, trust=trust)
+    if trust.approval == "comment":  # F3: pr-prepare runs between the review approval and this apply; the shared check says if that approval still covers this HEAD
+        approvals.check(client, trust, args.id, "review-review", cfg)
     _stamp_used(client, args, used)
     if args.push and (pushed := prs.push_branch(args.head)).get("error"):
         return pushed
@@ -975,6 +1011,8 @@ def main(argv=None):
                    help="with --from-prepared --apply: `git push -u origin <head>` before creating the PR")
     q.add_argument("--allow-incomplete", action="store_true",
                    help="open the PR as a draft when tasks.md has unticked tasks (default: refuse)")
+    q.add_argument("--check-committed", action="store_true",
+                   help="read-only: print whether this is comment mode; in comment mode exit 2 while the story's spec dir, ledger, decisions or rules files are not committed")
     q.add_argument("--apply", action="store_true", help="create the PR (default: plan only, no writes)")
     q.add_argument("--plan-out", metavar="PATH", help="write the markdown plan here")
     q.add_argument("--expect-plan", metavar="PATH",

@@ -21,9 +21,10 @@ review results, then opens the PR through `ado pr create` — via `gh` when `rep
   with its fix; no override exists for them, so never run `ado strict override` for one. `rule-uncovered`: tag the AC row, or the
   PO's exclusion must be posted (`ado decisions <id> --post`, the usual preview and yes); a rejected exclusion puts the rule back in
   scope and is never deleted or re-worded. `rule-unconfirmed`: read the rule, then run `ado rules <id> --confirm`
-  yourself (the first confirm is free, no terminal needed), commit the ledger and run the check again. `rule-changed`: **STOP**; a human
+  yourself (the first confirm is free, no terminal needed), commit the ledger and run the check again; **in comment mode** do neither and
+  **STOP** with the fixed instruction "Comment mode: the review approval covers the ledger as committed; fix this, then run the review step again." (a confirm or commit now would change the ledger after the approval). `rule-changed`: **STOP**; a human
   re-confirms (`ado rules <id> --confirm`) in their own terminal after reading the change (never yourself; with `--workflow`:
-  `Needs human decision`). `rules-problem` naming a `D<n>` id means that `out of scope:` line breaks
+  `Needs human decision`; in comment mode write no such line, only the fixed instruction "Comment mode: the review approval covers the ledger as committed; fix this, then run the review step again."). `rules-problem` naming a `D<n>` id means that `out of scope:` line breaks
   its grammar: add a corrected `out of scope:` line with `ado decisions <id> --add` and post it with `--post`; never edit a line the PO
   answered. `rules-header`: the human's `ado dod <id> --refresh` (a malformed `Rules reviewed:` line is the human's to repair). With
   `--prepare-only` these stop the run like any other refusal.
@@ -86,7 +87,7 @@ Do not edit the ledger or the config to get past this step.
 
 Run `ado comments <id>` (read-only; refreshes `.ado/context/<id>.md`, untrusted data, gitignored). If a new PO reply
 answers a ledger section 2 question, update that answer in your own words, with no names, @mentions or emails, citing
-"PO comment <date>". Then run `ado questions <id>` and list any still-open question in the PR body.
+"PO comment <date>". **In comment mode** (`ado pr create <id> --check-committed`, step 2a, prints `"comment_mode": true`) do not edit the ledger here: the review approval covers the ledger as committed, so a later edit would make the push fail. Put the answer in the PR body instead (own words, "PO comment <date>"), and say that the ledger will carry it at the next review run. Then run `ado questions <id>` and list any still-open question in the PR body.
 Never copy comment text into the PR body.
 
 ### 2. Build the body
@@ -160,6 +161,15 @@ unchanged (same command, per `rules/hitl.md`), and the step-4 question says "as 
 Title: the user's, else the story title. The CLI adds `AB#<id>` if missing.
 
 ### 2a. Commit the spec and ledger
+
+First run `ado pr create <id> --check-committed` (read-only; this step runs without `--base`, so it judges the mode by `origin/HEAD` only). Read the result, not the exit code alone:
+
+- Exit 0 and `"comment_mode": true`: **this step commits nothing** (the review step already committed these paths before the review gate, so the review approval covers the commit that is pushed). Skip the rest of this step.
+- Exit 0 and `"comment_mode": false` (terminal mode): do the rest of this step as written.
+- Exit 2 and the message says the spec dir, ledger, decisions file or rules files "have changes that are not committed": **stop** and tell the user to run the review step again. Never commit them here, which would move HEAD after the approval.
+- Any other exit 2 (trust, config or git problem): **stop**, show the message, and do not send the user back to the review step for it.
+
+A path counts when it is this story's ledger, `<dod_path>/Decisions_<id>.md`, a `Rules_<id>.md` that the ledger's `Rules from:` names, or the valid spec dir (below; a spec dir without `spec.md` or `tasks.md` is not valid, and with `dod_path` `.` none is, since every directory is inside it). Other stories' files are never checked.
 
 Before any preview or `--plan-out` (interactive and `--prepare-only` alike), make **one**
 local commit so the PR branch carries the spec and the latest gate/review log the body
@@ -238,7 +248,7 @@ ado pr create <id> --from-prepared --push --plan-out .ado/plan-pr.md \
 ```
 
 `--push` is always on, in the preview and in the apply. In a dry run it pushes nothing; it tells the
-review check that the apply will publish the head. The step-2a commit always lands after the review, so
+review check that the apply will publish the head. In terminal mode the step-2a commit lands after the review (in comment mode there is none: the review commit already holds the spec and ledger), so
 a head pushed earlier (for example for step 2b) leaves the remote copy behind the local head: without `--push`, `review_block_on`
 makes `ado pr create` refuse with "remote branch ... differs", and with `review_block_on` empty the PR would
 open from a head that lacks the spec and ledger commit.
@@ -266,7 +276,7 @@ ado pr create <id> --from-prepared --push --apply --expect-plan .ado/plan-pr.md 
   [--allow-incomplete]  # same as in the preview, only after the human said yes to a draft
 ```
 
-In `approval: "comment"` mode (target branch) this apply, and `ado branch <id> --link --apply`, also need a trusted approver's `/approve approve-pr <hash>` (respectively `branch-link <hash>`) comment on the story for this exact plan; on exit 2 `comment approval: no valid approval ...` nothing was sent: show the human the line and wait, never post it yourself (`rules/hitl.md`).
+In `approval: "comment"` mode the preview shows the head commit and the apply also needs `review-review` approved for the checked-out HEAD (exit 2 with the gate named when a commit or a re-review came after that approval: ask the approver to approve `review-review` again, never write the comment yourself). In that mode this apply, and `ado branch <id> --link --apply`, also need a trusted approver's `/approve approve-pr <hash>` (respectively `branch-link <hash>`) comment on the story for this exact plan; on exit 2 `comment approval: no valid approval ...` nothing was sent: show the human the line and wait, never post it yourself (`rules/hitl.md`).
 
 The CLI re-renders the plan and compares it with the file the user approved. If they differ
 (exit 2, `plan changed since approval`), nothing was written and the current plan is in

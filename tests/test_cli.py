@@ -423,10 +423,11 @@ def test_link_parent_dispatch_sets_hierarchy_reverse(cfg):
 
 
 # ---- F11: `ado pr create` enforces review_block_on ----
-def _review_repo(tmp_path, monkeypatch, blocks="no", blocker=0, code_after=False, ledger=True):
-    """Real git repo on branch feat; the ledger's latest review is at the base commit."""
+def _review_repo(tmp_path, monkeypatch, blocks="no", blocker=0, code_after=False, ledger=True, base_ledger=False):
+    """Real git repo on branch feat; the ledger's latest review is at the base commit. `base_ledger`: the ledger (no review yet, a `Spec dir:`) already
+    exists at that commit, as it does when `speckit.ado.review` runs, so the spec dir counts for the staleness check."""
     git(tmp_path, "init", "-q", "-b", "feat")
-    sha = commit(tmp_path, "base", {"src/app.py": "x = 1\n", "body.md": "Body\n"})
+    sha = commit(tmp_path, "base", {"src/app.py": "x = 1\n", "body.md": "Body\n", **({"dod/DoD_1001.md": ledger_md()} if base_ledger and ledger else {})})
     if ledger:
         commit(tmp_path, "docs: review log",
                {"dod/DoD_1001.md": ledger_md(review_md(sha, blocks, blocker=blocker))})
@@ -710,8 +711,8 @@ import types  # noqa: E402
 
 from ado import approvals  # noqa: E402
 from ado import __main__ as _main  # noqa: E402
-from ado.config import Trust  # noqa: E402
-from tests.conftest import RouteClient, raw_comment  # noqa: E402
+from ado.config import Config, Trust  # noqa: E402
+from tests.conftest import RouteClient, commit, git, ledger_md, raw_comment, review_md  # noqa: E402
 
 APPROVER = "55555555-5555-4555-8555-555555555555"
 T_APPR = "2026-10-01T10:00:00Z"
@@ -749,7 +750,7 @@ def _v_push(tmp_path, monkeypatch):
 
 
 def _v_pr(tmp_path, monkeypatch):
-    _review_repo(tmp_path, monkeypatch)
+    _review_repo(tmp_path, monkeypatch, base_ledger=True)
     writes = []
     monkeypatch.setattr(_main.prs, "github_create", lambda *a, **k: writes.append(a) or {"url": "https://example.test/pr/1"})
     return PR_ARGS, lambda seen: list(writes), []
@@ -767,6 +768,11 @@ def _v_branch(tmp_path, monkeypatch):
 VERBS = {"questions-post": _v_questions, "push": _v_push, "decisions-post": _v_decisions, "pr-create": _v_pr, "branch-link": _v_branch}
 
 
+def _review_hash(repo):
+    """The hash an approver names for `review-review` on story 1001 in `repo` as it is now (the review block and HEAD)."""
+    return approvals.gate_hash("review-review", 1001, approvals.artifacts("review-review", 1001, Config("contoso", "Fabrikam"), str(repo)))
+
+
 @pytest.fixture
 def venv(tmp_path, monkeypatch, git_env):
     """`venv(verb)` sets one of the five applies up in comment mode (approver APPROVER, token identity without the bypass bit)."""
@@ -782,6 +788,9 @@ def venv(tmp_path, monkeypatch, git_env):
             env.seen["c"] = RouteClient(cfg, env.raws, bypass=bypass, responses=list(rest))
             return env.seen["c"]
         monkeypatch.setattr(_main, "AdoClient", make)
+        if verb == "pr-create":  # F3: `pr create --apply` also needs `review-review` approved for the checkout's HEAD; the verb tests below are about approve-pr
+            env.review = lambda cid=10, when="2026-10-01T11:00:00Z": env.raws.append(raw_comment(cid, f"/approve review-review {_review_hash(tmp_path)}", when, author=APPROVER))
+            env.review()
         env.preview = lambda: (_main.main(env.argv + ["--plan-out", "p.md"]), (tmp_path / "p.md").read_bytes())[1]
         env.apply = lambda: _main.main(env.argv + ["--apply", "--expect-plan", "p.md"])
         env.approve = lambda gate, plan, cid=11, text=None: env.raws.append(raw_comment(
@@ -898,6 +907,7 @@ def _pr_trust_env(tmp_path, monkeypatch, git_env, home, base, base_name="release
     git(tmp_path, "switch", "-q", "-c", base_name)
     commit(tmp_path, "release", {"ado.config.json": base, "release.txt": "x"})
     git(tmp_path, "switch", "-q", "main")
+    commit(tmp_path, "docs: review log", {"dod/DoD_1001.md": ledger_md(review_md("abc1234"))})  # F3: comment mode also needs `review-review` for this HEAD
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("ADO_CONFIG", raising=False)
     monkeypatch.setenv("ADO_TOKEN", "t")
@@ -909,9 +919,10 @@ def _pr_trust_env(tmp_path, monkeypatch, git_env, home, base, base_name="release
 
 
 def _pr_apply(tmp_path, raws, base, approve=None):
-    argv = ["pr", "create", "1001", "--title", "T", "--body-file", "body.md", "--base", base, "--head", "feat"]
+    argv = ["pr", "create", "1001", "--title", "T", "--body-file", "body.md", "--base", base, "--head", "main"]
     assert _main.main(argv + ["--plan-out", "p.md"]) == 0
     if approve:
+        raws.append(raw_comment(10, f"/approve review-review {_review_hash(tmp_path)}", "2026-10-01T11:00:00Z", author=approve))
         gate = "approve-pr"
         raws.append(raw_comment(11, f"/approve {gate} {approvals.gate_hash(gate, 1001, (tmp_path / 'p.md').read_bytes())}", "2026-10-01T12:00:00Z", author=approve))
     return _main.main(argv + ["--apply", "--expect-plan", "p.md"])
@@ -950,6 +961,192 @@ def test_pr_create_with_an_unresolvable_base_and_a_comment_default_branch_refuse
     writes, raws = _pr_trust_env(tmp_path, monkeypatch, git_env, _trust_json("comment"), _trust_json("terminal"))
     assert _pr_apply(tmp_path, raws, "nope/x") == 2 and writes == []
     assert "no valid approval" in capsys.readouterr().err
+
+
+# ---- F3 (P4-20 I-3): `pr create --apply` in comment mode is bound to the approved review (review-review at HEAD) ----
+def _empty_commit(repo):
+    git(repo, "commit", "-q", "--allow-empty", "-m", "pr-prepare commit")  # a commit that leaves the review fresh for review_blocks
+
+
+def test_pr_plan_text_contains_head_sha(venv):
+    env = venv("pr-create")
+    head = git(env.dir, "rev-parse", "HEAD")
+    plan = env.preview().decode()
+    assert re.fullmatch(r"[0-9a-f]{40}", head) and f"| head commit | {head} |" in plan
+    _empty_commit(env.dir)
+    assert f"| head commit | {git(env.dir, 'rev-parse', 'HEAD')} |" in env.preview().decode() and head not in env.preview().decode()  # bound to the head, deterministic for it
+
+
+def test_pr_create_apply_passes_when_head_unchanged(venv):
+    env = venv("pr-create")
+    env.approve("approve-pr", env.preview())
+    assert env.apply() == 0 and len(env.writes()) == 1
+
+
+def test_pr_create_apply_refuses_when_head_moved_after_review_approval(venv, capsys):
+    env = venv("pr-create")  # review-review approved at HEAD1
+    _empty_commit(env.dir)   # pr-prepare (or anything) commits in the gap: HEAD2; the approver then approves the PR plan that shows HEAD2
+    env.approve("approve-pr", env.preview())
+    capsys.readouterr()
+    assert env.apply() == 2
+    err = capsys.readouterr().err
+    assert err.startswith("error: comment approval: no valid approval for gate review-review on story 1001") and "plan changed" not in err
+    assert env.writes() == [] and not (env.dir / "p.md.new").exists()
+    env.review(12, "2026-10-01T12:30:00Z")  # the approver approves review-review again, now at HEAD2 (a newer comment, the new hash)
+    assert env.apply() == 0 and len(env.writes()) == 1
+
+
+def _commit_paths(repo, msg, files):
+    """Like conftest.commit, but with explicit paths (never `add -A`: the untracked ado.config.json must stay out), as the kit's commands do."""
+    for rel, text in files.items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text)
+    git(repo, "add", "--", *files)
+    git(repo, "commit", "-q", "-m", msg)
+
+
+def test_agent_rereview_after_approval_refused(venv, capsys):
+    """A new `### Review` block the agent commits after the approval is not covered by it (an uncommitted one is refused earlier: next test)."""
+    env = venv("pr-create")
+    ledger = env.dir / "dod" / "DoD_1001.md"
+    _commit_paths(env.dir, "docs: re-review", {"dod/DoD_1001.md": ledger.read_text().replace("major 0", "major 1", 1)})
+    env.approve("approve-pr", env.preview())
+    capsys.readouterr()
+    assert env.apply() == 2 and "gate review-review" in capsys.readouterr().err and env.writes() == []
+
+
+def test_refused_review_recheck_comes_before_the_override_stamp(venv, monkeypatch):
+    """The re-check runs before any local write too: a refused apply never reaches `_stamp_used` (strict-mode `used:` stamps)."""
+    env = venv("pr-create")
+    _empty_commit(env.dir)
+    env.approve("approve-pr", env.preview())
+    monkeypatch.setattr(_main, "_stamp_used", lambda *a: pytest.fail("stamped before the review re-check"))
+    assert env.apply() == 2 and env.writes() == []
+
+
+# ---- F3 fix round 1 (I-1): the review step commits what step 2a would; comment mode verifies instead of committing ----
+CHECK_COMMITTED = ["pr", "create", "1001", "--check-committed"]
+
+
+def _review_step_commit(repo, rules_from="5, 6", **extra):
+    """What `speckit.ado.review` step 4 does: ONE commit of the ledger (`Rules from:` named), the spec dir and the decisions/rules files (explicit paths)."""
+    ledger = repo / "dod" / "DoD_1001.md"
+    _commit_paths(repo, "docs: review log AB#1001", {"dod/DoD_1001.md": ledger.read_text().replace("- **Spec dir:** specs/001-x\n", f"- **Spec dir:** specs/001-x\n- **Rules from:** {rules_from}\n", 1),
+                                                     "specs/001-x/spec.md": "# spec\n", "specs/001-x/tasks.md": "- [x] T001 x\n", **extra})
+
+
+def test_honest_comment_mode_flow_end_to_end(venv, capsys):
+    env = venv("pr-create")
+    _review_step_commit(env.dir, **{"dod/Decisions_1001.md": "# decisions\n", "dod/Rules_5.md": "# rules\n"})
+    env.review(12, "2026-10-01T11:30:00Z")  # review-review approved for the HEAD that holds the spec dir
+    capsys.readouterr()
+    assert _main.main([*CHECK_COMMITTED]) == 0  # pr-prepare step 2a: nothing left to commit
+    assert json.loads(capsys.readouterr().out) == {"comment_mode": True, "committed": True}
+    env.approve("approve-pr", env.preview())
+    assert env.apply() == 0 and len(env.writes()) == 1
+
+
+@pytest.mark.parametrize("leftover", ["specs/001-x/tasks.md", "specs/001-x/new.md", "dod/Decisions_1001.md", "dod/Rules_5.md", "dod/DoD_1001.md"])
+def test_comment_mode_step_2a_stops_when_a_path_is_left_uncommitted(venv, capsys, leftover):
+    env = venv("pr-create")
+    _review_step_commit(env.dir, **{"dod/Rules_6.md": "# rules\n"})  # `Rules from:` names 5 and 6; 6 is committed, 5 is the leftover case
+    env.review(12, "2026-10-01T11:30:00Z")
+    target = env.dir / leftover
+    target.parent.mkdir(exist_ok=True)
+    target.write_text(target.read_text() + "\nleft over\n" if target.exists() else "new\n")
+    capsys.readouterr()
+    assert _main.main(CHECK_COMMITTED) == 2
+    assert capsys.readouterr().err.strip() == "error: " + _main.E_UNCOMMITTED
+    assert _main.main(env.argv + ["--plan-out", "p.md"]) == 2 and not (env.dir / "p.md").exists()  # the preview and the apply refuse it too
+    assert _main.E_UNCOMMITTED in capsys.readouterr().err and env.writes() == []
+
+
+def test_other_stories_rules_files_and_an_invalid_spec_dir_never_block(venv, capsys):
+    env = venv("pr-create")
+    _review_step_commit(env.dir)
+    (env.dir / "dod" / "Rules_999.md").write_text("# another story's rules\n")  # not named by `Rules from:`
+    (env.dir / "dod" / "DoD_2002.md").write_text("# another story\n")
+    capsys.readouterr()
+    assert _main.main(CHECK_COMMITTED) == 0 and json.loads(capsys.readouterr().out)["comment_mode"] is True
+
+
+def test_dirtied_between_preview_and_apply_refuses_the_apply(venv, capsys):
+    env = venv("pr-create")
+    _review_step_commit(env.dir)
+    env.review(12, "2026-10-01T11:30:00Z")
+    env.approve("approve-pr", env.preview())
+    (env.dir / "specs" / "001-x" / "new.md").write_text("added after the preview\n")  # untracked, in the spec dir
+    capsys.readouterr()
+    assert env.apply() == 2 and _main.E_UNCOMMITTED in capsys.readouterr().err
+    assert env.writes() == [] and not (env.dir / "p.md.new").exists()
+
+
+def test_check_committed_does_not_touch_the_index(venv):
+    env = venv("pr-create")
+    index = env.dir / ".git" / "index"
+    before = index.read_bytes()
+    os.utime(env.dir / "dod" / "DoD_1001.md", (1, 1))  # a stat change that a plain `git status` would refresh into the index
+    assert _main.main(CHECK_COMMITTED) == 0 and index.read_bytes() == before
+
+
+def test_spec_dir_without_spec_or_tasks_is_not_checked(venv, capsys):
+    env = venv("pr-create")
+    _review_step_commit(env.dir)
+    (env.dir / "specs" / "001-x" / "spec.md").rename(env.dir / "specs" / "001-x" / "notes.md")  # tracked spec.md gone: no spec.md
+    (env.dir / "specs" / "001-x" / "tasks.md").unlink()
+    (env.dir / "specs" / "001-x" / "more.md").write_text("x")
+    capsys.readouterr()
+    assert _main.main(CHECK_COMMITTED) == 0  # the prompt would not add this dir, so the code does not judge it
+
+
+def test_uncommitted_with_dod_path_dot_ignores_the_spec_dir(tmp_path, git_env):
+    from ado import prs
+    git(tmp_path, "init", "-q", "-b", "feat")
+    commit(tmp_path, "base", {"x.txt": "x"})
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    (tmp_path / "specs" / "001-x" / "spec.md").write_text("x")
+    assert prs.uncommitted(str(tmp_path), 1001, ".", "specs/001-x") == 0  # every directory is inside dod_path ".": no spec dir is valid
+    (tmp_path / "DoD_1001.md").write_text("x")
+    assert prs.uncommitted(str(tmp_path), 1001, ".", "specs/001-x") == 1
+    assert prs.uncommitted(str(tmp_path), 1001, "dod", "specs/001-x") == 1  # with a real dod_path the spec dir counts (its untracked spec.md); the ledger at the root is not this dod_path's
+
+
+def test_terminal_mode_check_committed_never_refuses(venv, capsys):
+    env = venv("pr-create", real_trust=True)
+    (env.dir / "specs").mkdir()
+    (env.dir / "specs" / "left.md").write_text("x")
+    (env.dir / "dod" / "Decisions_1001.md").write_text("x")
+    capsys.readouterr()
+    assert _main.main(CHECK_COMMITTED) == 0 and json.loads(capsys.readouterr().out) == {"comment_mode": False, "committed": True}  # step 2a commits them, as before
+
+
+def test_pr_create_apply_with_push_refuses_before_the_push(venv, capsys, monkeypatch):
+    env = venv("pr-create")
+    (env.dir / ".ado").mkdir()
+    (env.dir / ".ado" / "pr-args.json").write_text(json.dumps({"title": "T", "base": "main", "head": "feat"}))
+    (env.dir / ".ado" / "pr-body.md").write_text("Body\n")
+    monkeypatch.setattr(_main.prs, "push_branch", lambda head: pytest.fail("pushed"))
+    env.argv = ["pr", "create", "1001", "--from-prepared", "--push"]
+    _empty_commit(env.dir)
+    env.approve("approve-pr", env.preview())
+    assert env.apply() == 2 and env.writes() == []
+
+
+def test_pr_create_comment_mode_refuses_a_head_that_is_not_checked_out(venv, capsys):
+    env = venv("pr-create")
+    git(env.dir, "branch", "other")
+    _empty_commit(env.dir)  # `other` is now a different commit than the checked-out HEAD
+    env.argv = [*env.argv[:-1], "other"]
+    assert _main.main(env.argv + ["--plan-out", "p.md"]) == 2
+    assert not (env.dir / "p.md").exists() and "check out the --head branch" in capsys.readouterr().err
+
+
+def test_terminal_mode_pr_create_unchanged(venv, capsys):
+    env = venv("pr-create", real_trust=True)  # no trust keys: no review check, no head row, no approval read
+    plan = env.preview().decode()
+    assert "head commit" not in plan and "| head | feat |" in plan
+    assert env.apply() == 0 and len(env.writes()) == 1
+    assert not any("/permissions/" in c["path"] or "/comments" in c["path"] for c in env.seen["c"].calls)
 
 
 # ---- P4-12a: terminal mode (no trust keys) is what main e8e4c01 did; the cases that now refuse are named ----

@@ -244,7 +244,7 @@ First record the reviewed SHA: `git rev-parse --short HEAD`, **before** appendin
 anything. That SHA, not a later one, goes in the heading, because the ledger commit below
 moves `HEAD` and the heading must name the code that was reviewed. `speckit.ado.pr` and
 the CLI accept the review as current while every commit after that SHA touches only
-`<dod_path>/` and the spec dir (including the spec dir's first commit in `speckit.ado.pr` step 2a).
+`<dod_path>/` and the spec dir (including the spec dir's first commit, which is this step's own commit; `speckit.ado.pr` step 2a only commits what is left, in terminal mode).
 
 In strict mode, also write the plane 8 verdicts as a second block with the same reviewed SHA (see the end of
 `templates/review-report.md`): before appending, edit the heading line of every earlier `### AC fidelity — …` block that does
@@ -265,12 +265,14 @@ heading in the current format the marker goes after the SHA backticks:
 format without a SHA gets the marker appended at the end of the line. Only the newest
 `### Review` block is unmarked, so it is the current one.
 
-Then commit the ledger change (only the ledger file, never `git add -A`):
+Then commit the ledger change and, **in the same commit and in every mode**, everything `speckit.ado.pr` step 2a would commit later, so the `review-review` approval covers the HEAD that is pushed: the ledger; the spec dir from the ledger's `Spec dir:` (validated exactly as in `commands/pr.md` step 2a; if it is invalid or cannot be added, write the `Spec dir not committed` note into the ledger first, as there); `<dod_path>/Decisions_<id>.md` when it exists; and the `<dod_path>/Rules_<id>.md` files that `Rules from:` names (digits-only ids, existing files). List every path in **both** commands: `git commit -- <paths>` commits only the paths listed, so one missing there stays uncommitted. Explicit paths only, never `git add -A`; nothing to commit means no commit:
 
 ```bash
-git add -- <dod_path>/DoD_<id>.md
-git commit -m "docs: review log AB#<id>" -- <dod_path>/DoD_<id>.md
+git add -- <dod_path>/DoD_<id>.md <spec dir> [<dod_path>/Decisions_<id>.md] [<dod_path>/Rules_<id>.md ...]
+git diff --cached --quiet -- <those paths> || git commit -m "docs: review log AB#<id>" -- <those paths>
 ```
+
+Then run `ado pr create <id> --check-committed` (read-only): it prints `{"comment_mode": ..., "committed": true}`, which tells you the mode if you need it. Exit 2 with the "have changes that are not committed" message means a path is still uncommitted: add it to the commit.
 
 ### 5. Blocking verdict
 

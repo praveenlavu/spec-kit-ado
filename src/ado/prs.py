@@ -344,6 +344,30 @@ def only_ledger_since(repo, base_sha, head, dod_path, spec_dir, story_id):
     return not _outside_ledger(repo, base_sha, head, dod_path, spec_dir, story_id, whole_dirs=False)
 
 
+def uncommitted(repo, story_id, dod_path, spec_dir, rules_ids=()):
+    """How many paths of the story have changes that are not committed: its ledger, its decisions file, the `Rules_<id>.md` files of `rules_ids` (the
+    ledger's `Rules from:`, digits-only; other stories' rules files are not this story's) in `dod_path`, and the ledger's `Spec dir:`. These are the paths
+    `speckit.ado.pr` step 2a would commit, judged as that step does: the spec dir (untrusted) counts only when it is relative, has no `..`, is not `.`,
+    is not `dod_path` or inside it (so with `dod_path` `.` none is valid), and holds a regular-file `spec.md` or `tasks.md` in the working tree; untracked
+    files count. Read-only (`--no-optional-locks`: git does not refresh the index). Raises _Refuse (fixed texts) when git cannot answer or `dod_path`
+    is outside the repository."""
+    dod_rel = _repo_rel(repo, dod_path)
+    if dod_rel is None:
+        raise _Refuse("cannot check the commits: dod_path is outside the repository")
+    pre = f"{dod_rel}/" if dod_rel != "." else ""
+    specs = [f":(literal){pre}DoD_{story_id}.md", f":(literal){pre}Decisions_{story_id}.md"] + [f":(literal){pre}Rules_{i}.md" for i in rules_ids]
+    if spec_dir and not PurePosixPath(spec_dir).is_absolute() and ".." not in PurePosixPath(spec_dir).parts:
+        rel = _repo_rel(repo, spec_dir)
+        top = Path(repo) / spec_dir
+        if (rel not in (None, ".") and dod_rel != "." and not (rel + "/").startswith(dod_rel + "/")
+                and any((top / n).is_file() and not (top / n).is_symlink() for n in ("spec.md", "tasks.md"))):
+            specs.append(f":(literal){rel}")
+    r = _git(repo, "--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all", "--", *specs)
+    if r.returncode:
+        raise _Refuse("cannot check the commits: git status failed")
+    return len([e for e in r.stdout.split(b"\0") if e])
+
+
 def push_branch(head):
     """`git push -u origin <head>`, list-form (no shell)."""
     try:
@@ -353,7 +377,8 @@ def push_branch(head):
     return {"error": r.stderr} if r.returncode else {}
 
 
-def render_plan(host, title, body, base, head, work_item_ids, tasks_row=None):
+def render_plan(host, title, body, base, head, work_item_ids, tasks_row=None, head_sha=None):
+    """`head_sha` (comment mode only): the full commit id the head branch is at, shown so an `approve-pr` approval names that commit."""
     preview = " ".join(body.split())  # escaped once, with the whole value, by _cell below
     if len(preview) > 120:
         preview = preview[:120] + "..."
@@ -361,6 +386,10 @@ def render_plan(host, title, body, base, head, work_item_ids, tasks_row=None):
             ("work items", ", ".join(f"AB#{i}" for i in work_item_ids)
              + (" (Azure: if the PR comes back without the story link, the link is added to the story)" if host == "azure" else "")),
             ("body", f"{len(body)} chars: {preview}")]
+    if head_sha:
+        if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+            raise ValueError("the head commit is not a full commit id")
+        rows.insert(4, ("head commit", head_sha))  # just under `head`
     if tasks_row:
         rows.insert(-1, tasks_row)  # (field, value), shown just above the body
     lines = ["Plan for pull request", "", "| field | value |", "|---|---|"]
