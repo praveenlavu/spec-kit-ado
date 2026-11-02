@@ -502,6 +502,8 @@ def _sync_decisions(client, args):
     report = decisions.apply_sync(path, found, approvers, excluded, client, args.id)
     notice = [f"{i}: {n} later malformed command line(s) by an approver: check the thread" for i, n in report["bad_newer"].items() if n]
     notice += [f"{i} is superseded by {m}: this verdict is masked while {m} stands (a rejected {m} would bring it back)" for i, m in report["masked"].items()]
+    if report.get("no_longer_valid"):  # the file keeps the old verdict; the wait gate and the cross-check no longer agree with it
+        print(f"approval-no-longer-valid: {', '.join(report['no_longer_valid'])}", file=sys.stderr)
     return {"id": args.id, **report, **({"notice": notice} if notice else {})}
 
 

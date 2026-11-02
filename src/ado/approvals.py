@@ -518,6 +518,7 @@ E_REVIEW = ("comment approval: no valid approval for gate {gate} on story {story
             "newer than any approval request).{bad}")
 E_NOT_WAIT = "gate {gate} is not a wait gate: it is checked by `ado approvals check` as a review or an apply gate, not by its open questions or decisions"
 E_WAIT = "comment approval: gate {gate} on story {story} is not met: {n} open ({ids}).{bad}"
+E_CUT_OPEN = " {ids}: the question was last shown cut at 500 characters, so no answer closes it; shorten it in the ledger and post it again (`ado questions <id>`)."
 E_QUESTIONS = ("comment approval: the story's questions comment cannot be trusted (more than one comment carries the questions marker, it is not the token identity's own, "
                "it was edited by another identity, or it has unexpected markup or lines), so nothing is met.")
 E_DECISIONS = ("comment approval: a decisions comment on the story cannot be trusted (edited, disguised, cut, hidden in markup, unexpected lines, or none of them is "
@@ -595,17 +596,17 @@ def artifacts(gate_id, story_id, cfg, repo="."):
 
 
 def _wait_answers(client, story_id, trust_cfg, found, skip):
-    """(open question ids, malformed-line count) of `wait-po-answers` from ADO only. There is at most ONE comment that carries the questions marker
+    """(open question ids, malformed-line count, ids held open for being cut) of `wait-po-answers` from ADO only. There is at most ONE comment that carries the questions marker
     (`comments.marked`, so a disguised one counts), and it must be the token identity's own plain kit comment (anything else, a second marker comment, one by
     another identity, an edit by another identity, a text that is not exactly a shape the kit writes: E_QUESTIONS); no marker comment is nothing to wait for.
     Every question that was OPEN in ANY version of that comment (its versions) stays open until the newest valid approver `/answer Q<n>` (`newest`: the
     guards) that is newer than the version that started to show it, with no newer malformed approver line, or until it is due (`assume_after_hours` by
-    `client.server_now()`, counted from that version); a question that vanished from the current text is not answered by vanishing."""
+    `client.server_now()`, counted from that version); a question that vanished from the current text is not answered by vanishing. A question whose LAST showing (in any version) was the kit's cut (500 characters ending in `…`) stays open whatever is answered."""
     from . import questions
     found = cached(found)
     marked = [c for c in found if comments.marked(c.get("text"), questions.MARKER)]
     if not marked:
-        return [], 0
+        return [], 0, []
     try:
         own = questions.own_comment(client, found)
     except ValueError:
@@ -628,9 +629,14 @@ def _wait_answers(client, story_id, trust_cfg, found, skip):
         for q in h:
             first.setdefault(q["id"], i)
     now_ids = {q["id"] for q in held[-1]}
+    cut_last = {}  # Q<n> -> was its LAST showing (in any version, so also after it vanished from the comment) the kit's own cut, as `cut_at` for decisions
+    for h in held:
+        for q in h:
+            cut_last[q["id"]] = len(f"{q['id']}: {q['question']}") >= questions.MAX_LINE and q["question"].endswith("…")
+    cut_now = {i for i, c in cut_last.items() if c}
     hours = trust_cfg.unattended.get("assume_after_hours")
     hours = hours if type(hours) is int and 1 <= hours <= 720 else None
-    now, still, bad_total = None, [], 0
+    now, still, bad_total, cut_open = None, [], 0, []
     for i in sorted(first, key=lambda q: int(q[1:])):
         when = asked.get(i) if i in now_ids else _when(vs[first[i]]["modified"])
         if when is None and i not in now_ids:
@@ -638,6 +644,11 @@ def _wait_answers(client, story_id, trust_cfg, found, skip):
         tally = {}
         win = newest(client, story_id, found, i, trust_cfg.approvers, skip, tally=tally)
         key = _order({"date": win["created"], "id": win["id"]}) if win else None
+        if i in cut_now:  # the NEWEST posting shows it cut: an approver cannot answer text they cannot see in full, and the assume window does not close it
+            still.append(i)
+            cut_open.append(i)
+            bad_total += tally.get("bad_newer", 0)
+            continue
         if win and win["verb"] == "answer" and not win["bad_newer"] and when and key and key > (when, (2, 0)):
             continue  # answered; a tie with the posting loses, as for `questions --sync`
         if hours and when:
@@ -646,7 +657,7 @@ def _wait_answers(client, story_id, trust_cfg, found, skip):
                 continue  # due
         still.append(i)
         bad_total += tally.get("bad_newer", 0)
-    return still, bad_total
+    return still, bad_total, cut_open
 
 
 def _server_now(client):
@@ -734,9 +745,12 @@ def wait_state(client, story_id, gate_id, trust_cfg, ci_identity=None, decisions
         raise ApprovalRefused(E_NOT_WAIT.format(gate=gate_id) if gate_id in GATES else E_GATE)
     comment_mode_allowed(client)
     found, skip = _load(client, trust_cfg, story_id, ci_identity)
-    still, bad = (_wait_answers(client, story_id, trust_cfg, found, skip) if gate_id == "wait-po-answers"
-                  else _wait_validation(client, story_id, trust_cfg, found, skip, decisions_md() if callable(decisions_md) else decisions_md))
-    return {"met": not still, "open": still, "bad_newer": bad}
+    cut = []
+    if gate_id == "wait-po-answers":
+        still, bad, cut = _wait_answers(client, story_id, trust_cfg, found, skip)
+    else:
+        still, bad = _wait_validation(client, story_id, trust_cfg, found, skip, decisions_md() if callable(decisions_md) else decisions_md)
+    return {"met": not still, "open": still, "bad_newer": bad, **({"cut": cut} if cut else {})}  # `cut`: absent unless a question is held open for being cut
 
 
 def check(client, trust_cfg, story_id, gate_id, cfg, repo=".", ci_identity=None):
@@ -753,7 +767,8 @@ def check(client, trust_cfg, story_id, gate_id, cfg, repo=".", ci_identity=None)
         st = wait_state(client, story_id, gate_id, trust_cfg, ci_identity,
                         lambda: decisions_text(cfg, repo, story_id))
         if not st["met"]:
-            raise ApprovalMissing(E_WAIT.format(gate=gate_id, story=int(story_id), n=len(st["open"]), ids=", ".join(st["open"]), bad=_bad(st["bad_newer"], "on these")))
+            raise ApprovalMissing(E_WAIT.format(gate=gate_id, story=int(story_id), n=len(st["open"]), ids=", ".join(st["open"]), bad=_bad(st["bad_newer"], "on these")
+                                                + (E_CUT_OPEN.format(ids=", ".join(st["cut"])) if st.get("cut") else "")))
         return {"gate": gate_id, "mode": "comment", "met": True, "open": []}
     if gate_id not in REVIEW_GATES:
         raise ApprovalRefused(E_APPLY_GATE.format(gate=gate_id))

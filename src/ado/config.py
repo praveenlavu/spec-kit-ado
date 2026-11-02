@@ -333,6 +333,24 @@ Trust = collections.namedtuple("Trust", "approvers approval unattended")  # what
 _BAD_BASE = re.compile(r"[~^:\s\x00-\x1f\x7f]|@\{|\.\.|^-")  # a revision expression, a range or an option, not a plain ref name
 
 
+E_NONROOT_TRUST = ("the config file in use is not the repo-root ado.config.json and sets approvers, approval or unattended: those keys are "
+                   "read only from ado.config.json on the default branch; move them there")
+
+
+def _has_trust_keys(p):
+    """Does the regular file `p` (a symlink is followed: it is only searched for the three keys) hold a trust key? Over 1 MiB, unreadable or not a JSON
+    object: ConfigInvalid (when it cannot be read, nobody can say it holds none)."""
+    try:
+        with p.open("rb") as f:
+            raw = f.read(MAX_REF_CONFIG + 1)
+        data = json.loads(raw.decode("utf-8")) if len(raw) <= MAX_REF_CONFIG else None
+    except (OSError, ValueError, RecursionError):
+        data = None
+    if not isinstance(data, dict):
+        raise ConfigInvalid("the config file cannot be read as a JSON object of at most 1 MiB, so it cannot be checked for the approval keys")
+    return any(k in data for k in TRUST_KEYS)
+
+
 def _working_tree_has_trust_keys(repo):
     """True when a config file this process would read from the working tree holds a trust key. Read the way `Config.load` finds it (a
     symlink to a regular file is followed: the file is only searched for the three keys). A file that is over 1 MiB, unreadable, or
@@ -340,20 +358,22 @@ def _working_tree_has_trust_keys(repo):
     paths = [Path(repo) / "ado.config.json"]
     if os.environ.get("ADO_CONFIG"):
         paths.insert(0, Path(os.environ["ADO_CONFIG"]))
-    for p in paths:
-        if not p.is_file():
-            continue
-        try:
-            with p.open("rb") as f:
-                raw = f.read(MAX_REF_CONFIG + 1)
-            data = json.loads(raw.decode("utf-8")) if len(raw) <= MAX_REF_CONFIG else None
-        except (OSError, ValueError, RecursionError):
-            data = None
-        if not isinstance(data, dict):
-            raise ConfigInvalid("the config file cannot be read as a JSON object of at most 1 MiB, so it cannot be checked for the approval keys")
-        if any(k in data for k in TRUST_KEYS):
-            return True
-    return False
+    return any(p.is_file() and _has_trust_keys(p) for p in paths)
+
+
+def _top_config(repo):
+    """The git top level's `ado.config.json` (`repo`'s own when git cannot say)."""
+    from . import strict
+    top = strict._out(str(repo), "rev-parse", "--show-toplevel")
+    return Path(top.decode("utf-8", "replace").strip() if top else repo) / "ado.config.json"
+
+
+def _same_file(a, b):
+    """Same file on disk (a symlink, `..`, another spelling or another letter case on a case-insensitive disk included); a missing one is not."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def trusted(repo=".", base=None):
@@ -365,6 +385,10 @@ def trusted(repo=".", base=None):
     the keys could not be checked against anything. Residual: deleting `origin/HEAD`, or rewriting `refs/remotes/origin/<base>` locally,
     changes what the local CLI trusts; CI fetches fresh."""
     from . import strict  # local: strict -> gate -> questions -> auth -> secretstore -> config
+    # only the git top level's ado.config.json is read from the target: trust keys in the file `Config.load` reads instead would be dropped silently
+    used = next((p for p in (Path(os.environ.get("ADO_CONFIG") or "\0"), Path(repo) / "ado.config.json") if p.is_file()), None)
+    if used is not None and not _same_file(used, _top_config(repo)) and _has_trust_keys(used):
+        raise ConfigInvalid(E_NONROOT_TRUST)
     ref = base or strict.default_base(str(repo))
     if ref:
         if not isinstance(ref, str) or _BAD_BASE.search(ref):

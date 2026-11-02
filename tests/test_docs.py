@@ -2912,3 +2912,20 @@ def test_parse_once_and_size_cap_are_documented():
     assert "(F4, P4-20 I-4)" in cfg and "`approvals.MAX_RAW_HTML` (256 KiB" in cfg and "parsed for a command ONCE per run" in cfg and "never be an approval" in cfg
     assert "(F4, P4-20 I-4)" in log and "`approvals.MAX_RAW_HTML` (256 KiB, counted in characters, not bytes" in log
     assert "approves again in a short comment" in log and "must approve again in a short comment" in cfg and "counts characters, not bytes" in cfg
+
+
+def test_trust_minors_are_documented():
+    """F5 (P4-20 M-1..M-4): cut questions stay open, a lost sync approval is reported, non-root trust keys are refused."""
+    cfg, log, gh, az = _flat("docs/configuration.md"), _flat("CHANGELOG.md"), _flat("docs/ci-github.md"), _flat("docs/ci-azure-pipelines.md")
+    from ado.config import E_NONROOT_TRUST
+    assert "(F5, P4-20 M-1" in cfg and "no `/answer` and not `assume_after_hours` closes it" in cfg
+    assert "approval-no-longer-valid: D2, D5" in cfg and "`no_longer_valid`" in cfg
+    assert "(F5, P4-20 M-4" in cfg and "(F5, P4-20 M-4" in gh and "(F5, P4-20 M-4" in az and "move them there" in E_NONROOT_TRUST
+    for doc in (cfg, gh, az):
+        assert "exit 2" in doc and "`ado gate`, `strict mode` and `branch --id-from` do not read" in doc
+    assert "`gate`, `strict mode` and `branch --id-from` do not read them and are unaffected" in log
+    assert "last shown cut at 500 characters" in cfg and "exactly 500 characters ending in `…`" in cfg and "also when the newest command is `older-than-posting`" in cfg
+    assert "`os.path.samefile`" in cfg and "`svc/ado.config.json`" in cfg
+    assert "(F5, P4-20 slice A M-1..M-4)" in log and "`approval-no-longer-valid: D2, D5`" in log
+    for doc in ("README.md", "rules/hitl.md", "AGENTS.md"):
+        assert "approval-no-longer-valid: D2, D5" in _flat(doc)

@@ -489,7 +489,9 @@ def sync(md, comment_rows, approvers, excluded, client, story_id):
     Every other line is listed in `skipped` with the rule (SYNC_RULES). `bad_newer[id]` counts malformed command lines by an approver newer than the
     verdict (`newest`): the caller must show it next to the verdict; `masked` names the standing superseder of a decision the sync answered. A file that
     does not parse, has an unclosed fence or comment or repeats an id raises ValueError (nothing is returned); so does an approver's valid verdict that
-    differs from the file's and cannot be written (the line has `via` but its evidence is gone: edited, posting-*; or the rewrite itself fails). Only the target lines change. No request except the guards' GETs."""
+    differs from the file's and cannot be written (the line has `via` but its evidence is gone: edited, posting-*; or the rewrite itself fails). Only the target lines change.
+    A line with `via` that this sync neither renewed nor found still backed by that comment (no valid command of an approver counts any more: the comment was edited or deleted or its author left
+    `approvers`; or the newest one is `older-than-posting`, `posting-edited` or `bad-comment-id`) is left as it is and listed in `no_longer_valid` (the key is absent otherwise): sync never undoes a verdict, but it says so. No request except the guards' GETs."""
     parsed = parse_decisions(md)
     ids = [f"D{m.group(2)}" for ln in _visible(md)[0].splitlines() if (m := _CAND.match(ln))]
     if parsed["unparsed"] or len(ids) != len(set(ids)) or not all(re.fullmatch(r"D[0-9]{1,9}", i) for i in ids):  # ids are printed: ASCII digits only
@@ -497,7 +499,7 @@ def sync(md, comment_rows, approvers, excluded, client, story_id):
     comment_rows = approvals.cached(comment_rows)  # every comment is parsed once for all the decisions
     rows, skip, edits = {str(c.get("id")): c for c in comment_rows}, {str(e).lower() for e in excluded}, {}
     index = posting_index(comment_rows)
-    applied, skipped, status, bad_newer, blocked, out = [], {}, {}, {}, [], md
+    applied, skipped, status, bad_newer, blocked, lost, out = [], {}, {}, {}, [], [], md
     for d in sorted((d for k in _STATES for d in parsed[k]), key=lambda d: int(d["id"][1:])):
         i = d["id"]
         rule, post = _posting_rule(d, rows, skip, client, story_id, edits, index)
@@ -516,6 +518,8 @@ def sync(md, comment_rows, approvers, excluded, client, story_id):
         bad_newer[i] = tally.get("bad_newer", 0)
         if win is None or win["verb"] not in _VERDICT:
             skipped[i] = "no-verdict"
+            if d.get("via"):  # a verdict a sync wrote, and no command of an approver counts any more (edited, or the approver was removed): the file stands, say so
+                lost.append(i)
             continue
         key, cid, pkey = approvals._order({"date": win["created"], "id": win["id"]}), str(win["id"]), _posting_key(post)
         if pkey is None:
@@ -538,6 +542,8 @@ def sync(md, comment_rows, approvers, excluded, client, story_id):
             else:
                 skipped[i] = "unwritable"
                 blocked.append(i)  # an approver's verdict that cannot land is an error, never a quiet skip
+        if d.get("via") and i not in applied and skipped.get(i) != "up-to-date":  # neither renewed nor still backed (older-than-posting, posting-edited, bad-comment-id): say so
+            lost.append(i)
     if blocked:
         raise ValueError(f"an approver's newer verdict cannot be written to the decisions file for {', '.join(blocked)}, so the earlier verdict would stand; "
                          "fix the line (see docs/configuration.md, `ado decisions --sync`) and run it again; nothing written")
@@ -546,7 +552,7 @@ def sync(md, comment_rows, approvers, excluded, client, story_id):
         raise ValueError("the sync would change more than the target lines; nothing written")
     after = parse_decisions(out)
     return out, {"applied": applied, "skipped": skipped, "status": status, "bad_newer": bad_newer,
-                 "masked": {i: m for i in applied if (m := masked_by(after, i))}}
+                 "masked": {i: m for i in applied if (m := masked_by(after, i))}, **({"no_longer_valid": lost} if lost else {})}
 
 
 def apply_sync(file_path, comment_rows, approvers, excluded, client, story_id):

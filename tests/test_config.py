@@ -833,7 +833,7 @@ def test_no_base_with_trust_keys_refuses(tmp_path, git_env, monkeypatch, extra):
     elsewhere.write_text(json.dumps({**TRUST_BASE, **extra}))
     (repo / "ado.config.json").write_text(json.dumps(TRUST_BASE))
     monkeypatch.setenv("ADO_CONFIG", str(elsewhere))
-    with pytest.raises(ConfigInvalid, match="origin/HEAD or pass --base"):
+    with pytest.raises(ConfigInvalid, match="not the repo-root ado.config.json"):  # F5 (M-4): a non-root file with a trust key is refused with its own text, base or not
         trusted(str(repo))
 
 
@@ -881,7 +881,7 @@ def test_no_base_refusal_texts_are_fixed_and_name_no_file(tmp_path, git_env, mon
     monkeypatch.setenv("ADO_CONFIG", str(elsewhere))
     with pytest.raises(ConfigInvalid) as e:
         trusted(str(repo))
-    assert "the config file sets" in str(e.value) and "ado.config.json" not in str(e.value) and "SECRETNAME" not in str(e.value)
+    assert "not the repo-root ado.config.json" in str(e.value) and "SECRETNAME" not in str(e.value)  # F5 (M-4): the non-root text, no file name
     elsewhere.write_text("{ not json")
     with pytest.raises(ConfigInvalid) as e:
         trusted(str(repo))

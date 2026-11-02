@@ -113,7 +113,7 @@ def plan_post(client, work_item_id, parsed):
     cut = [q["id"] for q in qs if _line(q)[1]]
     me = _me(client)
     mine = [c for c in comments.fetch(client, work_item_id, with_id=True)
-            if c["text"].startswith(MARKER) and c["author"] == me]
+            if c["text"].startswith(MARKER) and str(c["author"]).lower() == str(me).lower()]  # ids compare lowercase, as everywhere else
     if not mine:
         return {"action": "add" if qs else "none", "html": body if qs else "", "comment_id": None, "old": "",
                 "cut": cut}
