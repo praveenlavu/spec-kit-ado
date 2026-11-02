@@ -159,3 +159,7 @@ never edits `state.json` and never resumes a run that is not `paused`.
   same step (a loop iteration `:n` to `:n+1` included), which narrows the window and does not close it.
 - A paused step that is not one of the 12 gates, an unreadable `state.json` and a symlinked run directory are exit 2: the poller does not guess.
 - The poller does not read `approvers` or `unattended` from the working tree. An unreadable target config is exit 2.
+- **`ado doctor` does not catch an approver that can never approve (known 0.3.0 limitation).** Its `approvers` row compares approvers with the local token
+  identity only, not with the CI identity or the authors of the kit's `[spec-kit-ado:*]` comments. Such an approver is already excluded from approving
+  (`approvals.excluded`), so nothing unsafe happens; the cost is diagnosis: the gates read `waiting` for ever. To find it, run
+  `ado comments <story id> --author-ids` and compare the ids with `approvers`. Doctor's `bypass` row does check the token identity's bypass-rules permission.

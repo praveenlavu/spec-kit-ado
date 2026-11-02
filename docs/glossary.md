@@ -4,7 +4,7 @@ One sentence for every concept you meet, and the first setup profile that needs 
 `ado setup --profile`: `starter` (advisory, nothing blocks), `team` (the gate and the review can block) and `strict` (tests
 proven red before green, a verification record, refusals). `opt-in` marks a feature you switch on yourself in any profile.
 The 10-minute path is the [quickstart](quickstart.md); the keys are in [configuration](configuration.md). The keys for approvers and
-approval by a comment on the story exist, and so does the rule for which comment counts; the verbs that act on them are added to the tool during 0.3.0.
+approval by a comment on the story, the rule for which comment counts, and the verbs that act on them (`--sync`, `ado approvals check`, the poller `ado approvals sync` and the done-time cross-check) are all in this version.
 
 | Concept | First needed in | What it is |
 |---|---|---|
@@ -19,7 +19,7 @@ approval by a comment on the story exist, and so does the rule for which comment
 | **Profile** | starter | A named set of config keys written by `ado setup --profile` with `starter`, `team` or `strict`; it is not the stack profile. |
 | **Advisory mode** | starter | The default `"mode": "advisory"`: checks report problems and block only what `gate.block` lists. |
 | **Preview and apply** | starter | Every ADO write first writes a plan with `--plan-out` that you read, and `--apply --expect-plan` then applies only that plan or refuses. |
-| **Doctor** | starter | `ado doctor`, the read-only check that prints one `ok`, `warn`, `fail` or `unknown` row, with its fix, for each part of your setup (git, Spec Kit, config, token, extension, stack and kits). |
+| **Doctor** | starter | `ado doctor`, the read-only check that prints one `ok`, `warn`, `fail` or `unknown` row, with its fix, for each part of your setup (git, Spec Kit, config, token, identity, extension, workflow, approvers, bypass, stack and kits). |
 | **Status** | starter | `ado status <id>`, the read-only report that prints the story's current stage and the one command that moves it on. |
 | **Stage** | starter | The first step of a story's lifecycle that is not done yet, which `ado status <id>` prints with the one command that moves it on. |
 | **Stack kit** | starter | An installed Spec Kit extension for your tech stack that the phase map in `stack` hands specify, plan, tasks and implement to; with none, core Spec Kit does them. |
@@ -43,5 +43,7 @@ approval by a comment on the story exist, and so does the rule for which comment
 | **Approval comment** | opt-in | A comment that counts as an approval because its author is in `approvers`, so the agent's own comments, quoted text and edited comments never do. |
 | **Sync** | opt-in | `ado decisions <id> --sync`, which copies an approver's `/approve` or `/reject` comment on a posted decision into the local decisions file as its verdict, with the comment's id in `via`; and `ado questions <id> --sync`, which copies an approver's `/answer Q<n>: text` comment into the ledger as the PO's answer and lists the questions due under `unattended.assume_after_hours` (by server time; it never closes one). |
 | **Done-time cross-check** | opt-in | With `approvers` set, `ado done` and the CI close step check that every `validated` or `rejected` line in the decisions file is backed by an approver's comment and every `posted:` marker by an unedited kit comment (rules `decisions-xcheck-marker`, `decisions-xcheck-dropped`, `decisions-xcheck-verdict`, `decisions-xcheck-truncated`, `decisions-xcheck-unreachable`); it blocks in strict mode and warns in advisory mode, so a hand-written `validated` line cannot close a story. |
+| **Approvals check** | opt-in | `ado approvals check <id> --gate <gate>`, the read-only check the workflow runs after a gate, which in comment mode passes only when an approver's comment covers the gate's current artifacts or answers its open questions and decisions. |
+| **Poller** | opt-in | `ado approvals sync <run id> --resume`, the command a human schedules on a local machine so that a paused run continues once an approver has commented. |
 | **Unattended** | opt-in | The `unattended` object on the target branch, with `assume_after_hours` and `approval_requests`, for runs with nobody at a terminal. |
 | **Workflow** | opt-in | `ado-lifecycle`, the Spec Kit workflow that runs the whole lifecycle with a human gate before every ADO write. |

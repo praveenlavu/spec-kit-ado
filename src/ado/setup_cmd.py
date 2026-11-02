@@ -183,7 +183,10 @@ def run_setup(input_fn=input, getpass_fn=None, out_path="ado.config.json", profi
     def ask(label, key):
         cur = data.get(key) if isinstance(data.get(key), str) else ""
         # the file may come from a clone: show the default escaped and capped, never raw (ANSI/OSC would reach the terminal)
-        shown = f" [{_shown(cur) or 'existing value, too long to show'}]" if cur else ""
+        shown = _shown(cur)
+        if shown and profile is None and cur.isascii() and cur.isprintable():
+            shown = cur  # without --profile an ordinary value is shown as it always was (unquoted); anything else stays escaped
+        shown = f" [{shown or 'existing value, too long to show'}]" if cur else ""
         return input_fn(f"{label}{shown}: ").strip() or cur
 
     org = ask("Azure DevOps organization (https://dev.azure.com/<org>)", "organization")

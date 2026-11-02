@@ -333,6 +333,8 @@ Trust = collections.namedtuple("Trust", "approvers approval unattended")  # what
 _BAD_BASE = re.compile(r"[~^:\s\x00-\x1f\x7f]|@\{|\.\.|^-")  # a revision expression, a range or an option, not a plain ref name
 
 
+E_NO_TARGET = ("the config file sets approvers, approval or unattended, which are read only from the target branch, "
+               "and there is none to read: set origin/HEAD or pass --base")
 E_NONROOT_TRUST = ("the config file in use is not the repo-root ado.config.json and sets approvers, approval or unattended: those keys are "
                    "read only from ado.config.json on the default branch; move them there")
 
@@ -395,8 +397,7 @@ def trusted(repo=".", base=None):
             raise ConfigInvalid("the base is not a plain branch or ref name (no revision expressions, ranges, spaces or leading dash)")
         cfg = Config.load_from_ref(ref, repo=str(repo))
     elif _working_tree_has_trust_keys(repo):
-        raise ConfigInvalid("the config file sets approvers, approval or unattended, which are read only from the target branch, "
-                            "and there is none to read: set origin/HEAD or pass --base")
+        raise ConfigInvalid(E_NO_TARGET)
     else:
         cfg = None
     cfg = cfg or Config("", "")  # no config at the target (or no base): the defaults

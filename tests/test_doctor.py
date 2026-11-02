@@ -15,6 +15,8 @@ from tests.conftest import FakeClient, approve, commit, git, profile
 
 TOKEN = "pat-0123456789-SECRET"
 ME = "11111111-2222-3333-4444-555555555555"
+PID = "99999999-aaaa-bbbb-cccc-dddddddddddd"
+PERM_NS, BIT = "52d39943-cb85-4d7f-8fa8-c6baac873819", "1048576"
 OTHER = "66666666-7777-8888-9999-000000000000"
 NAME, MAIL = "Dana Fictional", "dana@example.invalid"
 CFG = {"organization": "contoso", "project": "Fabrikam"}
@@ -263,10 +265,11 @@ def test_checkout_cannot_lower_the_specify_floor(env):
     assert run(repo)[0]["specify"]["status"] == "fail"  # a checkout can raise it
 
 
-def test_the_only_request_is_one_get(env):
+def test_the_only_requests_are_three_gets(env):
     repo, _ = env
-    _, client = run(repo, probe_item=7)
-    assert [(c["method"], c["path"]) for c in client.calls] == [("GET", "/_apis/connectionData?api-version=7.1-preview")]
+    _, client = run(repo, [me(), {"id": PID}, {"value": [False]}], probe_item=7)
+    assert [(c["method"], c["path"].split("?")[0]) for c in client.calls] == [
+        ("GET", "/_apis/connectionData"), ("GET", "/_apis/projects/Fabrikam"), ("GET", f"/_apis/permissions/{PERM_NS}/{BIT}")]
 
 
 def test_workflow_cli_version_mismatch_fails(env):
@@ -398,9 +401,9 @@ def test_approvers_unknown_when_target_unreadable_unless_none_configured(env):
     assert run(repo)[0]["approvers"]["status"] == "ok"  # no origin/HEAD, and the working tree has no approvers key
     (repo / "ado.config.json").write_text(json.dumps({**CFG, "approvers": [ME]}))
     r, _ = run(repo)
-    assert r["approvers"]["status"] == "unknown"  # a working-tree key counts for nothing: only the target branch is read
+    assert r["approvers"]["status"] == "fail"  # a working-tree key counts for nothing: only the target branch is read, and the verbs refuse
     (repo / "ado.config.json").write_text(json.dumps({**CFG, "approval": "comment"}))
-    assert run(repo)[0]["approvers"]["status"] == "unknown"
+    assert run(repo)[0]["approvers"]["status"] == "fail"
 
 
 def test_json_shape(env, capsys, monkeypatch):
@@ -408,7 +411,7 @@ def test_json_shape(env, capsys, monkeypatch):
     result = doctor.run(str(repo), client=FakeClient(Config(**CFG), [me()]))
     assert list(result) == ["rows", "scopes"] and result["scopes"] == {}
     assert [r["id"] for r in result["rows"]] == ["git", "specify", "shallow", "config", "config-target", "token", "identity",
-                                                  "extension", "workflow", "approvers", "stack", "kits"]
+                                                  "extension", "workflow", "approvers", "bypass", "stack", "kits"]
     assert all(list(r) == ["id", "status", "fix"] and r["status"] in ("ok", "warn", "fail", "unknown") and isinstance(r["fix"], str) for r in result["rows"])
     monkeypatch.setattr("ado.doctor.AdoClient", lambda cfg, **kw: FakeClient(cfg, [me()]))
     assert main(["doctor", "--json"]) in (0, 1)
@@ -439,3 +442,136 @@ def test_doctor_writes_nothing(env):
     before = snapshot()
     run(repo)
     assert snapshot() == before and git(repo, "status", "--porcelain") == "?? ado.config.json"
+
+
+# ---- F6 (P4-20 slice B): the bypass row, GUID identity, the trusted() path in the approvers row ----
+
+def bypass_run(repo, bit, ident=None):
+    """doctor with connectionData, the project (its id) and the permission answer queued; returns (rows, client)."""
+    return run(repo, [ident or me(), {"id": PID}, {"value": [bit]}])
+
+
+def test_bypass_row_ok_when_the_bit_is_clear(env):
+    repo, _ = env
+    r, client = bypass_run(repo, False)
+    assert r["bypass"] == {"id": "bypass", "status": "ok", "fix": ""}
+    assert [c["method"] for c in client.calls] == ["GET", "GET", "GET"]  # reads only: doctor never writes
+    assert PID in client.calls[2]["path"].replace("%3A", ":").replace("%2F", "/")  # the project token, as approvals.bypass_bit builds it
+
+
+def test_bypass_row_fails_when_set_and_the_target_uses_comment_mode_or_approvers(env):
+    repo, _ = env
+    _target(repo, approval="comment", approvers=[OTHER])
+    r, _ = bypass_run(repo, True)
+    assert r["bypass"]["status"] == "fail" and "Bypass rules" in r["bypass"]["fix"] and "Contributor" in r["bypass"]["fix"]
+    _target(repo, approvers=[OTHER])
+    assert bypass_run(repo, True)[0]["bypass"]["status"] == "fail"
+    _target(repo, approval="comment")
+    assert bypass_run(repo, True)[0]["bypass"]["status"] == "fail"
+
+
+def test_bypass_row_warns_when_set_and_no_trust_keys(env):
+    repo, _ = env
+    _target(repo)
+    r, _ = bypass_run(repo, True)
+    assert r["bypass"]["status"] == "warn" and "Contributor" in r["bypass"]["fix"]
+    _target(repo, approval="terminal")
+    assert bypass_run(repo, True)[0]["bypass"]["status"] == "warn"
+
+
+def test_bypass_row_set_with_an_unreadable_trust_target_fails_closed(env):
+    repo, _ = env  # no origin/HEAD and trust keys in the working tree: trusted() refuses, so comment mode could be in force
+    (repo / "ado.config.json").write_text(json.dumps({**CFG, "approval": "comment"}))
+    assert bypass_run(repo, True)[0]["bypass"]["status"] == "fail"
+
+
+@pytest.mark.parametrize("answers", [
+    [me(), AdoError("x", 403, "http")],                          # project not readable
+    [me(), {"id": "not-a-guid"}],                                  # project id is no GUID
+    [me(), {"id": PID}, AdoError("x", 401, "http")],               # a restricted PAT may not read the permission
+    [me(), {"id": PID}, {"value": []}], [me(), {"id": PID}, {"value": [1]}], [me(), {"id": PID}, {"value": [True, False]}], [me(), {"id": PID}, []]])
+def test_bypass_row_unknown_when_it_cannot_be_read_never_ok(env, answers):
+    repo, _ = env
+    r, client = run(repo, answers)
+    assert r["bypass"]["status"] == "unknown" and "comment mode refuses" in r["bypass"]["fix"]
+    assert {c["method"] for c in client.calls} == {"GET"}
+
+
+def test_bypass_row_unknown_and_unrequested_when_the_token_is_not_accepted(env):
+    repo, _ = env
+    r, client = run(repo, [AdoError("x", 401, "http")])
+    assert r["bypass"]["status"] == "unknown" and len(client.calls) == 1  # only connectionData was sent
+    r, client = run(repo, [me(ANONYMOUS_ID)])
+    assert r["bypass"]["status"] == "unknown" and len(client.calls) == 1
+
+
+def test_bypass_row_texts_are_fixed(env):
+    repo, _ = env
+    _target(repo, approvers=[OTHER])
+    out = json.dumps(bypass_run(repo, True)[0]) + json.dumps(run(repo, [me(), {"id": PID}, AdoError("x", 500, "http", "SECRETVALUE")])[0])
+    assert PID not in out and ME not in out and OTHER not in out and "SECRETVALUE" not in out and NAME not in out
+
+
+def test_bypass_row_a_crash_is_reported_by_class(env, monkeypatch):
+    repo, _ = env
+    monkeypatch.setattr("ado.approvals.bypass_bit", lambda client: (_ for _ in ()).throw(RuntimeError("SECRETVALUE")))
+    r, _ = run(repo)
+    assert r["bypass"]["status"] == "unknown" and "RuntimeError" in r["bypass"]["fix"] and "SECRETVALUE" not in json.dumps(r)
+
+
+def test_doctor_with_bypass_still_builds_one_short_client(env, monkeypatch):
+    repo, _ = env
+    made = []
+    monkeypatch.setattr("ado.doctor.AdoClient", lambda cfg, **kw: made.append(kw) or FakeClient(cfg, [me(), {"id": PID}, {"value": [False]}]))
+    assert rows(doctor.run(str(repo)))["bypass"]["status"] == "ok"
+    assert made == [{"attempts": 1, "timeout": 10}]
+
+
+@pytest.mark.parametrize("ident", ["{" + ME + "}", "not-a-guid", " " + ME, ME + " ", ME[:-1]])
+def test_identity_must_be_a_guid(env, ident):
+    repo, _ = env
+    _target(repo, approvers=[OTHER])
+    r, client = run(repo, [me(ident)])
+    assert r["identity"]["status"] == "unknown" and "not an identity id" in r["identity"]["fix"]
+    assert r["token"]["status"] == "ok" and r["approvers"]["status"] == "unknown"  # never ok on an id the verbs would refuse
+    assert ident.strip() not in json.dumps(r)
+    assert r["bypass"]["status"] == "unknown"
+
+
+def test_a_plain_guid_identity_is_still_ok_in_upper_case(env):
+    repo, _ = env
+    r, _ = run(repo, [me(ME.upper())])
+    assert r["identity"]["status"] == "ok"
+
+
+NONROOT = "the config file in use is not the repo-root ado.config.json"
+
+
+def test_approvers_row_reports_the_trusted_refusal_in_fixed_text(env):
+    repo, _ = env
+    (repo / "ado.config.json").write_text(json.dumps({**CFG, "approvers": [OTHER]}))  # no origin/HEAD
+    r, _ = run(repo)
+    fix = r["approvers"]["fix"]
+    assert r["approvers"]["status"] == "fail" and "origin/HEAD" in fix and OTHER not in json.dumps(r)
+    (repo / "ado.config.json").write_text(json.dumps({**CFG, "unattended": {"assume_after_hours": 5}}))  # `unattended` counts too
+    assert run(repo)[0]["approvers"]["status"] == "fail"
+    (repo / "ado.config.json").write_text(json.dumps(CFG))
+    assert run(repo)[0]["approvers"] == {"id": "approvers", "status": "ok", "fix": ""}  # a fresh repo with no trust keys is unchanged
+
+
+def test_approvers_row_reports_the_non_root_config_refusal(env, monkeypatch, tmp_path):
+    repo, _ = env
+    _origin(repo, json.dumps(CFG))
+    other = tmp_path / "elsewhere.json"
+    other.write_text(json.dumps({**CFG, "approvers": [OTHER]}))
+    monkeypatch.setenv("ADO_CONFIG", str(other))
+    r, _ = run(repo)
+    assert r["approvers"]["status"] == "fail" and NONROOT in r["approvers"]["fix"] and OTHER not in json.dumps(r)
+
+
+def test_approvers_row_target_unreadable_is_a_fixed_refusal_text(env):
+    repo, _ = env
+    _origin(repo, "{ not json SECRETVALUE")
+    (repo / "ado.config.json").write_text(json.dumps(CFG))
+    r, _ = run(repo)
+    assert r["approvers"]["status"] == "fail" and "SECRETVALUE" not in json.dumps(r) and "config-target" in r["approvers"]["fix"]

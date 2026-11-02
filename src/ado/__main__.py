@@ -694,7 +694,7 @@ def _kits_pin(args):
 
 
 def _doctor(args):
-    """`ado doctor [--json] [--probe-item ID]`: rows of what is wrong with this setup (read-only; the one network call is a GET of connectionData).
+    """`ado doctor [--json] [--probe-item ID]`: rows of what is wrong with this setup (read-only; GETs only: connectionData, then the project and its bypass-rules permission).
     Exit 0 when no row fails, else 1. A token, name or email never appears."""
     result = doctor.run(".", probe_item=args.probe_item)
     print(json.dumps(result, indent=2) if args.json else doctor.render(result))
@@ -857,7 +857,7 @@ def main(argv=None):
     p.add_argument("--profile", choices=("starter", "team", "strict"), default=None,
                    help="also write that profile's config keys (an existing config shows `key: old -> new` and asks y/N)")
     p = sub.add_parser("doctor", help="What is wrong with this setup: git, Spec Kit, config, token, identity, extension, workflow, approvers, "
-                       "stack and kits, as ok/warn/fail/unknown rows with a fix (read-only; exit 1 when a row fails)")
+                       "bypass-rules permission, stack and kits, as ok/warn/fail/unknown rows with a fix (read-only; exit 1 when a row fails)")
     p.add_argument("--json", action="store_true", help='print {"rows": [{"id", "status", "fix"}], "scopes": {}} instead of text')
     p.add_argument("--probe-item", type=int, metavar="ID", help="a work item to probe write access against; accepted now, used by the scope probes (not in this build)")
     p = sub.add_parser("status", help="Which stage a story is at and the one command that moves it on (read-only; board stages need the network)")

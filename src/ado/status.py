@@ -20,7 +20,7 @@ import types
 from . import comments, decisions, dod, gate as gate_mod, prs, push, questions, rules, stack, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoError
-from .config import Config, ConfigError, ConfigInvalid
+from .config import Config, ConfigError, ConfigInvalid, trusted
 
 RUN_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]*")  # Spec Kit's own pattern (engine.py _RUN_ID_PATTERN)
 RUN_STATUSES = ("created", "running", "paused", "completed", "failed", "aborted")
@@ -408,8 +408,8 @@ def _scan(repo, story_id):
     unknown status, a missing key or an unknown step id counts as `unreadable`. `truncated`: more than MAX_RUN_DIRS run directories, the rest unexamined."""
     base = os.path.realpath(repo)
     runs = os.path.join(base, *RUNS_DIR)
-    if os.path.realpath(runs) != runs:  # .specify, workflows or runs is a link: not followed
-        return None, 0, 0, False
+    if os.path.realpath(runs) != runs:  # .specify, workflows or runs is a link: not followed, and counted as one ignored entry
+        return None, 0, 1, False
     names, unreadable, ignored, best = [], 0, 0, None
     try:
         with os.scandir(runs) as it:
@@ -467,6 +467,14 @@ def _stuck(c, run):
     return now - _when(run["updated_at"]) > STUCK_AFTER
 
 
+def _comment_mode(repo):
+    """True when the TARGET branch says `approval: "comment"` (`config.trusted`); a refusal (ConfigInvalid) keeps the terminal wording."""
+    try:
+        return trusted(repo).approval == "comment"
+    except ConfigInvalid:
+        return False
+
+
 def _run_notes(c, run, counts, stage):
     notes = []
     if run:
@@ -475,7 +483,10 @@ def _run_notes(c, run, counts, stage):
         resume = f"specify workflow resume {rid}"
         if st == "paused":
             gate = step.split(":")[-2 if ":" in step else 0] in SHIPPED_GATES  # a nested step is `<loop>:<step>:<n>`
-            notes.append(f"Run {rid}: paused at gate {step}. Answer it in a terminal: {resume}" if gate else f"Run {rid}: paused{at}. Resume: {resume}")
+            if gate and _comment_mode(c.repo):
+                notes.append(f"Run {rid}: paused at gate {step}. Approve with the approver's comment, then: ado approvals sync {rid} --resume")
+            else:
+                notes.append(f"Run {rid}: paused at gate {step}. Answer it in a terminal: {resume}" if gate else f"Run {rid}: paused{at}. Resume: {resume}")
         elif st == "failed":
             notes.append(f"Run {rid}: failed{at}. Resume (it re-runs that step and everything after it): {resume}")
         elif st == "running":

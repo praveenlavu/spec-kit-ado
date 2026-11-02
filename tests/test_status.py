@@ -643,6 +643,34 @@ def test_paused_prints_resume(wf):
     assert text.splitlines()[0] == f"Story {ID}: plan. Next: speckit.ado.plan {ID}"  # the stage answer is unchanged
 
 
+def _comment_mode_target(repo):
+    """Commit `approval: comment` (with an approver) to the target branch (origin/main), then go back to the feature branch."""
+    git(repo, "checkout", "-q", "main")
+    commit(repo, "target", {"ado.config.json": json.dumps({"organization": "contoso", "project": "Fabrikam", "approval": "comment",
+                                                           "approvers": ["66666666-7777-8888-9999-000000000000"]})})
+    git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    git(repo, "checkout", "-q", "feat/ab1001-x")
+
+
+def test_paused_gate_in_comment_mode_points_at_the_approver_and_the_poller(wf):
+    put_run(wf, "paused-gate")
+    cfg = world(wf, plan=False)
+    _comment_mode_target(wf)
+    lines = status.render(check(wf, Board(cfg), "plan"), ID).splitlines()
+    assert ("Run aaaa0006: paused at gate review-spec. Approve with the approver's comment, then: ado approvals sync aaaa0006 --resume") in lines
+    assert not any("terminal" in ln for ln in lines)
+    put_run(wf, "paused-gate", current_step_id="implement")  # a pause that is not a gate keeps today's line, whatever the mode
+    assert "Run aaaa0006: paused at implement. Resume: specify workflow resume aaaa0006" in status.render(check(wf, Board(cfg)), ID).splitlines()
+
+
+def test_paused_gate_with_an_unreadable_target_keeps_the_terminal_line(wf):
+    put_run(wf, "paused-gate")
+    cfg = world(wf, plan=False, cfg={"approval": "comment"})  # a working-tree key and a target that cannot vouch for it: trusted() refuses
+    git(wf, "update-ref", "-d", "refs/remotes/origin/HEAD")
+    text = status.render(check(wf, Board(cfg)), ID)
+    assert "Run aaaa0006: paused at gate review-spec. Answer it in a terminal: specify workflow resume aaaa0006" in text.splitlines()
+
+
 def test_failed_names_step_and_resume(wf):
     put_run(wf, "failed-pull-cli")
     res = check(wf, None, offline=True)
@@ -892,6 +920,8 @@ def test_a_symlinked_runs_directory_or_specify_is_not_followed(wf, tmp_path):
     shutil.move(str(runs_dir(wf)), str(real))
     os.symlink(real, runs_dir(wf))
     assert status.read_run(str(wf), ID) is None
+    # not silent: the link is counted as ignored, as a symlinked run directory or state.json is (docs/configuration.md)
+    assert status.evaluate(None, ID, str(wf), offline=True)["run_notes"] == [status.RUN_IGNORED.format(n=1)]
 
 
 def test_unparsable_state_is_ignored_not_a_crash(wf):

@@ -104,7 +104,7 @@ reach Azure DevOps: run `ado doctor`, then `ado status 1001` again.
 
 | You want | Run | Adds |
 |---|---|---|
-| The gate and the review to block a pull request, and CI | `ado setup --profile team` | `gate.block` and `review_block_on` |
+| The gate and the review to block a pull request, and CI | `ado setup --profile team` | `gate.block`, `review_block_on` and `mode: advisory` (on a strict project this turns strict off, with a warning before you answer `y`); it also asks for `approvers` (blank writes none) |
 | Tests proven red before green, and a verification record | `ado setup --profile strict` | `mode: strict` and `strict.test_command` |
 
 On a config that exists, `ado setup --profile` shows every change as `key: old -> new` and writes only when you answer `y` in

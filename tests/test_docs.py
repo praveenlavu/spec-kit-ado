@@ -2303,7 +2303,7 @@ def test_unconfirmed_split_doc_pins():
 
 def test_doctor_doc_pins():
     from ado import doctor
-    rows = ("git", "specify", "shallow", "config", "config-target", "token", "identity", "extension", "workflow", "approvers", "stack", "kits")
+    rows = ("git", "specify", "shallow", "config", "config-target", "token", "identity", "extension", "workflow", "approvers", "bypass", "stack", "kits")
     assert doctor.ROW_IDS == rows
     cfg, readme, agents = _flat("docs/configuration.md"), _flat("README.md"), _flat("AGENTS.md")
     assert "## Checking your setup" in (ROOT / "docs/configuration.md").read_text(encoding="utf-8")
@@ -2387,7 +2387,7 @@ GLOSSARY = [
     ("Business rules", "opt-in"), ("Rules file", "opt-in"), ("Rules from:", "opt-in"), ("Rules reviewed:", "opt-in"),
     ("Workflow", "opt-in"),
     ("Approver", "team"), ("Approval mode", "opt-in"), ("Unattended", "opt-in"),
-    ("Approve and reject commands", "opt-in"), ("Approval comment", "opt-in"), ("Sync", "opt-in"), ("Done-time cross-check", "opt-in"),
+    ("Approve and reject commands", "opt-in"), ("Approvals check", "opt-in"), ("Poller", "opt-in"), ("Approval comment", "opt-in"), ("Sync", "opt-in"), ("Done-time cross-check", "opt-in"),
 ]
 _GLOSSARY_ROW = re.compile(r"^\| \*\*(?P<c>[^*|]+)\*\* \| (?P<p>starter|team|strict|opt-in) \| (?P<d>[^|]+) \|$", re.M)
 
@@ -2929,3 +2929,22 @@ def test_trust_minors_are_documented():
     assert "(F5, P4-20 slice A M-1..M-4)" in log and "`approval-no-longer-valid: D2, D5`" in log
     for doc in ("README.md", "rules/hitl.md", "AGENTS.md"):
         assert "approval-no-longer-valid: D2, D5" in _flat(doc)
+
+
+def test_f6_doctor_bypass_and_slice_b_doc_pins():
+    cfg, readme, agents, hitl, glossary, unatt, quick = (_flat(n) for n in (
+        "docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "docs/glossary.md", "docs/unattended.md", "docs/quickstart.md"))
+    for t in (cfg, readme, agents):
+        assert "`bypass`" in t or "bypass," in t, t[:30]
+        assert "three GETs" in t or "three ADO GETs" in t or "(three in all)" in t
+    assert "| `bypass` |" in cfg and "never `ok` on a doubt" in cfg and "`approvals.bypass_bit`" in cfg
+    assert "Known 0.3.0 limitation" in cfg and "ado comments <story id> --author-ids" in cfg  # C1
+    assert "known 0.3.0 limitation" in unatt and "`ado comments <story id> --author-ids`" in unatt
+    assert "accepted and ignored" in agents and "`bypass` row fails" in hitl
+    assert "ado approvals sync <run-id> --resume" in cfg  # M3: the status line in comment mode
+    assert "plain identity GUID" in cfg and "`config.trusted`" in cfg  # M1, M2
+    assert "during 0.3.0" not in glossary and "| **Poller** |" in glossary and "| **Approvals check** |" in glossary
+    assert "identity, extension, workflow, approvers, bypass" in glossary  # M6: the Doctor row
+    assert "`mode: advisory`" in quick and "asks for `approvers`" in quick  # M7
+    sec = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").split("## 0.3.0", 1)[1].split("\n## 0.2", 1)[0]
+    assert "(F6, P4-20 slice B" in sec and "`bypass` row" in sec

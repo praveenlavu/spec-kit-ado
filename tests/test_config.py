@@ -910,6 +910,18 @@ def test_absent_keys_byte_identical_outputs(tmp_path):
              ["decisions", "1001"], ["questions", "1001"], ["dod", "1001"], ["done", "1001"], ["setup", "--help"], ["doctor", "--help"]]
     old = ar._run_all(base / "src", tmp_path / "proj", home, argvs)
     new = ar._run_all(ar.ROOT / "src", tmp_path / "proj", home, argvs)
+
+    def without_bypass(run):  # F6: doctor's `bypass` row is the one listed addition since that commit
+        argv, rc, out, err = run
+        if argv[:1] != ["doctor"] or "--help" in argv:
+            return run
+        if "--json" in argv:
+            data = json.loads(out)
+            data["rows"] = [r for r in data["rows"] if r["id"] != "bypass"]
+            return argv, rc, json.dumps(data, sort_keys=True), err
+        return argv, rc, "".join(ln for ln in out.splitlines(True) if ln.split()[1:2] != ["bypass"]), err
+    old = [without_bypass(r) for r in old]
+    new = [without_bypass(r) for r in new]
     diffs = [f"{a[0]}: rc {a[1]}->{b[1]}, stdout same {a[2] == b[2]}, stderr same {a[3] == b[3]}" for a, b in zip(old, new) if a != b]
     assert not diffs, "\n".join(diffs)
     assert any(o[2] for o in old[:-3]) and "approvers" in "".join(o[2] for o in old)  # not vacuous: doctor's rows were printed

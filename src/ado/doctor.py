@@ -1,7 +1,7 @@
 """`ado doctor`: what is wrong with this setup, in rows `{id, status, fix}`. Status is `ok`, `warn`, `fail` or `unknown`; `unknown` means a
 probe could not tell, and a probe that cannot tell never says `ok`. Nothing here writes: local reads, `git --version`, `git rev-parse` and
-`specify --version` (scrubbed environment, a timeout, only a parsed version is ever kept from their output) and ONE ADO call, a GET of
-`connectionData` through `AdoClient`. Row texts are fixed: ids, counts and numeric versions only, never a token, a name, an email, a config
+`specify --version` (scrubbed environment, a timeout, only a parsed version is ever kept from their output) and three ADO calls, all GETs through
+`AdoClient`: `connectionData`, then (the `bypass` row, only once the token identity is known) the project and its permission answer. Row texts are fixed: ids, counts and numeric versions only, never a token, a name, an email, a config
 value or tool output. Config errors name the key by position (the validator's own texts). The scope probes and `--probe-item` belong to a
 later task: `scopes` stays empty and `probe_item` is accepted and ignored. Process help, not a security boundary: a hostile checkout can
 shape the local rows it controls."""
@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 
-from . import __version__, auth, kits, stack, strict
+from . import __version__, approvals, auth, comments, config, kits, stack, strict
 from .client import AdoClient, AdoError, is_anonymous
 from .config import Config, ConfigError, ConfigInvalid
 
@@ -21,7 +21,7 @@ MAX_MANIFEST = 256 * 1024
 EXT_PATH = ".specify/extensions/ado/extension.yml"
 WF_PATH = ".specify/workflows/ado-lifecycle/workflow.yml"
 CONNECTION = "/_apis/connectionData?api-version=7.1-preview"
-ROW_IDS = ("git", "specify", "shallow", "config", "config-target", "token", "identity", "extension", "workflow", "approvers", "stack", "kits")
+ROW_IDS = ("git", "specify", "shallow", "config", "config-target", "token", "identity", "extension", "workflow", "approvers", "bypass", "stack", "kits")
 _VER = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 _SPECIFY = re.compile(r"^specify(?:[ -]cli)?[ \t]+v?(\d+)\.(\d+)\.(\d+)", re.M | re.I)
 _GIT = re.compile(r"^git version (\d+)\.(\d+)(?:\.(\d+))?", re.M)
@@ -157,27 +157,17 @@ def _load_config(repo):
 
 
 def _load_target(repo):
-    """(target Config or None, readable, (status, fix) for `config-target`). `readable` is False when the target could not be
-    read; a target with no config is readable."""
+    """(target Config or None, (status, fix) for `config-target`)."""
     base = strict.default_base(str(repo))
     if not base:
-        return None, False, ("unknown", "no origin/HEAD, so the target branch is unknown (CI reads the config there): add the remote and run `git remote set-head origin -a`")
+        return None, ("unknown", "no origin/HEAD, so the target branch is unknown (CI reads the config there): add the remote and run `git remote set-head origin -a`")
     try:
         target = Config.load_from_ref(base, repo=str(repo))
     except ConfigInvalid as e:
-        return None, False, ("fail", _config_text(str(e), "") + ": CI cannot trust the target branch's config until this is fixed")
+        return None, ("fail", _config_text(str(e), "") + ": CI cannot trust the target branch's config until this is fixed")
     if target is None:
-        return None, True, ("warn", "the target branch has no ado.config.json yet, so CI judges a PR by its own: merge the setup")
-    return target, True, ("ok", "")
-
-
-def _working_tree_lacks(repo, key):
-    """True when the working-tree ado.config.json parses and has no top-level `key` (used only when the target branch cannot be read)."""
-    try:
-        raw = kits._read_regular(repo, "ado.config.json", MAX_MANIFEST, missing_ok=True)
-        return raw is not None and isinstance(data := json.loads(raw.decode("utf-8")), dict) and key not in data
-    except (kits.KitError, ValueError, RecursionError):
-        return False
+        return None, ("warn", "the target branch has no ado.config.json yet, so CI judges a PR by its own: merge the setup")
+    return target, ("ok", "")
 
 
 def _probe(client):
@@ -195,56 +185,71 @@ def _probe(client):
 
 
 def _token_rows(cfg, client):
-    """((token status, fix), (identity status, fix), identity id or None). The token is looked up, never printed."""
+    """((token status, fix), (identity status, fix), identity id or None, the client used or None). The token is looked up, never printed."""
     source = cfg or getattr(client, "config", None)
     org = source.organization if source else None
     skip = ("unknown", "not checked: no usable ado.config.json, so the organization is unknown")
     if org is None:
-        return skip, skip, None
+        return skip, skip, None, None
     try:
         auth.load_token(org)
     except auth.AuthError:
-        return ("fail", "no token: set $ADO_TOKEN or run `ado setup` to store a PAT"), ("unknown", "not checked: there is no token"), None
+        return ("fail", "no token: set $ADO_TOKEN or run `ado setup` to store a PAT"), ("unknown", "not checked: there is no token"), None, None
     except Exception as e:  # a secret store that fails is not a token
         why = f"the token store could not be read ({type(e).__name__})"
-        return ("unknown", why), ("unknown", "not checked: " + why), None
+        return ("unknown", why), ("unknown", "not checked: " + why), None, None
     client = client or AdoClient(cfg, attempts=1, timeout=TIMEOUT)  # one attempt, short timeout: a diagnostic must not hang
     try:
         outcome, info = _probe(client)
     except auth.AuthError:
-        return ("fail", "no token: set $ADO_TOKEN or run `ado setup` to store a PAT"), ("unknown", "not checked: there is no token"), None
+        return ("fail", "no token: set $ADO_TOKEN or run `ado setup` to store a PAT"), ("unknown", "not checked: there is no token"), None, client
     if outcome == "rejected":
         return (("fail", "ADO did not accept the token (a sign-in page, or HTTP 401/403): create a new PAT, check its expiry and organization, then run `ado setup`"),
-                ("unknown", "not checked: ADO did not accept the token"), None)
+                ("unknown", "not checked: ADO did not accept the token"), None, client)
     if outcome == "notfound":  # connectionData is organization-level: a 404 is a wrong organization
-        return (("fail", "ADO answered HTTP 404: check `organization` in ado.config.json"), ("unknown", "not checked: the organization was not found"), None)
+        return (("fail", "ADO answered HTTP 404: check `organization` in ado.config.json"), ("unknown", "not checked: the organization was not found"), None, client)
     if outcome in ("network", "unknown"):
         why = "could not reach Azure DevOps: check the network" if outcome == "network" else (
             f"Azure DevOps answered HTTP {info} (unexpected)" if isinstance(info, int) else "Azure DevOps gave no usable answer")
-        return ("unknown", why), ("unknown", "not checked: " + why), None
+        return ("unknown", why), ("unknown", "not checked: " + why), None, client
     ident, descriptor = info.get("id"), info.get("descriptor")
     if is_anonymous(ident, descriptor):  # first: an anonymous descriptor with no id is still anonymous
         return (("fail", "ADO treated the request as anonymous, so the token was not accepted: create a new PAT and run `ado setup`"),
-                ("fail", "connectionData answered as the anonymous user: the request carried no valid credentials, so nothing can be checked"), None)
+                ("fail", "connectionData answered as the anonymous user: the request carried no valid credentials, so nothing can be checked"), None, client)
     if not (isinstance(ident, str) and ident.strip()):  # nothing proves the token was accepted
         said = "ADO answered but did not say who you are"
-        return ("unknown", said), ("unknown", said), None
-    return ("ok", ""), ("ok", ""), ident.strip().lower()
+        return ("unknown", said), ("unknown", said), None, client
+    ident = comments._guid(ident)  # the verbs compare only plain identity GUIDs: braces, padding or any other form is refused there
+    if ident is None:
+        said = "ADO answered with an identity that is not an identity id"
+        return ("ok", ""), ("unknown", said), None, client
+    return ("ok", ""), ("ok", ""), ident, client
 
 
 ONE_HUMAN = ("approvers must be separate human identities: identity binding protects against the agent only while an approver's credentials "
              "are not available to it (a separate account or browser profile, no approver PAT in the agent's environment)")
 
 
-def _approvers_row(repo, target, readable, identity):
-    """The `approvers` and `approval` keys come only from the target branch. Not checked here (they need a story's comments, which
-    doctor does not read): the CI token identity and the authors of `[spec-kit-ado:*]` comments."""
-    if not readable:
-        if _working_tree_lacks(repo, "approvers") and _working_tree_lacks(repo, "approval"):
-            return "ok", ""  # no approvers are configured anywhere doctor can see; the target branch could not be read
-        return "unknown", "approvers are read only from the target branch, which could not be read"
-    approvers = target.approvers if target is not None else []
-    if target is not None and target.approval == "comment" and not approvers:
+def _trust(repo):
+    """(Trust, "") from `config.trusted` (the verbs' own path: target branch only, ADO_CONFIG and `unattended` included), or (None, a fixed
+    refusal text). The validator's text is never echoed."""
+    try:
+        return config.trusted(repo), ""
+    except ConfigInvalid as e:
+        if str(e) in (config.E_NONROOT_TRUST, config.E_NO_TARGET):  # code-defined constants
+            return None, str(e)
+        return None, "the target branch's config cannot be read (see the config-target row), so the approval keys cannot be trusted"
+
+
+def _approvers_row(repo, identity):
+    """The `approvers` and `approval` keys come only from the target branch, read as the verbs read them (`config.trusted`): a refusal there
+    is a `fail` with its fixed reason. Not checked here (they need a story's comments, which doctor does not read; known 0.3.0 limitation, see
+    docs/configuration.md): the CI token identity and the authors of `[spec-kit-ado:*]` comments."""
+    trust, why = _trust(repo)
+    if trust is None:
+        return "fail", why
+    approvers = trust.approvers
+    if trust.approval == "comment" and not approvers:
         return "fail", 'approval is "comment" on the target branch but no approvers are configured, so nobody can approve: add `approvers` there'
     if not approvers:
         return "ok", ""
@@ -253,6 +258,27 @@ def _approvers_row(repo, target, readable, identity):
     if identity in approvers:
         return "fail", "an approver is the identity of this token, so the agent could approve itself: run the agent with a token that is not an approver"
     return "ok", ONE_HUMAN
+
+
+BYPASS_FIX = ("this token identity holds the 'Bypass rules on work item updates' permission: run the agent as a Contributor without it "
+              "(docs/configuration.md, 'Approvers and comment mode')")
+
+
+def _bypass_row(repo, client, identity):
+    """Reuses `approvals.bypass_bit` (two GETs: the project, then the permission). Only run once the token is accepted. Fail-closed: a bit that
+    cannot be read is `unknown`, never `ok`."""
+    if identity is None or client is None:
+        return "unknown", "not checked: the token identity is unknown"
+    bit = approvals.bypass_bit(client)
+    if bit is False:
+        return "ok", ""
+    if bit is None:
+        return "unknown", ("the 'Bypass rules on work item updates' permission could not be read (a restricted PAT may not read it); "
+                           "comment mode refuses then: check it in the project's security settings")
+    trust, _ = _trust(repo)
+    if trust is None or trust.approval == "comment" or trust.approvers:  # an unreadable target may hold comment mode: judged as if it does
+        return "fail", BYPASS_FIX + "; comment mode refuses while it is set"
+    return "warn", BYPASS_FIX
 
 
 def _bad(mode):
@@ -301,11 +327,12 @@ def run(repo=".", client=None, probe_item=None):
     out["specify"] = _safe(_specify_row, row, repo)
     out["shallow"] = _safe(_shallow_row, row, repo)
     cfg, out["config"] = _safe(_load_config, lambda r: (None, r), repo)
-    target, readable, out["config-target"] = _safe(_load_target, lambda r: (None, False, r), repo)
-    out["token"], out["identity"], identity = _safe(_token_rows, lambda r: (r, r, None), cfg, client)
+    target, out["config-target"] = _safe(_load_target, lambda r: (None, r), repo)
+    out["token"], out["identity"], identity, client = _safe(_token_rows, lambda r: (r, r, None, None), cfg, client)
     out["extension"] = _safe(_version_row, row, repo, EXT_PATH, "extension")
     out["workflow"] = _safe(_version_row, row, repo, WF_PATH, "workflow")
-    out["approvers"] = _safe(_approvers_row, row, repo, target, readable, identity)
+    out["approvers"] = _safe(_approvers_row, row, repo, identity)
+    out["bypass"] = _safe(_bypass_row, row, repo, client, identity)
     # the mode a stack or kit problem is judged by: strict if either config says so; unknown when the working-tree config is invalid
     invalid = cfg is None and out["config"][1].startswith("ado.config.json:")
     mode = "strict" if "strict" in (getattr(cfg, "mode", None), getattr(target, "mode", None)) else (None if invalid else "advisory")

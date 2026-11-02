@@ -526,3 +526,35 @@ def test_bad_approvers_answer_refuses_and_stores_nothing(monkeypatch, tmp_path, 
         _setup(monkeypatch, tmp_path, out, ("contoso", "Fabrikam", typed), profile="team")
     assert "SECRETVALUE" not in str(e.value) and A1 not in str(e.value)
     assert not out.exists() and not (tmp_path / ".azdo").exists()  # nothing written, token not stored
+
+
+# golden: `ado setup` without --profile, captured from the pre-piece main (2506719) with an existing config
+GOLDEN_PROMPTS = ["Azure DevOps organization (https://dev.azure.com/<org>) [contoso]: ",
+                  "Project name [Fabrikam Project's \"x\" \\ y]: "]
+
+
+def test_setup_without_profile_shows_existing_values_as_before(monkeypatch, tmp_path):
+    from ado import setup_cmd, secretstore
+    from tests.conftest import FakeClient
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr(secretstore, "resolve_store", lambda: secretstore.FileStore())
+    monkeypatch.setattr(setup_cmd, "AdoClient", lambda cfg: FakeClient(cfg, responses=[{"name": "Fabrikam"}]))
+    out = tmp_path / "ado.config.json"
+    out.write_text(_json.dumps({"organization": "contoso", "project": "Fabrikam Project's \"x\" \\ y"}))
+    prompts, answers = [], iter(["", ""])
+    assert setup_cmd.run_setup(input_fn=lambda p: prompts.append(p) or next(answers), getpass_fn=lambda _p: "pat", out_path=out) == 0
+    assert prompts == GOLDEN_PROMPTS  # byte-identical to the previous release: no JSON quotes
+    assert out.read_text() == '{\n  "organization": "contoso",\n  "project": "Fabrikam Project\'s \\"x\\" \\\\ y"\n}\n'
+
+
+def test_setup_with_profile_keeps_the_quoted_escaped_prompt(monkeypatch, tmp_path):
+    from ado import setup_cmd, secretstore
+    from tests.conftest import FakeClient
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    monkeypatch.setattr(secretstore, "resolve_store", lambda: secretstore.FileStore())
+    monkeypatch.setattr(setup_cmd, "AdoClient", lambda cfg: FakeClient(cfg, responses=[{"name": "Fabrikam"}]))
+    out = tmp_path / "ado.config.json"
+    out.write_text(_json.dumps({"organization": "contoso", "project": "Fabrikam"}))
+    prompts, answers = [], iter(["", "", "n"])
+    setup_cmd.run_setup(input_fn=lambda p: prompts.append(p) or next(answers), getpass_fn=lambda _p: "pat", out_path=out, profile="starter", interactive=True)
+    assert prompts[0].endswith(' ["contoso"]: ') and prompts[1].endswith(' ["Fabrikam"]: ')
