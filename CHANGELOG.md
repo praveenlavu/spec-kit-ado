@@ -2,7 +2,7 @@
 
 All notable changes are listed here. Versions follow [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md).
 
-## 0.3.0 — unreleased
+## 0.3.0 — 2026-11-03
 
 Each entry below describes its step as it landed, so a "nothing calls it yet" or "not wired yet" in an older entry is true of that step only; the later entries and "Advisory-mode additions in 0.3.0" give the state of the release.
 
