@@ -14,8 +14,8 @@ have installed (or to core Spec Kit), so the extension works for any tech stack.
 
 **Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.** See [docs/tracker-boundary.md](docs/tracker-boundary.md) for what the kit does and what stays in the tracker.
 
-**New here?** [docs/quickstart.md](docs/quickstart.md) takes you from a story to pushed Tasks in about ten minutes with the
-lightest setup (`ado setup --profile starter`); [docs/glossary.md](docs/glossary.md) explains every word in one sentence.
+**New here?** [docs/quickstart.md](docs/quickstart.md) takes you from a story to pushed Tasks with the
+lightest setup (`ado setup --profile starter`; the quickstart's target of about ten minutes has not been timed); [docs/glossary.md](docs/glossary.md) explains every word in one sentence.
 Running it with nobody at a terminal: [docs/unattended.md](docs/unattended.md). Which Spec Kit versions it was tried against:
 [docs/compatibility.md](docs/compatibility.md).
 
@@ -50,6 +50,11 @@ through PR review.
 
 Requires Spec Kit 1.2.1 or later (the supported floor; nothing below it was tried, see [docs/compatibility.md](docs/compatibility.md)), Python 3.9 or later, and `git`. `gh` is needed only
 to open PRs on GitHub.
+
+You also need the tools that install and run it. `specify` is the Spec Kit command-line tool: install it by following the
+[Spec Kit README](https://github.com/github/spec-kit#readme), then check `specify --version`. `pipx` (or `uv`) installs the `ado` command in
+its own environment: `python3 -m pip install --user pipx` is one way to get `pipx` (see the [pipx docs](https://pipx.pypa.io/)). It was tried on
+macOS only; Windows is untested (the tests use POSIX shell steps, and on Windows the PAT file has no Keychain or `chmod 600`, see the security notes below).
 
 **Status of the release: nothing is published yet.** 0.3.0 is the target release and is not tagged, the repository is private, the release is not published,
 there is no PyPI package, and the project is not listed in the Spec Kit community catalog (no submission has been made).
@@ -207,7 +212,7 @@ In each project:
 
 ## Upgrading from 0.1.1
 
-*History.* 0.2.0 was tagged only on the private repository and has not been released publicly, so the `@v0.2.0` URLs below do not resolve for anyone else yet. These steps are for 0.1.1 users of the old repository; 0.2.0 users read the section above.
+*History.* 0.2.0 was tagged only on the private repository and has not been released publicly, so the `@v0.2.0` URLs below do not resolve for anyone else yet. These steps are for people who installed 0.1.1 from an earlier copy of this project; 0.2.0 users read the section above.
 
 0.2.0 changes behaviour for existing users: read the **Breaking** list in the [changelog](CHANGELOG.md) first.
 Then, in each project:
