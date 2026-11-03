@@ -3104,7 +3104,7 @@ def test_f7_docs_pins_for_the_minor_findings():
     assert "**Unverified in live runs (state these in Testing Details; do not claim them).**" in cs
     for needle in ("GitHub's `base.sha` lag in the close step", "Comment approvals by a second human identity, end to end", "(acceptance criteria 5 and 7)", "case (f) live (criterion 9)",
                    "The doctor rows against real restricted tokens (criterion 10 live), including the `bypass` row", "The timed fresh-agent quickstart (criterion 1) and the catch-up to a PR (criterion 3)",
-                   "the keychain read from cron or launchd", "Python 3.13: the CI matrix has the leg, and it has not run", "the CI templates on a hosted runner, which have never run", "the toolkit's own `ci.yml`, the weekly `speckit-contract.yml` run, and the CI templates"):
+                   "the keychain read from cron or launchd", "The CI templates in a consumer repository on a hosted runner", "they have never run there", "skipped by the owner's decision on 2026-11-03"):
         assert needle in cs, needle
     # M-8
     assert "the per-operation table of required scopes, and the probes that would check it against a restricted token (`ado doctor --probe-item`), were not built for 0.3.0" in cfg

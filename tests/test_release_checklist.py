@@ -30,11 +30,14 @@ def code_lines():
     return out
 
 
-def test_it_says_plainly_that_nothing_has_run():
-    assert "**Status: NOT RUN.**" in TEXT and "never run on a hosted runner" in TEXT and "P4-21" in TEXT
+def test_it_says_plainly_what_has_run():
+    assert "**Status: IN PROGRESS.**" in TEXT and "never run on a hosted runner" in TEXT and "P4-21" in TEXT
+    assert "Owner decision, 2026-11-03" in TEXT and "is skipped for 0.3.0" in TEXT  # the live comment-mode proof
     sheet = section("Record sheet")
     rows = sheet.count("| | NOT RUN |")
-    assert rows == 8 and sheet.count("NOT RUN") == rows + 1  # every row, and the sentence above the table
+    assert rows == 5 and sheet.count("NOT RUN") == rows + 1  # steps 3, 4, 6.1-6.4, 6.5, 6.6-6.8, and the sentence above the table
+    assert sheet.count("PASS (pre-RC)") == 2 and "run 41563615813" in sheet and "run 41562104349" in sheet  # steps 1 and 2: evidence, not assertion
+    assert "| SKIPPED |" in sheet  # step 5
     assert "| 6.5 strict-verify (c) and (d) through the shipped file |" in sheet  # the only part of step 3 that runs after the flip
     assert not re.search(r"\b(passed on|ran green|verified on) a hosted runner", TEXT, re.I)
 
@@ -366,7 +369,7 @@ def test_local_links_and_anchors_resolve():
 def test_the_hosted_runner_claim_matches_the_submission_pack():
     # the submission pack says the checklist does not exist yet / is run later; it must not be contradicted by this file's own claims
     cs = (ROOT / "docs" / "catalog-submission.md").read_text(encoding="utf-8")
-    assert "never run on a hosted runner" in TEXT and "the CI templates on a hosted runner, which have never run" in cs
+    assert "never run on a hosted runner" in TEXT and "in a consumer repository on a hosted runner" in cs and "they have never run there" in cs
 
 
 def test_the_checklist_is_a_repository_only_doc_so_it_may_link_to_repository_files():

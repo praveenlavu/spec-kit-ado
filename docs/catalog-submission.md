@@ -17,16 +17,15 @@ command-line program is a separate thing and has 26 top-level CLI verbs (`ado --
 **Unverified in live runs (state these in Testing Details; do not claim them).**
 
 - What another user's edit or delete of a comment does to an approval (only the posting identity's authorship was proven live).
-- Comment approvals by a second human identity, end to end: `/approve D1`, `/reject D2` and `/answer Q1` synced and checked live (acceptance criteria 5 and 7),
+- Comment approvals by a second human identity, end to end (skipped by the owner's decision on 2026-11-03, not attempted): `/approve D1`, `/reject D2` and `/answer Q1` synced and checked live (acceptance criteria 5 and 7),
   and the done-time cross-check case (f) live (criterion 9).
 - That Azure DevOps stores comment line breaks as `<br>` (assumed).
 - The doctor rows against real restricted tokens (criterion 10 live), including the `bypass` row on a PAT that cannot read the permission.
 - GitHub's `base.sha` lag in the close step: an approver removed or added between `base.sha` and the merge.
 - The Azure repository's merge-type policy that the one-parent guard needs (Merge no fast-forward or Squash only).
-- Hosted CI: the toolkit's own `ci.yml`, the weekly `speckit-contract.yml` run, and the CI templates on a hosted runner, which have never run (the account's billing is blocked).
+- The CI templates in a consumer repository on a hosted runner (`ado-gate.yml`, `ado-link-on-merge.yml`, the optional strict re-run job, and the Azure Pipelines files): they have never run there. The toolkit's own `ci.yml` and the `speckit-contract.yml` canary did run green on hosted runners (2026-11-03, `main` `a7a4021`).
 - The timed fresh-agent quickstart (criterion 1) and the catch-up to a PR (criterion 3).
 - The unattended run on a real story, and the keychain read from cron or launchd.
-- Python 3.13: the CI matrix has the leg, and it has not run, locally or hosted.
 
 The extension and the bundle are GitHub issue forms in `github/spec-kit` ("Extension
 Submission" and "Bundle Submission"). There is no workflow issue form: a workflow is submitted

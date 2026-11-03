@@ -1,9 +1,12 @@
 # Release checklist (0.3.0 and later)
 
-> **Status: NOT RUN.** Nothing in this file has been executed. The CI in this repository has **never run on a hosted runner** (Actions billing for
-> the account is blocked), so every workflow and pipeline template here is covered only by structural tests, `bash -n` and real-bash tests with a
-> fake `ado`. The commands below are a plan. Task P4-21 runs this checklist, in order, against a release-candidate SHA once the owner unlocks CI,
-> and records expected against actual in the [record sheet](#record-sheet). Until then, do not write "tested on a hosted runner" anywhere.
+> **Status: IN PROGRESS.** Steps 1 and 2 have run on hosted runners against `main` at `a7a4021` (see the [record sheet](#record-sheet)); that SHA is
+> before the release-candidate commit (the CHANGELOG dating moves `main` once), so both are repeated on the `RC`. Steps 3 to 6 have not run: the shipped CI
+> templates have **never run on a hosted runner** in a consumer repository, so every workflow and pipeline template here is covered only by structural
+> tests, `bash -n`, real-bash tests with a fake `ado` and the local rehearsal. **Owner decision, 2026-11-03: the live proof of comment-mode approvals
+> (a second identity's `/approve`, `/reject`, `/answer`, and the `bypass` doctor row against a denied bypass permission) is skipped for 0.3.0.** Those
+> cases stay listed as unverified in live runs ([catalog-submission.md](catalog-submission.md)), and step 5 is not run for 0.3.0 unless the owner
+> reverses that. Do not write "tested on a hosted runner" for a template, and do not write "verified live" for comment mode.
 
 The checklist follows the design's section 4.8 and acceptance criterion 14: the release is ready when every step has been run end to end and every
 result is recorded. It has two helpers in this repository: [scripts/ci_smoke/](../scripts/ci_smoke/) (the six consumer cases as fixtures, with a local
@@ -434,16 +437,16 @@ A listing that was already merged is removed by a new pull request against the c
 
 ## Record sheet
 
-Task P4-21 fills this in. Until it has run, every row is `NOT RUN`. Record the date, the `RC` SHA, the Python and Spec Kit versions, the run URL,
+Task P4-21 fills this in; a row not yet run is `NOT RUN`. Record the date, the `RC` SHA, the Python and Spec Kit versions, the run URL,
 the exit codes and rule ids seen, and anything that differed from the expected column.
 
 | Step | Expected | Actual | Result |
 |---|---|---|---|
-| 1 `ci` on `main`, Python 3.9 and 3.13 | `test (3.9)`, `test (3.13)`, `scrub`, `actionlint` green; baseline tests ran | | NOT RUN |
-| 2 contract job, minimum and latest | both legs green, none skipped | | NOT RUN |
+| 1 `ci` on `main`, Python 3.9 and 3.13 | `test (3.9)`, `test (3.13)`, `scrub`, `actionlint` green; baseline tests ran | 2026-11-03, `main` `a7a4021` (before the RC): run 41563615813, `test (3.9)`, `test (3.13)`, `scrub`, `actionlint` all `success`, 9m14s; repeat on the `RC` | PASS (pre-RC) |
+| 2 contract job, minimum and latest | both legs green, none skipped | 2026-11-03, `workflow_dispatch` run 41562104349: `contract (latest)` and `contract (minimum, 9dca9bf)` both `success`; repeat on the `RC` | PASS (pre-RC) |
 | 3 consumer PRs (a) to (f) on GitHub, vendored strict-verify for (c) and (d) | per the table in step 3, log text present | | NOT RUN |
 | 4 the same cases on Azure Pipelines | per step 4 | | NOT RUN |
-| 5 unattended run (AC 8) | open PR with no terminal | | NOT RUN |
+| 5 unattended run (AC 8) | open PR with no terminal | Skipped by the owner (2026-11-03): needs the live comment-mode proof | SKIPPED |
 | 6.1 to 6.4 tag the `RC`, bundle, push the tag, make public | tag equals `RC`, `ado-0.3.0.zip: OK`, `PUBLIC` | | NOT RUN |
 | 6.5 strict-verify (c) and (d) through the shipped file | (c) green, (d) fails with `green-fails` | | NOT RUN |
 | 6.6 to 6.8 release, filings, `v0` last | every URL 200, checksum equal, `v0` at `v0.3.0` | | NOT RUN |
