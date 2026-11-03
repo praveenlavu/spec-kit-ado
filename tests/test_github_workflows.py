@@ -1318,7 +1318,7 @@ def test_link_on_merge_a_refused_story_is_not_moved_to_done_state_even_when_aske
 
 
 # ======================================================================================================================
-# V3-14b: the optional secret-free CI re-run job (`ado strict verify --no-record`), shipped UNRUN (billing-blocked): structural pins,
+# V3-14b: the optional secret-free CI re-run job (`ado strict verify --no-record`), shipped UNRUN (not yet run in a consumer repository): structural pins,
 # `bash -n` (the parametrised test above covers both new files) and real-bash shim tests only.
 # ======================================================================================================================
 VERIFY_WF = "ado-strict-verify"

@@ -1011,7 +1011,8 @@ def test_strict_ci_templates_documented():
     for doc, ref in (("docs/ci-github.md", "<PR base branch>"), ("docs/ci-azure-pipelines.md", "<target branch>")):
         text = _flat(doc)
         assert f"`ado strict mode --base origin/{ref}`" in text and "strict done refused: <rule ids>" in text, doc
-        assert "`ado strict check <id> --phase pr --head" in text and "have not been run in this project's environment" in text, doc
+        assert "`ado strict check <id> --phase pr --head" in text, doc
+        assert ("have not been run in a consumer repository on a hosted runner yet" if doc == "docs/ci-github.md" else "have not been run in this project's environment") in text, doc
         assert "the story-id fail-closed" in text or "fails (not skips)" in text, doc
     assert "merge_commit_sha" in _flat("docs/ci-github.md") and "`fetch-depth: 0`" in _flat("docs/ci-github.md")
     assert "fail (not skip)" in _flat("docs/configuration.md") and "Strict mode" in (ROOT / "pipelines" / "README.md").read_text(encoding="utf-8")
@@ -1045,7 +1046,8 @@ def test_strict_verify_job_documented_as_optional_unrun_and_hostile_code_capable
         text = _flat(doc)
         assert "runs the project's test command on the PR's code" in text and "arbitrary code on the runner" in text, doc
         assert "the target branch's `ado.config.json` is strict" in text and "nothing else" in text, doc
-        assert "ephemeral" in text and "billing" in text, doc
+        assert "ephemeral" in text, doc
+        assert ("billing" in text) == (doc == "docs/ci-azure-pipelines.md"), doc  # GitHub's reason is gone (its CI ran 2026-11-03); Azure hosted agents are unchecked
     gh = _flat("docs/ci-github.md")
     assert "`pull_request` only, never `pull_request_target`" in gh and "approval for fork pull requests" in gh
     assert "pull_request_target" not in (ROOT / ".github" / "workflows" / "ado-strict-verify.yml").read_text(encoding="utf-8")

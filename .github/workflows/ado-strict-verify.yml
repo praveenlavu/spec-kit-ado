@@ -1,5 +1,5 @@
 name: ADO strict verify (reusable, optional, secret-free)
-# OPTIONAL and SHIPPED UNRUN (hosted runners are billing-blocked in this project): covered by structural pins, `bash -n` and real-bash tests with a fake `ado` only.
+# OPTIONAL and SHIPPED UNRUN (it has not run in a consumer repository on a hosted runner): covered by structural pins, `bash -n` and real-bash tests with a fake `ado` only.
 # Call from a consumer repo on the pull_request event only (never the privileged PR event), e.g.:
 #   uses: praveenlavu/spec-kit-ado/.github/workflows/ado-strict-verify.yml@v0
 # It declares no secret and holds no token. It re-runs `ado strict verify --no-record` (the red commit must fail, the green commit must pass) on the PR's code,
