@@ -112,6 +112,55 @@ def test_commit_lint_triggers_on_pr():
     assert "pull_request" in triggers(load("commit-lint"))
 
 
+def _commit_lint_run():
+    return next(st["run"] for st in steps(load("commit-lint")) if "Check commit messages" in st.get("name", ""))
+
+
+def _lint_repo(tmp_path, subject, main_moves=False):
+    def git(*a):
+        return subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True, text=True,
+                              env={**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+                                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}).stdout.strip()
+    git("init", "-q", "-b", "main")
+    (tmp_path / "a").write_text("1")
+    git("add", "a")
+    git("commit", "-q", "-m", "chore: base\n\nbody")
+    base = git("rev-parse", "HEAD")
+    git("switch", "-q", "-c", "pr")
+    (tmp_path / "b").write_text("2")
+    git("add", "b")
+    git("commit", "-q", "-m", subject + "\n\nbody")
+    if main_moves:  # main is fast-forwarded to the PR tip right after the PR event (what ship.sh did)
+        git("update-ref", "refs/remotes/origin/main", git("rev-parse", "HEAD"))
+    return base
+
+
+def _lint(tmp_path, base):
+    return subprocess.run(["bash", "-c", _commit_lint_run()], cwd=tmp_path, capture_output=True, text=True,
+                          env={**os.environ, "BASE_SHA": base})
+
+
+def test_commit_lint_lints_from_the_pr_base_commit_even_when_main_has_moved(tmp_path):
+    """The old range origin/<base>..HEAD was empty once main was pushed to the PR tip, so the check passed without linting."""
+    base = _lint_repo(tmp_path, "feat: " + "x" * 80, main_moves=True)
+    r = _lint(tmp_path, base)
+    assert r.returncode == 1 and "max 72" in r.stdout
+
+
+def test_commit_lint_passes_a_good_commit_and_counts_it(tmp_path):
+    base = _lint_repo(tmp_path, "chore: a short good subject")
+    r = _lint(tmp_path, base)
+    assert r.returncode == 0 and "All 1 commit messages pass." in r.stdout
+
+
+def test_commit_lint_refuses_an_empty_range_and_a_bad_base(tmp_path):
+    base = _lint_repo(tmp_path, "chore: a short good subject")
+    head = subprocess.run(["git", "-C", str(tmp_path), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+    assert _lint(tmp_path, head).returncode == 1  # nothing between base and HEAD: do not pass vacuously
+    assert _lint(tmp_path, "main").returncode == 1  # not a 40-hex id
+    assert _lint(tmp_path, "0" * 40).returncode == 1  # not in the checkout
+
+
 @pytest.mark.parametrize("name", ALL)
 def test_every_workflow_has_least_privilege_permissions(name):
     perms = load(name).get("permissions")
@@ -624,11 +673,11 @@ def test_commit_lint_ann_ignores_planted_modules_in_the_checkout(tmp_path):
                                     check=True, capture_output=True)
     git("init", "-q", "-b", "main")
     git("commit", "-q", "--allow-empty", "-m", "init")
-    git("update-ref", "refs/remotes/origin/main", "HEAD")
+    base = subprocess.run(["git", "rev-parse", "HEAD"], cwd=tmp_path, capture_output=True, text=True).stdout.strip()
     git("commit", "-q", "--allow-empty", "-m", "not conventional")
     seen = _plant(tmp_path)
     run = next(s["run"] for s in steps(load("commit-lint")) if "ann()" in s.get("run", ""))
-    r = subprocess.run(["bash", "-c", run], env={**os.environ, "BASE_REF": "main"}, cwd=tmp_path, capture_output=True, text=True)
+    r = subprocess.run(["bash", "-c", run], env={**os.environ, "BASE_SHA": base}, cwd=tmp_path, capture_output=True, text=True)
     assert r.returncode == 1 and "not conventional" in r.stdout, r.stdout + r.stderr  # the ann path ran
     assert seen() == []
 
