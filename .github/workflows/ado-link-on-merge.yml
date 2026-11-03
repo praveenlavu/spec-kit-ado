@@ -93,7 +93,7 @@ jobs:
               return 1
             fi
             # Dry run first: only a genuinely not-ready ledger is a quiet notice.
-            ado done "$id" --plan-out "${RUNNER_TEMP}/plan_${id}.md" --base "$BASE_SHA" > "${RUNNER_TEMP}/done_${id}.json" 2> "${RUNNER_TEMP}/done_${id}.err" || true
+            ado "done" "$id" --plan-out "${RUNNER_TEMP}/plan_${id}.md" --base "$BASE_SHA" > "${RUNNER_TEMP}/done_${id}.json" 2> "${RUNNER_TEMP}/done_${id}.err" || true
             # A strict refusal (exit 2, a findings JSON without `ready` on stdout) is not an evaluation failure: report its rule ids, never its text, and fail the job at the end.
             if rules=$(python3 -I -c 'import json,re,sys;r=json.load(open(sys.argv[1]));assert "ready" not in r;print(" ".join(re.sub("[^A-Za-z0-9_-]","",str(x["rule"]))[:40] for x in r["findings"][:20]) or "none")' "${RUNNER_TEMP}/done_${id}.json" 2>/dev/null); then
               echo "::error::$id: strict done refused: $rules"
@@ -106,9 +106,9 @@ jobs:
             st=$(python3 -I -c 'import json,sys;r=json.load(open(sys.argv[1]));print("true" if r["ready"] else "false", "done" if r.get("already_done") is True else "open")' "${RUNNER_TEMP}/done_${id}.json" 2>/dev/null || echo "unknown open")
             ready=${st% *}
             # A story already in done_state is never transitioned, whatever happened to its ledger: every note ends in $keep and the function returns 0.
-            keep=; [ "${st#* }" = done ] && keep=" - already done, state left unchanged"
+            keep=; [ "${st#* }" = "done" ] && keep=" - already done, state left unchanged"
             if [ "$ready" = true ]; then
-              ado done "$id" --apply --base "$BASE_SHA" > "${RUNNER_TEMP}/apply_${id}.json" 2> "${RUNNER_TEMP}/ado.err" && applied=true || applied=false
+              ado "done" "$id" --apply --base "$BASE_SHA" > "${RUNNER_TEMP}/apply_${id}.json" 2> "${RUNNER_TEMP}/ado.err" && applied=true || applied=false
               # the apply read is authoritative too: the dry-run GET may have failed or the story moved since
               [ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1])).get("already_done") is True)' "${RUNNER_TEMP}/apply_${id}.json" 2>/dev/null)" = True ] && keep=" - already done, state left unchanged"
               if [ "$applied" = true ]; then

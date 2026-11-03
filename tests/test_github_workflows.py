@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1585,7 +1586,7 @@ XC_DOC = {"phase": "done", "mode": "strict", "ok": False,
 def test_github_link_on_merge_passes_the_pre_merge_base_sha_through_env_to_both_done_calls():
     step = next(s for s in steps(load("ado-link-on-merge")) if "ado done" in s.get("run", ""))
     assert step["env"]["BASE_SHA"] == "${{ github.event.pull_request.base.sha }}"
-    calls = re.findall(r"ado done \"\$id\"[^\n]*", step["run"])
+    calls = re.findall(r"ado \"done\" \"\$id\"[^\n]*", step["run"])
     assert len(calls) == 2 and all(' --base "$BASE_SHA" ' in c for c in calls), calls
     assert "${{" not in step["run"] and "merge_commit_sha" not in step["run"]  # the base is never derived from the merged commit
 
@@ -1593,7 +1594,7 @@ def test_github_link_on_merge_passes_the_pre_merge_base_sha_through_env_to_both_
 def test_azure_link_on_merge_uses_the_first_parent_of_the_merged_commit_as_base():
     script = next(s["script"] for s in yaml.safe_load(AZ_LINK.read_text())["steps"] if "ado done" in s.get("script", ""))
     assert "base_sha=$(git rev-parse --verify --quiet 'HEAD^1^{commit}' 2>/dev/null || true)" in script
-    calls = re.findall(r"ado done \"\$id\"[^\n]*", script)
+    calls = re.findall(r"ado \"done\" \"\$id\"[^\n]*", script)
     assert len(calls) == 2 and all(' --base "$base_sha" ' in c for c in calls), calls
 
 
@@ -1860,3 +1861,27 @@ def test_every_third_party_action_is_pinned_by_commit_sha_in_every_workflow():
     for job in ("scrub", "actionlint"):
         co = next(s for s in load("ci")["jobs"][job]["steps"] if s.get("uses", "").startswith("actions/checkout@"))
         assert co["with"]["persist-credentials"] is False, job
+
+
+# ---- CI-1: the inline scripts are shellchecked here too (the `actionlint` CI job, which runs shellcheck, stays the authority) ----
+def _inline_scripts():
+    """(label, bash text) of every `run:` step in the workflows and `script:` step in the Azure templates, expressions made inert."""
+    for name in ALL:
+        for step in steps(load(name)):
+            if step.get("run") and step.get("shell", "bash") == "bash":
+                yield f"{name} {step.get('name', '')}", step["run"]
+    for p in sorted((ROOT / "pipelines").glob("*.yml")):
+        for step in yaml.safe_load(p.read_text())["steps"]:
+            if step.get("script"):
+                yield f"{p.name} {step.get('displayName', '')}", step["script"]
+
+
+@pytest.mark.skipif(not shutil.which("shellcheck"), reason="shellcheck not installed (the actionlint CI job runs it)")
+def test_inline_scripts_are_shellcheck_clean():
+    bad = []
+    for label, text in _inline_scripts():
+        text = re.sub(r"\$\{\{.*?\}\}", "_expr_", text)  # GitHub / Azure template expressions
+        text = re.sub(r"\$\((?:\w+\.)+\w+\)", "_macro_", text)  # Azure macros such as $(Agent.BuildDirectory), not command substitution
+        r = subprocess.run(["shellcheck", "-s", "bash", "-f", "gcc", "-"], input=text, capture_output=True, text=True)
+        bad += [f"{label}: {ln}" for ln in r.stdout.splitlines()]
+    assert not bad, "\n".join(bad)

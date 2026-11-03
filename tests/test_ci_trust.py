@@ -12,7 +12,7 @@ from ado import __main__ as m
 from ado import decisions, kits, strict
 from ado.__main__ import main
 from ado.dod import SECTION2
-from tests.conftest import FakeClient, approve, commit, git, profile
+from tests.conftest import _IDENTITY, FakeClient, approve, commit, git, profile
 from tests.test_strict import CMD, LEDGER, MARK, RED_NOTE, STACK_CMD, _d, _kids, _ledger_rows, _pair, _project, _repo
 from tests.test_strict_wire import _full, _wire
 
@@ -260,7 +260,7 @@ def _target(repo, cfg, parent, ref="refs/remotes/origin/trunk", files=None):
     if not files:
         git(repo, "update-ref", ref, parent)
         return
-    env = {**os.environ, "GIT_INDEX_FILE": str(repo / ".git" / "trust-index")}
+    env = {**_IDENTITY, **os.environ, "GIT_INDEX_FILE": str(repo / ".git" / "trust-index")}  # commit-tree needs an identity (a hosted runner has none)
 
     def run(*a, inp=None):
         return subprocess.run(["git", "-C", str(repo), *a], env=env, input=inp, capture_output=True, text=True, check=True).stdout.strip()

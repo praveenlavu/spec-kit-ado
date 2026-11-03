@@ -121,7 +121,10 @@ def test_a_score_of_exactly_64_kib_is_read():
 
 
 def test_the_golden_set_is_package_data_with_one_source_of_truth():
-    assert calibrate.GOLDEN == ROOT / "src/ado/golden/fidelity.json" and calibrate.GOLDEN.is_file()
+    import ado
+    # wherever `ado` is imported from (the checkout when installed editable, site-packages otherwise), it is the package's own copy and equals the checkout's
+    assert calibrate.GOLDEN.resolve() == Path(ado.__file__).resolve().parent / "golden/fidelity.json" and calibrate.GOLDEN.is_file()
+    assert calibrate.GOLDEN.read_bytes() == (ROOT / "src/ado/golden/fidelity.json").read_bytes()
     assert not (ROOT / "tests/golden/fidelity.json").exists()  # one copy only
     import importlib.resources as res
     assert res.files("ado").joinpath("golden/fidelity.json").is_file()

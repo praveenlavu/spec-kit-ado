@@ -33,7 +33,9 @@ All of these must be true. If one is not, stop: the later steps would prove noth
    `ubuntu-24.04`. The 3.9 leg does not install the Spec Kit CLI (Spec Kit needs Python 3.11 or later), so the real-repository tests skip there and
    run on the 3.13 leg. Both legs check out the full history and set `ADO_REQUIRE_BASELINE=1`, so a missing baseline commit makes the byte-identity
    tests fail instead of skipping: **a green leg means they ran**. Step 1 is what shows both legs green on a hosted runner; nothing is tagged
-   before that.
+   before that. The job installs the package editable (the tests run the checkout) and ends with a step that builds the wheel and checks it
+   carries the seeds and the golden set; the real-repository fixture passes `--ignore-agent-tools` to `specify init` because Spec Kit 1.2.1 wants the
+   `claude` CLI on PATH. To lint the workflows locally as the `actionlint` job does, put `shellcheck` and the pinned `actionlint` 1.7.7 on PATH.
 3. **The release-prep task has merged**: version 0.3.0 everywhere and the catalog files. This checklist does not do that.
    `git show origin/main:extension.yml | grep 'version: "0.3.0"'` prints the line. **Date the 0.3.0 headings** before you pick `RC`:
    `CHANGELOG.md` and `workflows/ado-lifecycle/CHANGELOG.md` say `## 0.3.0 — unreleased`; replace `unreleased` with the release date

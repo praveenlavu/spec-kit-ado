@@ -368,11 +368,13 @@ def speckit_template(tmp_path_factory):
            **{f"GIT_{k}_{f}": v for k in ("AUTHOR", "COMMITTER") for f, v in (("NAME", "Test"), ("EMAIL", "test@example.invalid"))}}
 
     def run(*cmd):
-        subprocess.run(cmd, cwd=repo, env=env, check=True, capture_output=True, timeout=120)
+        r = subprocess.run(cmd, cwd=repo, env=env, capture_output=True, text=True, timeout=120)
+        assert r.returncode == 0, f"{' '.join(cmd[:3])} exited {r.returncode}\n{r.stdout[-1500:]}\n{r.stderr[-1500:]}"  # a bare CalledProcessError hides why
     run("git", "init", "-q", "-b", "main")
     run("git", "config", "gc.auto", "0")  # no background repack while tests copy this template (objects vanished mid-copytree: intermittent setup error)
     run("git", "config", "maintenance.auto", "false")
-    run(specify, "init", "--here", "--force", "--non-interactive", "--integration", "claude", "--script", "sh")
+    # --ignore-agent-tools: Spec Kit 1.2.1 (the CI pin) refuses to init when the `claude` CLI is not on PATH, as on a hosted runner
+    run(specify, "init", "--here", "--force", "--non-interactive", "--integration", "claude", "--script", "sh", "--ignore-agent-tools")
     run(specify, "extension", "add", "--dev", str(ext_src))
     run(specify, "extension", "add", "--dev", str(kit_src))
     run("git", "add", "-A")

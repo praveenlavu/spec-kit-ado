@@ -84,7 +84,11 @@ def test_placeholder_or_real_seeds_ship_and_validate():
 def test_package_data_declares_the_seeds():
     toml = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert re.search(r"\[tool\.setuptools\.package-data\]\s*\n\s*ado\s*=\s*\[\s*\"seeds/\*\.json\"\s*,\s*\"golden/\*\.json\"\s*\]", toml)  # the golden set of `ado calibrate` rides along
-    assert Path(stack.SEEDS_DIR) == ROOT / "src" / "ado" / "seeds"
+    import ado
+    assert Path(stack.SEEDS_DIR).resolve() == Path(ado.__file__).resolve().parent / "seeds"  # the imported package's own dir: the checkout (editable) or site-packages
+    src_seeds = sorted((ROOT / "src" / "ado" / "seeds").glob("*.json"))
+    assert src_seeds and [p.name for p in src_seeds] == sorted(p.name for p in Path(stack.SEEDS_DIR).glob("*.json"))
+    assert all((Path(stack.SEEDS_DIR) / p.name).read_bytes() == p.read_bytes() for p in src_seeds)  # an installed copy equals the checkout's
 
 
 # ---- plan_init / apply_init ----

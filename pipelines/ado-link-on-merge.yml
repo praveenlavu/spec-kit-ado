@@ -54,7 +54,7 @@ steps:
           return 1
         fi
         # Dry run first: only a genuinely not-ready ledger is a quiet info line.
-        ado done "$id" --plan-out "${AGENT_TEMPDIRECTORY}/plan_${id}.md" --base "$base_sha" > "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/done_${id}.err" || true
+        ado "done" "$id" --plan-out "${AGENT_TEMPDIRECTORY}/plan_${id}.md" --base "$base_sha" > "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/done_${id}.err" || true
         # A strict refusal (exit 2, a findings JSON without `ready` on stdout) is not an evaluation failure: report its rule ids, never its text, and fail the build at the end.
         if rules=$(python3 -I -c 'import json,re,sys;r=json.load(open(sys.argv[1]));assert "ready" not in r;print(" ".join(re.sub("[^A-Za-z0-9_-]","",str(x["rule"]))[:40] for x in r["findings"][:20]) or "none")' "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2>/dev/null); then
           echo "##vso[task.logissue type=error]$id: strict done refused: $rules"
@@ -67,9 +67,9 @@ steps:
         st=$(python3 -I -c 'import json,sys;r=json.load(open(sys.argv[1]));print("true" if r["ready"] else "false", "done" if r.get("already_done") is True else "open")' "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2>/dev/null || echo "unknown open")
         ready=${st% *}
         # A story already in done_state is never transitioned, whatever happened to its ledger: every note ends in $keep and the function returns 0.
-        keep=; [ "${st#* }" = done ] && keep=" - already done, state left unchanged"
+        keep=; [ "${st#* }" = "done" ] && keep=" - already done, state left unchanged"
         if [ "$ready" = true ]; then
-          ado done "$id" --apply --base "$base_sha" > "${AGENT_TEMPDIRECTORY}/apply_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/ado.err" && applied=true || applied=false
+          ado "done" "$id" --apply --base "$base_sha" > "${AGENT_TEMPDIRECTORY}/apply_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/ado.err" && applied=true || applied=false
           # the apply read is authoritative too: the dry-run GET may have failed or the story moved since
           [ "$(python3 -I -c 'import json,sys;print(json.load(open(sys.argv[1])).get("already_done") is True)' "${AGENT_TEMPDIRECTORY}/apply_${id}.json" 2>/dev/null)" = True ] && keep=" - already done, state left unchanged"
           if [ "$applied" = true ]; then
@@ -104,7 +104,7 @@ steps:
         n=$(for c in $(git rev-list --first-parent -n 50 HEAD 2>/dev/null); do
           { git show "$c:ado.config.json" 2>/dev/null || true; } | python3 -I -c 'import json,sys;t=sys.stdin.buffer.read();d=json.loads(t.decode("utf-8")) if t.strip() else None;print(json.dumps({k: d.get(k) for k in ("approvers", "approval", "unattended", "mode")}, sort_keys=True) if isinstance(d, dict) else "absent")' 2>/dev/null || echo invalid
         done | sort -u | wc -l)
-        [ "$(echo $n)" = 1 ] || trust_moved=true
+        [ "$((n))" = 1 ] || trust_moved=true
       fi
       refused=false
       for id in $ids; do
