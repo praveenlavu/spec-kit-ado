@@ -203,3 +203,70 @@ def test_an_invalid_verdict_input_is_refused(proj):  # the validator really runs
     bad.write_text(FIXTURE.read_text(encoding="utf-8").replace("verdict_input: verdict_review_spec", "verdict_input: undeclared"), encoding="utf-8")
     cp = proj.sp("workflow", "add", str(bad))
     assert cp.returncode == 1 and "undeclared" in cp.stdout + cp.stderr
+
+
+# ---- v0.3.1: a supplied verdict must not approve a plan that changed after the human saw it (Copilot review of github/spec-kit PR 5312) ----
+LOOPS = ["questions", "plan-questions", "answers-questions", "push", "decisions", "sync", "pr"]
+STUB_ADO = """#!/bin/sh
+# Stand-in for `ado` (contoso, story 1001): --plan-out writes a plan, --expect-plan applies it. With the file `changes` present the FIRST apply finds
+# the world changed since the preview (exit 2 + <file>.new, as the real command does); later previews write the new plan.
+plan=""; expect=""
+while [ $# -gt 0 ]; do case "$1" in --plan-out) plan="$2"; shift;; --expect-plan) expect="$2"; shift;; esac; shift; done
+if [ -n "$plan" ]; then
+  mkdir -p "$(dirname "$plan")"; rm -f "$plan.new"; echo preview >> trace.txt
+  n=$(cat .calls 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > .calls
+  if [ -e changes ] && [ "$n" -gt 1 ]; then echo "plan B" > "$plan"; else echo "plan A" > "$plan"; fi
+  exit 0
+fi
+if [ -n "$expect" ]; then
+  echo apply >> trace.txt
+  if [ -e changes ] && [ ! -e .refused ]; then touch .refused; echo "plan B" > "$expect.new"; echo "plan changed since approval" >&2; exit 2; fi
+  exit 0
+fi
+exit 0
+"""
+
+
+def _mini(proj, loop):
+    """The SHIPPED `<loop>-loop` and `<loop>-applied` steps with the shipped inputs, run by the real engine against the stub `ado`."""
+    wf = yaml.safe_load(SHIPPED.read_text(encoding="utf-8"))
+    steps = {s["id"]: s for s in wf["steps"]}
+    mini = {"schema_version": wf["schema_version"], "workflow": wf["workflow"], "inputs": wf["inputs"], "steps": [steps[f"{loop}-loop"], steps[f"{loop}-applied"]]}
+    path = proj.dir.parent / "mini.yml"
+    path.write_text(yaml.safe_dump(mini, sort_keys=False), encoding="utf-8")
+    bindir = proj.dir.parent / "bin"
+    bindir.mkdir(exist_ok=True)
+    (bindir / "ado").write_text(STUB_ADO, encoding="utf-8")
+    (bindir / "ado").chmod(0o755)
+    proj.env["PATH"] = f"{bindir}{os.pathsep}{proj.env['PATH']}"
+    cp = proj.sp("workflow", "run", str(path), "--input", f"story_id={STORY}", "--json")
+    return cp, json.loads(cp.stdout)
+
+
+@pytest.mark.parametrize("loop", LOOPS)
+def test_a_supplied_verdict_cannot_approve_a_changed_plan(proj, loop):
+    proj.mark("changes")
+    cp, out = _mini(proj, loop)
+    rid = out["run_id"]
+    assert out["status"] == "paused" and out["gate"]["step_id"] == f"approve-{loop}"
+    assert proj.resume(rid, f"approve-{loop}", "approve").returncode != 0
+    st = proj.state(rid)
+    # the apply refused plan B; the run ends FAILED with the gate passed once, never a second time on a plan nobody saw
+    assert st["status"] == "failed" and proj.trace() == ["preview", "apply"]
+
+
+@pytest.mark.parametrize("loop", LOOPS)
+def test_an_unchanged_plan_applies_on_the_first_pass(proj, loop):
+    cp, out = _mini(proj, loop)
+    rid = out["run_id"]
+    assert proj.resume(rid, f"approve-{loop}", "approve").returncode == 0
+    assert proj.state(rid)["status"] == "completed" and proj.trace() == ["preview", "apply"]
+
+
+def test_a_plain_resume_of_a_refused_apply_never_applies_the_new_plan(proj):
+    proj.mark("changes")
+    _, out = _mini(proj, "questions")
+    rid = out["run_id"]
+    assert proj.resume(rid, "approve-questions", "approve").returncode != 0
+    assert proj.sp("workflow", "resume", rid).returncode != 0
+    assert proj.state(rid)["status"] == "failed" and proj.trace() == ["preview", "apply"]

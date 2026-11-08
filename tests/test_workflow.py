@@ -330,7 +330,7 @@ def _ado_cmd(run):
 def test_each_triplet_is_a_do_while_on_plan_changed(name, plan):
     top = {s["id"]: s for s in _wf()["steps"]}
     loop = top[f"{name}-loop"]
-    assert loop["type"] == "do-while" and "max_iterations" not in loop  # engine default cap: 10
+    assert loop["type"] == "do-while" and loop["max_iterations"] == 1  # one pass: a supplied verdict must not re-approve a changed plan
     assert [s["id"] for s in loop["steps"]] == [f"{name}-preview", f"approve-{name}", f"{name}-apply"]
     assert loop["condition"] == f"{{{{ steps.{name}-apply.output.stderr | contains('plan changed since approval') }}}}"
     preview, gate, apply = loop["steps"]
@@ -399,7 +399,7 @@ def test_decisions_triplet_shape():
     assert "{{" not in gate["message"] and "nothing to post" in gate["message"]
     assert "If the preview starts with ⚠, open the file and read it in full before approving." in gate["message"]
     assert by_id["decisions-applied"]["run"] == (
-        "if [ -e .ado/plan-decisions.md.new ]; then echo 'spec-kit-ado: the decisions plan kept changing after approval; start a new run' >&2; exit 1; fi")
+        "if [ -e .ado/plan-decisions.md.new ]; then echo 'spec-kit-ado: the decisions plan changed after approval; start a new run' >&2; exit 1; fi")
     assert by_id["strict-check-implement"]["run"] == f"ado strict check {STORY} --phase implement"
     assert by_id["strict-verify"]["run"] == f"ado strict verify {STORY}"
     assert by_id["strict-verify"]["timeout"] == 7200  # the engine's shell default is 300 s: it would kill the test runs mid-way
@@ -487,7 +487,7 @@ def test_workflow_docs_describe_stack_check(path):
 
 
 # ---- piece 3 (P3-11): business rules change prompts and docs, never the workflow ----
-BASE_WORKFLOW_SHA256 = "b83660e69c37946537c37e518e5dd467f8a6c2cc51c0a3572fb12b1a4f9cdd73"  # workflow.yml at the P4-14 base, version and speckit_version lines blanked (R-1 raised the floor); F7 then dropped "; F11 ruling" from one comment (no step, input or shell line)
+BASE_WORKFLOW_SHA256 = "a9daf4db0357663a2cda5d777cfb29f538d2bc8fe13903bcf6c3241901574ec0"  # workflow.yml at the P4-14 base, version and speckit_version lines blanked (R-1 raised the floor); F7 then dropped "; F11 ruling" from one comment (no step, input or shell line); v0.3.1 then capped the seven loops at one pass and reworded the seven *-applied messages and one comment block (no step, input or gate)
 
 
 def test_workflow_unchanged_by_rules():

@@ -96,12 +96,13 @@ inputs:
 # step is a triplet: shell preview (--plan-out) -> gate (show_file) -> shell --apply.
 # The apply passes --expect-plan with the preview's file and the same flags, so it re-renders the
 # plan and refuses (exit 2, fresh plan in <file>.new) unless it is exactly what the gate showed.
-# Each triplet sits in a do-while loop: a refused apply ends its step cleanly (only that exit 2 with
-# a fresh <file>.new is swallowed) and the loop runs the preview and the gate again. So a failed
-# apply resumed after an edit (`specify workflow resume`, which re-runs only the unfinished step)
-# re-previews and re-asks instead of applying an unapproved plan or getting stuck. Any other
-# failure stops the run as before. The *-applied step after each loop stops the run if the plan
-# still differed when the loop hit its 10-iteration cap; then start a new run.
+# Each triplet sits in a do-while loop capped at ONE pass (max_iterations: 1): a refused apply (exit 2 with a
+# fresh <file>.new) ends its step cleanly, the loop does not repeat, and the *-applied step after it stops the
+# run (exit 1: start a new run). The loop must not repeat because a verdict supplied with `--input` (or left in
+# the inputs by an earlier resume) stays set and would pass the second gate with no prompt, applying a plan no
+# human saw (found by an automated review on the Spec Kit catalog PR; tests/test_speckit_contract.py). A plain
+# `specify workflow resume` re-runs only the failed step, so it can never apply the new plan. Any other
+# failure stops the run as before.
 # Command steps that could write ADO get `--workflow`, which makes them skip every ADO write;
 # pull, plan, gate and review also get it so they never stop to ask: open decisions go to
 # ledger section 2 (`Q<n>` lines with owner: PO for the product owner; the questions triplets post those).
@@ -151,6 +152,7 @@ steps:
   # Questions raised by pull (spec ambiguities). The apply is a no-op when none are open or the comment is current.
   - id: questions-loop
     type: do-while
+    max_iterations: 1
     condition: "{{ steps.questions-apply.output.stderr | contains('plan changed since approval') }}"
     steps:
       - id: questions-preview
@@ -171,7 +173,7 @@ steps:
 
   - id: questions-applied
     type: shell
-    run: "if [ -e .ado/plan-questions.md.new ]; then echo 'spec-kit-ado: the questions plan kept changing after approval; start a new run' >&2; exit 1; fi"
+    run: "if [ -e .ado/plan-questions.md.new ]; then echo 'spec-kit-ado: the questions plan changed after approval; start a new run' >&2; exit 1; fi"
 
   - id: plan
     command: speckit.ado.plan
@@ -183,6 +185,7 @@ steps:
   # so this adds only what pull's did not post. Its own plan file: the first loop's `.new` guard stays independent.
   - id: plan-questions-loop
     type: do-while
+    max_iterations: 1
     condition: "{{ steps.plan-questions-apply.output.stderr | contains('plan changed since approval') }}"
     steps:
       - id: plan-questions-preview
@@ -203,7 +206,7 @@ steps:
 
   - id: plan-questions-applied
     type: shell
-    run: "if [ -e .ado/plan-questions-after-plan.md.new ]; then echo 'spec-kit-ado: the plan questions plan kept changing after approval; start a new run' >&2; exit 1; fi"
+    run: "if [ -e .ado/plan-questions-after-plan.md.new ]; then echo 'spec-kit-ado: the plan questions plan changed after approval; start a new run' >&2; exit 1; fi"
 
   # The engine cannot loop back, so the wait is a gate and the answers are read by a second plan run.
   # The run does not wait by itself: the operator waits at this gate until the product owner replies.
@@ -233,6 +236,7 @@ steps:
   # product owner sees them. They stay open until answered: the ledger's "no open questions" box cannot be ticked, so `ado done` reports the story not ready.
   - id: answers-questions-loop
     type: do-while
+    max_iterations: 1
     condition: "{{ steps.answers-questions-apply.output.stderr | contains('plan changed since approval') }}"
     steps:
       - id: answers-questions-preview
@@ -253,7 +257,7 @@ steps:
 
   - id: answers-questions-applied
     type: shell
-    run: "if [ -e .ado/plan-questions-after-answers.md.new ]; then echo 'spec-kit-ado: the answers questions plan kept changing after approval; start a new run' >&2; exit 1; fi"
+    run: "if [ -e .ado/plan-questions-after-answers.md.new ]; then echo 'spec-kit-ado: the answers questions plan changed after approval; start a new run' >&2; exit 1; fi"
 
   - id: review-plan
     type: gate
@@ -274,6 +278,7 @@ steps:
 
   - id: push-loop
     type: do-while
+    max_iterations: 1
     condition: "{{ steps.push-apply.output.stderr | contains('plan changed since approval') }}"
     steps:
       - id: push-preview
@@ -294,7 +299,7 @@ steps:
 
   - id: push-applied
     type: shell
-    run: "if [ -e .ado/plan-push.md.new ]; then echo 'spec-kit-ado: the push plan kept changing after approval; start a new run' >&2; exit 1; fi"
+    run: "if [ -e .ado/plan-push.md.new ]; then echo 'spec-kit-ado: the push plan changed after approval; start a new run' >&2; exit 1; fi"
 
   # Strict mode: refuses (exit 2, findings on stdout) before implement starts unless spec, plan, tasks, the board Tasks and the
   # answered questions are in order. Advisory mode: a no-op (exit 0, "mode is advisory").
@@ -312,6 +317,7 @@ steps:
   # `--if-any`: no decisions file is a no-op (the preview says nothing to post), so it is the same triplet in every mode.
   - id: decisions-loop
     type: do-while
+    max_iterations: 1
     condition: "{{ steps.decisions-apply.output.stderr | contains('plan changed since approval') }}"
     steps:
       - id: decisions-preview
@@ -332,7 +338,7 @@ steps:
 
   - id: decisions-applied
     type: shell
-    run: "if [ -e .ado/plan-decisions.md.new ]; then echo 'spec-kit-ado: the decisions plan kept changing after approval; start a new run' >&2; exit 1; fi"
+    run: "if [ -e .ado/plan-decisions.md.new ]; then echo 'spec-kit-ado: the decisions plan changed after approval; start a new run' >&2; exit 1; fi"
 
   # Strict mode: runs the tests at every red and green commit and records the result in ledger section 4 (a local write); exit 2 stops
   # the run before any Task state is synced. Advisory mode: a no-op (exit 0, "mode is advisory").
@@ -345,6 +351,7 @@ steps:
 
   - id: sync-loop
     type: do-while
+    max_iterations: 1
     condition: "{{ steps.sync-apply.output.stderr | contains('plan changed since approval') }}"
     steps:
       - id: sync-preview
@@ -365,7 +372,7 @@ steps:
 
   - id: sync-applied
     type: shell
-    run: "if [ -e .ado/plan-sync.md.new ]; then echo 'spec-kit-ado: the sync plan kept changing after approval; start a new run' >&2; exit 1; fi"
+    run: "if [ -e .ado/plan-sync.md.new ]; then echo 'spec-kit-ado: the sync plan changed after approval; start a new run' >&2; exit 1; fi"
 
   # The gate command runs `ado gate` and appends the result to ledger section 4 (a shell step could not).
   - id: gate
@@ -434,6 +441,7 @@ steps:
 
   - id: pr-loop
     type: do-while
+    max_iterations: 1
     condition: "{{ steps.pr-apply.output.stderr | contains('plan changed since approval') }}"
     steps:
       # The CLI, not the agent, writes the preview the gate shows, with pr-apply's own flags
@@ -456,7 +464,7 @@ steps:
 
   - id: pr-applied
     type: shell
-    run: "if [ -e .ado/plan-pr.md.new ]; then echo 'spec-kit-ado: the PR plan kept changing after approval; start a new run' >&2; exit 1; fi"
+    run: "if [ -e .ado/plan-pr.md.new ]; then echo 'spec-kit-ado: the PR plan changed after approval; start a new run' >&2; exit 1; fi"
 
   # The product owner answers the posted decisions in the story's comment thread; a human records each verdict in their own terminal.
   # The run does not wait by itself: this gate is where you wait. It ends the run; `ado done` happens after merge.
