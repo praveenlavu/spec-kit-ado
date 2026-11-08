@@ -24,9 +24,9 @@ and a decisions file, and the process is only reported on. When you want more, [
 The README lists the other ways to install, including `uv`.
 
 ```bash
-pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0
+pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.1
 # in your Spec Kit project folder:
-specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip
+specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.1.zip
 ```
 
 ## 2. Connect (about 2 minutes)

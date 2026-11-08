@@ -17,8 +17,11 @@ RAW = f"https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v{V}"
 # the tests below require the code, manifests, catalogs and the pack's tool floor to agree on DOC_V.
 RELEASE_PREP_PENDING = False
 PREV_V = "0.2.0"  # the only code version accepted while RELEASE_PREP_PENDING is True
-DOC_V = "0.3.0"
+DOC_V = "0.3.1"  # the current release
 DOC_RAW = f"https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v{DOC_V}"
+PACK_V = "0.3.0"  # docs/catalog-submission.md is the filed 0.3.0 pack: its URLs and versions stay at the version that was filed
+PACK_RAW = f"https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v{PACK_V}"
+FLOOR_V = "0.3.0"  # the extension still needs only ado >= 0.3.0
 
 
 def _yaml(path):
@@ -36,7 +39,7 @@ def test_workflow_folder_has_readme_license_changelog():
     assert "story_id" in readme and "integration" in readme
     assert f"{REPO}/blob/main/README.md" in readme
     changelog = (wf_dir / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert re.findall(r"^## (\d+\.\d+\.\d+)", changelog, re.M) == [V, "0.2.0", "0.1.1", "0.1.0"]
+    assert re.findall(r"^## (\d+\.\d+\.\d+)", changelog, re.M) == [V] + [v for v in ("0.3.0", "0.2.0", "0.1.1", "0.1.0") if v != V]  # newest first; V is the current version
 
 
 def test_workflow_readme_names_every_gate():
@@ -95,11 +98,11 @@ def test_workflow_catalog_matches_workflow_yml():
 
 
 def test_bundle_docs_name_the_required_catalogs():
-    for doc in ("README.md", "bundle/README.md", "docs/catalog-submission.md"):
+    for doc, raw, v in (("README.md", DOC_RAW, DOC_V), ("bundle/README.md", DOC_RAW, DOC_V), ("docs/catalog-submission.md", PACK_RAW, PACK_V)):
         text = (ROOT / doc).read_text(encoding="utf-8")
-        assert f"specify extension catalog add {DOC_RAW}/catalog/extensions.json --name ado --install-allowed" in text, doc
-        assert f"specify workflow catalog add {DOC_RAW}/catalog/workflows.json --name ado" in text, doc
-        assert f"specify bundle install ./ado-{DOC_V}.zip" in text, doc
+        assert f"specify extension catalog add {raw}/catalog/extensions.json --name ado --install-allowed" in text, doc
+        assert f"specify workflow catalog add {raw}/catalog/workflows.json --name ado" in text, doc
+        assert f"specify bundle install ./ado-{v}.zip" in text, doc
 
 
 def test_submission_versions_match_the_real_versions():
@@ -117,7 +120,7 @@ def test_submission_versions_match_the_real_versions():
         if spec:
             assert spec + version in allowed_specs, spec + version
         else:
-            assert version == DOC_V, version
+            assert version == PACK_V, version
     for order in ("## 1. Extension Submission", "## 2. Workflow Submission", "## 3. Bundle Submission"):
         assert order in text
     assert "DRAFT" in text.splitlines()[2]
@@ -164,7 +167,7 @@ def test_release_prep_state_is_consistent():
     else:
         # Release prep done: a version bump to anything but DOC_V, a missed file or a forgotten tool floor fails here.
         assert set(versions.values()) == {DOC_V}, versions
-        assert _manifest_floor() == f">={DOC_V}" and pack == _manifest_floor()
+        assert _manifest_floor() == f">={FLOOR_V}" and pack == _manifest_floor()
         assert PREV_V not in (ROOT / "bundle/README.md").read_text(encoding="utf-8")  # drop the "ado-0.2.0.zip today" sentence
 
 
@@ -218,7 +221,8 @@ def test_catalog_updated_at_is_a_valid_iso_date_and_follows_a_dated_heading():
         assert datetime.datetime.strptime(entry["created_at"], "%Y-%m-%dT00:00:00Z").date() <= datetime.datetime.strptime(entry["updated_at"], "%Y-%m-%dT00:00:00Z").date()
     assert len(dates) == 1, dates  # the four values are set together
     for log in ("CHANGELOG.md", "workflows/ado-lifecycle/CHANGELOG.md"):
-        m = CHANGELOG_030_HEADING.search((ROOT / log).read_text(encoding="utf-8"))
+        m = re.search(rf"## {re.escape(DOC_V)} — (unreleased|\d{{4}}-\d{{2}}-\d{{2}})(?![\w-])", (ROOT / log).read_text(encoding="utf-8"))
+        assert m, f"no dated or unreleased `## {DOC_V}` heading in {log}"
         if m.group(1) != "unreleased":  # after the pre-RC dating step the catalogs carry the same date
             assert m.group(1) == dates.copy().pop().isoformat(), log
 
@@ -240,13 +244,13 @@ def test_docs_carry_the_spec_kit_floor_and_the_v0_3_0_install_tags():
     for doc, needle in floors.items():
         assert needle in _flat(doc), doc
     assert "`ado --version` — required, `>= 0.3.0`" in _flat("commands/setup.md")
-    tags = {"AGENTS.md": ("@v0.3.0", 2), "commands/setup.md": ("@v0.3.0", 1), "docs/ci-github.md": ("v0.3.0", 2), "docs/ci-azure-pipelines.md": ("refs/tags/v0.3.0", 1),
-            "VERSIONING.md": ("@v0.3.0", 1), "workflows/ado-lifecycle/README.md": ("@v0.3.0", 1)}
+    tags = {"AGENTS.md": ("@v0.3.1", 2), "commands/setup.md": ("@v0.3.1", 1), "docs/ci-github.md": ("v0.3.1", 2), "docs/ci-azure-pipelines.md": ("refs/tags/v0.3.1", 1),
+            "VERSIONING.md": ("@v0.3.1", 1), "workflows/ado-lifecycle/README.md": ("@v0.3.1", 1)}
     for doc, (needle, n) in tags.items():
         text = (ROOT / doc).read_text(encoding="utf-8")
         assert text.count(needle) == n, (doc, needle)
         assert "v0.2.0" not in text, doc
-    assert "archive/refs/tags/v0.3.0.zip" in (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert "archive/refs/tags/v0.3.1.zip" in (ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
 
 def test_post_flip_removal_list_names_the_quickstart_paragraph():

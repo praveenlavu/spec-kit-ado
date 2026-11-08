@@ -589,8 +589,8 @@ def test_readme_has_upgrade_section_from_0_2_0():
                    "a symlink, a file that is not a regular file and a file over 5 MiB", "`done --base REF`", "(`ADO_CONFIG`, `config-path`)", "a dangling `origin/HEAD`",
                    "terminal-mode run on a checkout whose `origin/HEAD` dangles stops at its first `check-*` step", "`ado pr create <id> --check-committed`", "` · via:`",
                    "`[spec-kit-ado:decisions]` comment", "`specify extension add` refuses the 0.3.0 extension", "`config-target` and `approvers` rows", "no row for symlinked or oversized files",
-                   "`ado doctor` after upgrading", "pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0",
-                   "specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip", "toolkit-ref: v0.3.0",
+                   "`ado doctor` after upgrading", "pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.1",
+                   "specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.1.zip", "toolkit-ref: v0.3.1",
                    "without the bypass-rules permission, never as an approver"):
         assert needle in sec, needle
     assert "a 0.3.0 upgrade section is written at release prep" not in raw
@@ -1267,7 +1267,7 @@ def test_cli_version_requirement_and_release_bump_documented():
         text = _flat(doc)
         assert "reports 0.2.0" not in text and "release bump" not in text and "Release checklist for 0.3.0" not in text, doc
     wf = _flat("workflows/ado-lifecycle/README.md")
-    assert "The `ado` CLI 0.3.0 or later on `PATH`" in wf and "pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0" in wf
+    assert "The `ado` CLI 0.3.0 or later on `PATH`" in wf and "pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.1" in wf
 
 
 def test_stack_detect_documented_read_only_with_fixed_texts():
@@ -2747,7 +2747,8 @@ def test_calibrate_doc_pins():
 # ---- P4-17: Azure-only positioning, tracker boundary, install commands, submission pack ----
 AZURE_ONLY = "Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported."
 # The pack is written for the release target; the version bump itself is release prep.
-TARGET = "0.3.0"
+TARGET = "0.3.1"  # the current release; docs/catalog-submission.md is the filed 0.3.0 pack (PACK_TARGET)
+PACK_TARGET = "0.3.0"
 _INSTALL_PROGRAMS = ("pipx", "uv", "uvx", "specify", "curl")
 
 
@@ -2805,10 +2806,10 @@ def test_install_commands_parse_and_have_no_placeholders():
         assert argv[0] in _INSTALL_PROGRAMS, (f, ln)
         if argv[0] in ("pipx", "uv", "specify") and "--dev" not in argv:  # --dev takes the reader's own checkout path
             assert not any(set("<>") & set(a) or "..." in a for a in argv), (f, ln)
-    for f in ("README.md", "bundle/README.md", "docs/catalog-submission.md"):
+    for f, v in (("README.md", TARGET), ("bundle/README.md", TARGET), ("docs/catalog-submission.md", PACK_TARGET)):
         mine = [shlex.split(ln) for g, ln in lines if g == f]
-        assert ["pipx", "install", f"git+https://github.com/praveenlavu/spec-kit-ado@v{TARGET}"] in mine, f
-        assert ["specify", "bundle", "install", f"./ado-{TARGET}.zip"] in mine, f
+        assert ["pipx", "install", f"git+https://github.com/praveenlavu/spec-kit-ado@v{v}"] in mine, f
+        assert ["specify", "bundle", "install", f"./ado-{v}.zip"] in mine, f
     readme = [shlex.split(ln) for g, ln in lines if g == "README.md"]
     ext = ["specify", "extension", "add", "ado", "--from", f"https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v{TARGET}.zip"]
     assert ext in readme
@@ -2854,7 +2855,7 @@ def test_catalog_submission_matches_the_manifest_and_the_cli():
         assert needle in key, needle
     # the Go-public checklist is for the target release, ordered, and nothing in it is claimed as done
     gp = text.split("## Go-public checklist")[1]
-    assert f"git tag -a v{TARGET}" in gp and f"specify bundle build" in gp and "gh release create" in gp
+    assert f"git tag -a v{PACK_TARGET}" in gp and f"specify bundle build" in gp and "gh release create" in gp
     for a, b in (("scrub_check.py", "git tag -a"), ("git tag -a", "specify bundle build"), ("specify bundle build", "gh release create"),
                  ("gh release create", "curl -sLo /dev/null"), ("curl -sLo /dev/null", "File the extension"), ("File the extension", "git tag -f v0")):
         assert gp.index(a) < gp.index(b), (a, b)
@@ -3118,3 +3119,25 @@ def test_f7_docs_pins_for_the_minor_findings():
     assert "byte-identical to the previous release for printable ASCII" not in log
     assert "the same prompt as the previous release for short, non-secret-looking printable ASCII; a value of about 79 characters or more, a secret-looking one and one with non-ASCII characters are shown JSON-quoted" in log
     assert "(The preview reads the trust keys too, to know whether to show the head commit.)" in cfg
+
+
+# ---- v0.3.1: the workflow loops run ONE pass; no document may promise a re-ask after a refused apply ----
+_RE_ASK = ("previews and asks again", "re-previews and re-asks", "runs the preview and asks again", "the workflow previews and asks again")
+
+
+@pytest.mark.parametrize("path", ["README.md", "commands/pr.md", "workflows/ado-lifecycle/README.md"])
+def test_docs_do_not_promise_a_re_ask_after_a_refused_apply(path):
+    text = " ".join((ROOT / path).read_text(encoding="utf-8").split())
+    assert not [p for p in _RE_ASK if p in text]
+
+
+def test_workflow_readme_says_a_refused_apply_ends_the_run_and_documents_the_resume_input():
+    text = " ".join((ROOT / "workflows/ado-lifecycle/README.md").read_text(encoding="utf-8").split())
+    assert "ends the run FAILED" in text and "start a new run" in text and "max_iterations: 1" in text
+    assert "specify workflow resume <run-id> --input verdict_<gate>=approve" in text  # F3: the terminal-mode resume form
+
+
+def test_changelogs_describe_0_3_1():
+    for path in ("CHANGELOG.md", "workflows/ado-lifecycle/CHANGELOG.md"):
+        text = (ROOT / path).read_text(encoding="utf-8")
+        assert "## 0.3.1" in text and "max_iterations" in text.split("## 0.3.1", 1)[1].split("## 0.3.0", 1)[0]

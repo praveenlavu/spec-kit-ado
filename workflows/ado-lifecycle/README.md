@@ -94,8 +94,16 @@ human re-pulls (`ado rules <id>`) and re-confirms in their own terminal, then re
 **End of the flow.** The workflow ends at the open PR; nothing in it ticks ledger section 5, so `ado done` reports the story not ready after the merge until that section is ticked. After the merge run `/speckit-ado-done <id>` (it ticks section 5 only with evidence, shows the plan, then closes the story), or tick section 5 by hand and commit it before CI `close-story` runs. In strict mode `done` additionally runs the strict `done` check. In strict mode set `close-story: true`: without it no strict `done` runs.
 
 Each `*-loop` is a preview (`ado … --plan-out`), a gate that shows that plan file, and an apply
-with `--expect-plan`: the apply refuses if the plan changed since you approved it, and the loop
-previews and asks again.
+with `--expect-plan`: the apply refuses if the plan changed since you approved it. Each loop runs ONE pass
+(`max_iterations: 1`), so a refused apply ends the run FAILED through the `*-applied` step: start a new run. It
+never repeats the preview or the gate, because a verdict supplied with `--input` (or left in the run inputs by an earlier
+resume) stays set and would pass the second gate with no prompt, applying a plan nobody saw. A plain
+`specify workflow resume <run-id>` re-runs only the failed step, so it cannot apply the new plan either.
+
+A run paused at a gate with no terminal is resumed with
+`specify workflow resume <run-id> --input verdict_<gate>=approve` (underscore names, one `--input` per pair; the
+gate names are the twelve listed under "Comment mode" below). That verdict stays in the run inputs, which is why
+only the plan the gate showed can be applied.
 
 ## Stopping, resuming and recovering
 
@@ -131,13 +139,12 @@ previews and asks again.
   4. `/speckit-ado-gate <id> --workflow` and `/speckit-ado-review <id> --workflow` (or `claude -p "…"` with the same
      text): the gate and review results in ledger section 4 describe the old code until you rerun them.
   5. `/speckit-ado-pr <id> --prepare-only`: rebuilds the PR body from the current ledger.
-  6. A `paused` or `failed` run: `specify workflow resume <run-id>`; its PR loop previews, asks, and opens the PR.
+  6. A `paused` or `failed` run: `specify workflow resume <run-id>`; a `paused` run's PR loop previews, asks, and opens the PR; a `failed` run whose apply refused a changed plan needs a new run.
      An `aborted` run: open the PR with `/speckit-ado-pr <id>` instead (it shows the preview and waits for a yes before it
      pushes or opens anything).
 - A run paused at `wait-po-validation` is resumed with `specify workflow resume <run-id>` once the verdicts are recorded;
   an `aborted` one needs nothing more than `ado decisions <id> --resolve` (terminal mode) or `ado decisions <id> --sync` (comment mode) by hand before `speckit.ado.done`.
-- If the PR plan changed after you approved it, the apply refuses and the loop previews and asks again; if it kept
-  changing, start a new run.
+- If the PR plan changed after you approved it, the apply refuses and the run ends FAILED: start a new run.
 
 ## Comment mode: verdict inputs, checks and the poller
 
@@ -177,7 +184,7 @@ The workflow is the same file in both modes:
 - Spec Kit `>=1.2.1` and a project initialized with any integration.
 - The `ado` CLI 0.3.0 or later on `PATH` (the new steps need strict mode and `ado decisions --post --if-any`; with a 0.2.0 CLI
   `decisions-preview` fails on the unknown flag), and the extension, connected with `ado setup`
-  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0`).
+  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.1`).
 - `git`; `gh` only when the PR goes to GitHub.
 
 The shell steps run `ado` with your token and privileges. Read them in
@@ -189,7 +196,7 @@ Install it with the extension through the `ado` bundle (see the
 [bundle README](https://github.com/praveenlavu/spec-kit-ado/blob/main/bundle/README.md)), or on its own:
 
 ```bash
-specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.0/catalog/workflows.json --name ado
+specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.1/catalog/workflows.json --name ado
 specify workflow add ado-lifecycle
 ```
 

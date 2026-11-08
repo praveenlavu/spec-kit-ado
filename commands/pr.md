@@ -213,7 +213,7 @@ The workflow does not rely on that run: its next step, `pr-preview`, runs the sa
 run itself, so the gate shows the plan and complete body exactly as `pr-apply` will send
 them. Then **stop**: no yes, no push, no `--apply`. The workflow's gate step approves, and
 its apply step pushes the head branch (`--push`) and opens the PR, with `--expect-plan` so it
-sends only the plan the gate showed (if it changed, the workflow previews and asks again).
+sends only the plan the gate showed (if it changed, the apply refuses and the workflow run ends FAILED: start a new run).
 
 ### 2b. Offer the branch link (Azure Repos only)
 

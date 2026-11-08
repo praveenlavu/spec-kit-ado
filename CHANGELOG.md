@@ -2,6 +2,17 @@
 
 All notable changes are listed here. Versions follow [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md).
 
+## 0.3.1 — 2026-11-08
+
+### Fixed
+
+- **Workflow: a supplied verdict can no longer approve a changed plan.** The seven preview, gate, apply loops of `ado-lifecycle` now run one pass (`max_iterations: 1`). A refused apply used to loop back, and a verdict given with `specify workflow resume --input verdict_<gate>=approve` (it stays set in the run inputs) passed the second gate with no prompt, so a plan nobody saw could be applied. The run now ends FAILED; start a new run. Found by an automated review on the Spec Kit workflow catalog PR; pinned by real-engine contract tests (`SPECKIT_CONTRACT=1`). Comment mode was already guarded by the approver's comment for the exact plan.
+- **SEC-1:** the invisible-character regex in `rules.py` is written with `\u` escapes instead of 29 raw format and bidirectional characters; behaviour is unchanged and a test fails if a raw one returns to `src/`.
+
+### Changed
+
+- The workflow README documents the terminal-mode resume form `specify workflow resume <run-id> --input verdict_<gate>=approve` (F3) and what a refused apply does.
+
 ## 0.3.0 — 2026-11-03
 
 Each entry below describes its step as it landed, so a "nothing calls it yet" or "not wired yet" in an older entry is true of that step only; the later entries and "Advisory-mode additions in 0.3.0" give the state of the release.
