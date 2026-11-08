@@ -1,5 +1,10 @@
 # spec-kit-ado
 
+> **Spec-driven development for Azure DevOps teams, with a person approving every change an agent makes.**
+> Pull a story into a per-story ledger that ties each acceptance criterion to a named test, let your AI agent do the work
+> through Spec Kit, and see the exact Azure Boards or pull request change before it is applied, and only after you say yes.
+> Works with Azure Repos or GitHub. Community project: not an official GitHub or Microsoft product.
+
 A [Spec Kit](https://github.com/github/spec-kit) extension and a small `ado` CLI that run
 the whole Spec Kit loop from an Azure DevOps (ADO) story back to Done, with a person in
 the loop by construction. When the agent or the `ado-lifecycle` workflow drives the
