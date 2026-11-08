@@ -1012,7 +1012,7 @@ def test_strict_ci_templates_documented():
         text = _flat(doc)
         assert f"`ado strict mode --base origin/{ref}`" in text and "strict done refused: <rule ids>" in text, doc
         assert "`ado strict check <id> --phase pr --head" in text, doc
-        assert ("have not been run in a consumer repository on a hosted runner yet" if doc == "docs/ci-github.md" else "have not been run in this project's environment") in text, doc
+        assert ("ran once in a private test repository on hosted runners" if doc == "docs/ci-github.md" else "have not been run in this project's environment") in text, doc
         assert "the story-id fail-closed" in text or "fails (not skips)" in text, doc
     assert "merge_commit_sha" in _flat("docs/ci-github.md") and "`fetch-depth: 0`" in _flat("docs/ci-github.md")
     assert "fail (not skip)" in _flat("docs/configuration.md") and "Strict mode" in (ROOT / "pipelines" / "README.md").read_text(encoding="utf-8")
@@ -1034,7 +1034,7 @@ def test_strict_verify_job_documented_as_optional_unrun_and_hostile_code_capable
     """V3-14b: the optional secret-free re-run job."""
     for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md", "README.md", "pipelines/README.md", "CHANGELOG.md"):
         text = _flat(doc)
-        assert "ado-strict-verify.yml" in text and "SHIPPED UNRUN" in text, doc
+        assert "ado-strict-verify.yml" in text and ("SHIPPED UNRUN" in text or (doc == "docs/ci-github.md" and "run once in a test repository" in text)), doc
         assert "`ado strict verify <id> --no-record --base origin/" in text, doc
         assert "no secret" in text and "it cannot be satisfied by hand-written records" in text, doc
         assert "it re-runs the tests at the recorded commits under the target branch's command" in text, doc
@@ -3107,7 +3107,7 @@ def test_f7_docs_pins_for_the_minor_findings():
     assert "**Unverified in live runs (state these in Testing Details; do not claim them).**" in cs
     for needle in ("GitHub's `base.sha` lag in the close step", "Comment approvals by a second human identity, end to end", "(acceptance criteria 5 and 7)", "case (f) live (criterion 9)",
                    "The doctor rows against real restricted tokens (criterion 10 live), including the `bypass` row", "The timed fresh-agent quickstart (criterion 1) and the catch-up to a PR (criterion 3)",
-                   "the keychain read from cron or launchd", "The CI templates in a consumer repository on a hosted runner", "they have never run there", "skipped by the owner's decision on 2026-11-03"):
+                   "the keychain read from cron or launchd", "The CI templates in a consumer repository on a hosted runner", "have never run there", "skipped by the owner's decision on 2026-11-03"):
         assert needle in cs, needle
     # M-8
     assert "the per-operation table of required scopes, and the probes that would check it against a restricted token (`ado doctor --probe-item`), were not built for 0.3.0" in cfg

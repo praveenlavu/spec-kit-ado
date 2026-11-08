@@ -1,9 +1,9 @@
 # Release checklist (0.3.0 and later)
 
 > **Status: IN PROGRESS.** Steps 1 and 2 have run on hosted runners against `main` at `a7a4021` (see the [record sheet](#record-sheet)); that SHA is
-> before the release-candidate commit (the CHANGELOG dating moves `main` once), so both are repeated on the `RC`. Steps 3 to 6 have not run: the shipped CI
-> templates have **never run on a hosted runner** in a consumer repository, so every workflow and pipeline template here is covered only by structural
-> tests, `bash -n`, real-bash tests with a fake `ado` and the local rehearsal. **Owner decision, 2026-11-03: the live proof of comment-mode approvals
+> before the release-candidate commit (the CHANGELOG dating moves `main` once), so both are repeated on the `RC`. Steps 3 and 6 have run (2026-11-08, see the record sheet: cases a to d in a
+> private test repository, then the release `v0.3.0` at `fcc41df`); step 4 (Azure Pipelines) has not. The Azure Pipelines templates have **never run on a hosted runner**,
+> so they are covered only by structural tests, `bash -n`, real-bash tests with a fake `ado` and the local rehearsal; `ado-link-on-merge.yml` has not run in a consumer repository either. **Owner decision, 2026-11-03: the live proof of comment-mode approvals
 > (a second identity's `/approve`, `/reject`, `/answer`, and the `bypass` doctor row against a denied bypass permission) is skipped for 0.3.0.** Those
 > cases stay listed as unverified in live runs ([catalog-submission.md](catalog-submission.md)), and step 5 is not run for 0.3.0 unless the owner
 > reverses that. Do not write "tested on a hosted runner" for a template, and do not write "verified live" for comment mode.
@@ -449,6 +449,6 @@ the exit codes and rule ids seen, and anything that differed from the expected c
 | 3 consumer PRs (a) to (f) on GitHub, vendored strict-verify for (c) and (d) | per the table in step 3, log text present | 2026-11-08, workflows pinned to `79be8ce`, smoke story #96, private consumer repository: (a) run 42431002309: guard red `Branch ... is not tied to a work item`, gate green; (b) run 42431131435: gate red `stack-profile-drift`; (c) run 42431132933: gate, guard and vendored strict-verify green, `strict verify passed.`; (d) run 42431136009: strict-verify red `green-fails`, gate red `record-missing`. The vendored file differs from the shipped one by exactly the two documented edits. (e) and (f) not run: they need the comment-mode proof the owner skipped. | PASS (a to d), SKIPPED (e, f) |
 | 4 the same cases on Azure Pipelines | per step 4 | | NOT RUN |
 | 5 unattended run (AC 8) | open PR with no terminal | Skipped by the owner (2026-11-03): needs the live comment-mode proof | SKIPPED |
-| 6.1 to 6.4 tag the `RC`, bundle, push the tag, make public | tag equals `RC`, `ado-0.3.0.zip: OK`, `PUBLIC` | | NOT RUN |
-| 6.5 strict-verify (c) and (d) through the shipped file | (c) green, (d) fails with `green-fails` | | NOT RUN |
-| 6.6 to 6.8 release, filings, `v0` last | every URL 200, checksum equal, `v0` at `v0.3.0` | | NOT RUN |
+| 6.1 to 6.4 tag the `RC`, bundle, push the tag, make public | tag equals `RC`, `ado-0.3.0.zip: OK`, `PUBLIC` | 2026-11-08: annotated tag `v0.3.0` on `RC` = `fcc41df` (verified, not created by the controller); the bundle rebuilt independently from the tag has sha256 `6e809016a7a0…b6a92f`, equal to the release asset and to `SHA256SUMS`; repository `PUBLIC` with secret scanning, push protection, private vulnerability reporting, fork-PR approval and `main` protection on. | PASS |
+| 6.5 strict-verify (c) and (d) through the shipped file | (c) green, (d) fails with `green-fails` | 2026-11-08, cross-repository `uses: ...ado-strict-verify.yml@v0` with no toolkit token: (c) run 42441029679 green, `strict verify passed.`; (d) run 42441031914 red, `green-fails`. | PASS |
+| 6.6 to 6.8 release, filings, `v0` last | every URL 200, checksum equal, `v0` at `v0.3.0` | 2026-11-08: release `v0.3.0` with `ado-0.3.0.zip` and `SHA256SUMS`; 10 URLs 200; extension archive sha256 `8506838e…db54a` (equal on two downloads); `v0` at `fcc41df`; a consumer at `@v0` with no toolkit token green (run 42440974441); clean-project installs on Spec Kit 1.2.4.dev0: extension (13 commands, 2 hooks), workflow, bundle from the file and by id. Catalog filings not yet made. | PASS (filings pending) |

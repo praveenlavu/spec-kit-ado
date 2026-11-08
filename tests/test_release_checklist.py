@@ -35,7 +35,8 @@ def test_it_says_plainly_what_has_run():
     assert "Owner decision, 2026-11-03" in TEXT and "is skipped for 0.3.0" in TEXT  # the live comment-mode proof
     sheet = section("Record sheet")
     rows = sheet.count("| | NOT RUN |")
-    assert rows == 4 and sheet.count("NOT RUN") == rows + 1  # steps 4, 6.1-6.4, 6.5, 6.6-6.8, and the sentence above the table
+    assert rows == 1 and sheet.count("NOT RUN") == rows + 1  # step 4 (Azure Pipelines), and the sentence above the table
+    assert sheet.count("| PASS |") == 2 and "PASS (filings pending)" in sheet and "run 42441029679" in sheet  # steps 6.1-6.5 and 6.6-6.8: evidence
     assert "PASS (a to d), SKIPPED (e, f)" in sheet and "run 42431132933" in sheet  # step 3: cases a-d on a hosted runner
     assert sheet.count("PASS (pre-RC)") == 2 and "run 41563615813" in sheet and "run 41562104349" in sheet  # steps 1 and 2: evidence, not assertion
     assert "| SKIPPED |" in sheet  # step 5
@@ -370,7 +371,7 @@ def test_local_links_and_anchors_resolve():
 def test_the_hosted_runner_claim_matches_the_submission_pack():
     # the submission pack says the checklist does not exist yet / is run later; it must not be contradicted by this file's own claims
     cs = (ROOT / "docs" / "catalog-submission.md").read_text(encoding="utf-8")
-    assert "never run on a hosted runner" in TEXT and "in a consumer repository on a hosted runner" in cs and "they have never run there" in cs
+    assert "never run on a hosted runner" in TEXT and "in a consumer repository on a hosted runner" in cs and "have never run there" in cs
 
 
 def test_the_checklist_is_a_repository_only_doc_so_it_may_link_to_repository_files():

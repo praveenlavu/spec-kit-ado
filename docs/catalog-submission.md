@@ -23,7 +23,7 @@ command-line program is a separate thing and has 26 top-level CLI verbs (`ado --
 - The doctor rows against real restricted tokens (criterion 10 live), including the `bypass` row on a PAT that cannot read the permission.
 - GitHub's `base.sha` lag in the close step: an approver removed or added between `base.sha` and the merge.
 - The Azure repository's merge-type policy that the one-parent guard needs (Merge no fast-forward or Squash only).
-- The CI templates in a consumer repository on a hosted runner (`ado-gate.yml`, `ado-link-on-merge.yml`, the optional strict re-run job, and the Azure Pipelines files): they have never run there. The toolkit's own `ci.yml` and the `speckit-contract.yml` canary did run green on hosted runners (2026-11-03, `main` `a7a4021`).
+- The CI templates in a consumer repository on a hosted runner, beyond one test: `ado-gate.yml`, `ado-branch-guard.yml` and `ado-strict-verify.yml` ran at `@v0` in a private test repository (2026-11-08, cases a to d); `ado-link-on-merge.yml` and every Azure Pipelines file have never run there, and none has run in a real project.
 - The timed fresh-agent quickstart (criterion 1) and the catch-up to a PR (criterion 3).
 - The unattended run on a real story, and the keychain read from cron or launchd.
 
@@ -80,7 +80,7 @@ components from them. The release therefore carries two install-allowed catalogs
 - Pulls an Azure DevOps story into a per-story DoD ledger with the acceptance criteria copied verbatim, then routes specify/plan/tasks/implement to the installed stack kit or core Spec Kit
 - Mirrors tasks.md into child Tasks on the story; dry run by default, applied only after an explicit yes
 - DoD gate: acceptance criterion to named-test traceability, assertion-free tests, AC drift, missing evidence, business-rule coverage; advisory unless a check is opted in to blocking
-- Strict mode (SDD + TDD): the test command a human approved runs in a throwaway clone, red/green evidence per task, and the optional CI templates (shipped, but never run on a hosted runner) re-run the L1 and L2 checks against the target branch; L3 is a model reading and runs locally only
+- Strict mode (SDD + TDD): the test command a human approved runs in a throwaway clone, red/green evidence per task, and the optional CI templates (the GitHub ones ran once in a test repository; the Azure Pipelines ones have never run on a hosted runner) re-run the L1 and L2 checks against the target branch; L3 is a model reading and runs locally only
 - Stack detection and stack profiles a human approves, with pinned kits (a kit nobody pinned, or one that changed after pinning, is refused in strict mode); never installs a kit itself
 - Business rules read from the story's Epic and Feature chain and traced into the ledger
 - Adoption and resilience: `ado doctor` prints ok/warn/fail/unknown rows, each with a fix, for git, Spec Kit, config, token, identity, approvers, the bypass-rules permission, stack and kits (the PAT scope probes and `--probe-item` are not built in 0.3.0), `ado status` shows the stage and the next command, with a catch-up view for stories already in flight

@@ -34,7 +34,7 @@ Not in the list on purpose: the ledger, the gate (`dod`, `gate`), the review, th
 | Mirrors `tasks.md` into child Tasks and keeps their states in step with the work. | Shows them on the board; owns the columns, swimlanes and the meaning of a state. |
 | Reads approvers' comments (`/approve`, `/answer`, `/reject`) and ignores those written by the token's own identity or the kit's posting identity, edited after posting, quoted, or carrying `createdOnBehalfOf`. | Records who wrote each comment and when. The kit trusts that record; it cannot see past it. |
 | Reads the Epic/Feature chain for `Business rules` and traces each rule into the ledger. | Owns the hierarchy and who may edit it. |
-| Runs the gate and the multi-plane review locally and, in strict mode, the L1 to L3 checks; the CI templates (shipped, never run on a hosted runner) re-run the L1 and L2 checks. | Does none of this. It has no notion of test traceability. |
+| Runs the gate and the multi-plane review locally and, in strict mode, the L1 to L3 checks; the CI templates (the GitHub ones ran once in a test repository; the Azure Pipelines ones have never run on a hosted runner) re-run the L1 and L2 checks. | Does none of this. It has no notion of test traceability. |
 
 ## What the kit deliberately does not do
 
