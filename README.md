@@ -20,7 +20,7 @@ have installed (or to core Spec Kit), so the extension works for any tech stack.
 **Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.** See [docs/tracker-boundary.md](docs/tracker-boundary.md) for what the kit does and what stays in the tracker.
 
 **New here?** [docs/quickstart.md](docs/quickstart.md) takes you from a story to pushed Tasks with the
-lightest setup (`ado setup --profile starter`; the quickstart's target of about ten minutes has not been timed); [docs/glossary.md](docs/glossary.md) explains every word in one sentence.
+lightest setup (`ado setup --profile starter`; the commands that need no agent took about 10 seconds in a timed run, and the rest, you and your agent, is not timed); [docs/glossary.md](docs/glossary.md) explains every word in one sentence.
 Running it with nobody at a terminal: [docs/unattended.md](docs/unattended.md). Which Spec Kit versions it was tried against:
 [docs/compatibility.md](docs/compatibility.md).
 

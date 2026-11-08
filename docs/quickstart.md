@@ -1,8 +1,10 @@
 # Quickstart: from an ADO story to Tasks on the board
 
 The shortest path through spec-kit-ado, with the lightest setup (the `starter` profile): install, connect, pull one story,
-and follow `ado status` until its Tasks are pushed to the board. Plan for about ten minutes with a story that is ready. The
-timing is a target: it has not been measured by a stopwatch in this repository. Every word you meet has one line in the
+and follow `ado status` until its Tasks are pushed to the board. Plan for about ten minutes with a story that is ready: that
+is a target for you and your agent together and has not been timed. What was timed (2026-11-07, an Apple-silicon Mac, Python 3.9, Spec Kit 1.2.4.dev0): the commands
+of this page that need no agent took about 10 seconds in total (install into a fresh environment 6 s, `specify init` 0.3 s, adding the extension 0.2 s, `ado doctor` 2.8 s,
+`ado dod` 0.5 s, `ado status` 0.8 s). Typing the setup answers, your agent's run and the product owner's answers are the rest, and they vary. Every word you meet has one line in the
 [glossary](glossary.md).
 
 The `starter` profile is advisory: nothing blocks you. You get a per-story ledger, the open questions for the product owner
