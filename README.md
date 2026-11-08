@@ -59,7 +59,7 @@ to open PRs on GitHub.
 You also need the tools that install and run it. `specify` is the Spec Kit command-line tool: install it by following the
 [Spec Kit README](https://github.com/github/spec-kit#readme), then check `specify --version`. `pipx` (or `uv`) installs the `ado` command in
 its own environment: `python3 -m pip install --user pipx` is one way to get `pipx` (see the [pipx docs](https://pipx.pypa.io/)). It was tried on
-macOS only; Windows is untested (the tests use POSIX shell steps, and on Windows the PAT file has no Keychain or `chmod 600`, see the security notes below).
+macOS by hand and on Linux in CI. Windows: the package installs and `ado --version` starts on a Windows runner (checked once, 2026-11-07), but the test suite and strict mode (it runs your test command through `/bin/sh` in its own process group) are POSIX-only, and the PAT file has no Keychain or `chmod 600` there (see the security notes below). On Windows use WSL.
 
 **Status of the release: nothing is published yet.** 0.3.0 is the target release and is not tagged, the repository is private, the release is not published,
 there is no PyPI package, and the project is not listed in the Spec Kit community catalog (no submission has been made).

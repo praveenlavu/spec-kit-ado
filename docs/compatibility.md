@@ -51,7 +51,7 @@ update the table above in the same change.
 - Any Spec Kit between the rows above, and any older than 0.15.1.
 - The real `ado-lifecycle` workflow **run** end to end: its steps call `ado` and AI integrations, so the contract tests use the fixture for run behaviour and the
   shipped file only for validation (`add` and `info`).
-- Windows. The tests use POSIX `sh` steps.
+- Windows. The tests use POSIX `sh` steps and `pty`, and strict mode runs the test command through `/bin/sh` with `os.killpg`. A one-off Windows runner check (2026-11-07) installed the package and ran `ado --version` and `ado --help`; the test suite could not load (`termios`). Use WSL.
 - Interactive (TTY) gate prompts: the contract is the no-TTY pause.
 - A killed run (`state.json` stays `running`, resume refuses it): documented in the workflow README from a manual probe (R:36), not asserted here.
 - Spec Kit's behaviour with several runs in one project, or with `--input` values containing `=` or newlines.
