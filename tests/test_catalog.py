@@ -250,8 +250,8 @@ def test_docs_carry_the_spec_kit_floor_and_the_v0_3_0_install_tags():
 
 
 def test_post_flip_removal_list_names_the_quickstart_paragraph():
-    """R-1 M-3: docs/quickstart.md says 0.3.0 is not tagged yet; the post-flip removal lists must name it."""
-    assert "0.3.0 is not tagged yet" in _flat("docs/quickstart.md")
+    """R-1 M-3, done after the flip: docs/quickstart.md no longer says 0.3.0 is not tagged yet; the removal lists still name the paragraph."""
+    assert "0.3.0 is not tagged yet" not in _flat("docs/quickstart.md")
     for doc in ("docs/release-checklist.md", "docs/catalog-submission.md"):
         flat = _flat(doc)
         assert '"0.3.0 is not tagged yet"' in flat and "`docs/quickstart.md`" in flat, doc

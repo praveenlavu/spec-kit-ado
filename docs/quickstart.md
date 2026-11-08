@@ -21,8 +21,6 @@ and a decisions file, and the process is only reported on. When you want more, [
 
 ## 1. Install (about 2 minutes)
 
-0.3.0 is not tagged yet, so the two lines below fail until it is. Until then install from a checkout of this repository:
-`pipx install <path-to-spec-kit-ado>`, then, in your Spec Kit project folder, `specify extension add --dev <path-to-spec-kit-ado>`.
 The README lists the other ways to install, including `uv`.
 
 ```bash

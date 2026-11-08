@@ -1057,7 +1057,7 @@ def test_strict_verify_job_head_and_private_toolkit_documented():
     for doc in ("docs/ci-github.md", "docs/ci-azure-pipelines.md"):
         assert "HEAD = the PR head commit, as the gate's `--head`" in _flat(doc), doc
     gh = _flat("docs/ci-github.md")
-    assert "While `praveenlavu/spec-kit-ado` is private" in gh and "fail closed" in gh and "vendor or fork the workflow until the repo is public" in gh
+    assert "`praveenlavu/spec-kit-ado` is public" in gh and "fail closed" in gh and "vendor the workflow there" in gh
     assert "`HEAD_SHA: $(System.PullRequest.SourceCommitId)`" in _flat("docs/ci-azure-pipelines.md")
 
 
@@ -2815,8 +2815,9 @@ def test_install_commands_parse_and_have_no_placeholders():
     # --from comes before the catalog route in the README, and the docs say what is not published yet
     r = _flat("README.md")
     assert r.index("--from https://github.com/praveenlavu/spec-kit-ado/archive") < r.index("specify extension catalog add")
-    for needle in ("not published", "private", "no PyPI package"):
+    for needle in ("no PyPI package", "not listed in the Spec Kit community catalog yet"):
         assert needle in r, needle
+    assert "nothing is published yet" not in r and "the repository is private" not in r
 
 
 def test_readme_links_the_positioning_docs():

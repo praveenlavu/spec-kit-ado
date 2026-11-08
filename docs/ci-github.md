@@ -32,7 +32,7 @@ under a strict target no `AB#` fails the job. (4) Runs `ado strict verify <id> -
 
 **Security note: the job runs the project's test command on the PR's code.** It has no secret to steal (nothing to leak even from a fork), but a hostile PR can still run arbitrary code on the runner: network access and the runner's resources. Call it on `pull_request` only, never `pull_request_target`
 (the workflow refuses any other event); keep the repository's setting that requires approval for fork pull requests; use ephemeral (GitHub-hosted or one-shot self-hosted) runners and never a long-lived self-hosted runner with a network position inside your estate.
-The toolkit checkout uses the default credential, so the toolkit repository must be readable without `TOOLKIT_READ_TOKEN`; this workflow has no such secret. While `praveenlavu/spec-kit-ado` is private, the cross-repo `uses:` and that token-less toolkit checkout fail: the check goes red and never skips silently (fail closed), so vendor or fork the workflow until the repo is public.
+The toolkit checkout uses the default credential, so the toolkit repository must be readable without `TOOLKIT_READ_TOKEN`; this workflow has no such secret. `praveenlavu/spec-kit-ado` is public, so the cross-repo `uses:` and that token-less checkout work. A private fork or mirror of the toolkit would fail them: the check goes red and never skips silently (fail closed), so vendor the workflow there.
 
 ```yaml
   verify:
@@ -51,8 +51,8 @@ The branch guard no longer reads "any digit run" in the branch name as a story i
 1. Commit `ado.config.json` to the repo (see [configuration.md](configuration.md)).
 2. Add a repository secret `ADO_TOKEN`: a PAT, ideally for a service account, with
    **Work Items: Read & Write**.
-3. While `praveenlavu/spec-kit-ado` is private, also add `TOOLKIT_READ_TOKEN`, a token
-   that can read that repository. Once it is public this secret is not needed.
+3. `TOOLKIT_READ_TOKEN` is not needed: `praveenlavu/spec-kit-ado` is public. Only a private
+   fork or mirror of the toolkit needs a token that can read it.
 
 ## Example
 

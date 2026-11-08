@@ -20,8 +20,7 @@ GitHub workflows. Full template reference: [pipelines/README.md](https://github.
    and edit access to work items (comments, state, attachments). Without these the
    templates warn and continue.
 3. If you consume the templates from GitHub, create a GitHub service connection for the
-   `resources.repositories` entry. While the toolkit repo is private, that connection must
-   be able to read it.
+   `resources.repositories` entry. The toolkit repository is public, so the connection needs no special access (a private fork needs read access).
 
 ## Example
 

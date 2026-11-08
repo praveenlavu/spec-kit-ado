@@ -62,11 +62,7 @@ You also need the tools that install and run it. `specify` is the Spec Kit comma
 its own environment: `python3 -m pip install --user pipx` is one way to get `pipx` (see the [pipx docs](https://pipx.pypa.io/)). It was tried on
 macOS by hand and on Linux in CI. Windows: the package installs and `ado --version` starts on a Windows runner (checked once, 2026-11-07), but the test suite and strict mode (it runs your test command through `/bin/sh` in its own process group) are POSIX-only, and the PAT file has no Keychain or `chmod 600` there (see the security notes below). On Windows use WSL.
 
-**Status of the release: nothing is published yet.** 0.3.0 is the target release and is not tagged, the repository is private, the release is not published,
-there is no PyPI package, and the project is not listed in the Spec Kit community catalog (no submission has been made).
-So the commands in this section (the two below and the bundle install after them) work only once 0.3.0 is released and the repository is public. Until then, install from a checkout:
-`pipx install .` (or `uv tool install .`) in this repository, then `specify extension add --dev <path-to-spec-kit-ado>` in your
-Spec Kit project.
+There is no PyPI package, and the project is not listed in the Spec Kit community catalog yet, so install from GitHub with the commands below.
 
 ```bash
 # 1. The ado CLI (stdlib only)
@@ -511,7 +507,7 @@ workflows read it at run time.
 | Secret | Where | Needed? |
 |---|---|---|
 | `ADO_TOKEN` | GitHub: Settings → Secrets and variables → Actions | Yes on GitHub: a PAT (ideally a service account) with **Work Items: Read & Write**; the GitHub workflows never call `ado branch --link` or `ado pr`, so no Code scope. Azure Pipelines needs none; the templates use `$(System.AccessToken)`. |
-| `TOOLKIT_READ_TOKEN` | GitHub, same place | Only while `praveenlavu/spec-kit-ado` is private: a token that can read it. On Azure Pipelines the GitHub service connection needs that access instead. Not needed once the repo is public. |
+| `TOOLKIT_READ_TOKEN` | GitHub, same place | Not needed: `praveenlavu/spec-kit-ado` is public. Only a private fork or mirror of the toolkit needs a token that can read it (on Azure Pipelines, its GitHub service connection needs that access). |
 
 ## Security model and limitations
 
