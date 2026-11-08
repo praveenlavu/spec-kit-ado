@@ -268,3 +268,19 @@ def test_terminal_mode_verbs_read_the_target_config_and_refuse_a_dangling_origin
     assert _main.main(argv) == 2
     err = capsys.readouterr().err
     assert "target branch" in err and "terminal" not in err
+
+
+# ---- SEC-1 (v0.3.1): no raw invisible or bidirectional character in the shipped source; the rules regex writes them as escapes ----------------
+def test_src_has_no_raw_format_characters():
+    import unicodedata
+    from pathlib import Path
+    found = [f"{p}:{n}" for p in sorted(Path(__file__).resolve().parent.parent.joinpath("src").rglob("*.py"))
+             for n, line in enumerate(p.read_text(encoding="utf-8").splitlines(), 1) if any(unicodedata.category(c) == "Cf" for c in line)]
+    assert not found, f"raw Cf (format/bidi) characters in: {found}"
+
+
+def test_the_invisible_character_rule_matches_exactly_the_documented_code_points():
+    from ado import rules
+    expected = ({0xAD, 0x61C, 0x180E, 0xFEFF} | set(range(0x200B, 0x2010)) | set(range(0x202A, 0x202F))
+                | set(range(0x2060, 0x2065)) | set(range(0x2066, 0x2070)))
+    assert {cp for cp in range(0x10000) if rules._INVISIBLE.fullmatch(chr(cp))} == expected and len(expected) == 29

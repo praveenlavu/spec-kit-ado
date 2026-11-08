@@ -66,8 +66,8 @@ _STRAY_LT = re.compile(r"<(?![A-Za-z/!?][^<>]*>)")  # a `<` that opens no comple
 # numeric/named entities that unescape to a space or tab: made non-breaking so `_text`'s `[ \t]+\n` cannot go quadratic on a run of them
 _SPACE_ENTITY = re.compile(r"&#0*(?:32|9)(?![0-9]);?|&#[xX]0*(?:20|9)(?![0-9A-Fa-f]);?|&Tab;")
 _ZS = re.compile("[   -   　]")
-# Cf format characters (zero-width, soft hyphen, bidi marks): a superset of U+200B, U+2060, U+FEFF so `Ru​le 1:` cannot hide a rule
-_INVISIBLE = re.compile("[­؜᠎​-‏‪-‮⁠-⁤⁦-⁯﻿]")
+# Cf format characters (soft hyphen, Arabic letter mark, Mongolian vowel separator, zero-width and bidi marks, word joiner, BOM), written as escapes
+_INVISIBLE = re.compile("[\u00ad\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u206f\ufeff]")
 _CONTROL = re.compile("[\x00-\x08\x0e-\x1f\x7f-\x9f]")
 _LEAD = re.compile("(?:\\s|[" + re.escape(BULLETS) + "](?![0-9])|o(?=\\s|$))+")  # a sign glued to a digit stays: `-10 points`
 _LIST_NUMBER = re.compile(r"[0-9]{1,3}[.)](?:\s+|$)")
