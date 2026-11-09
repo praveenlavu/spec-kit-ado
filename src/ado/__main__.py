@@ -271,9 +271,11 @@ def _pr(client, args):
     head_sha = None
     if trust is not None and trust.approval == "comment":
         _require_committed(cfg, args.id)  # F3: the approver's `approve-pr` names the commit; review-review (re-checked below) hashes the checkout's HEAD
-        head_sha = strict._rev(".", f"refs/heads/{args.head}")
+        head_sha = _head_commit(args.head)
         if not head_sha or head_sha != strict._rev(".", "HEAD"):
             raise ValueError("comment approval: check out the --head branch first: the review approval names the checked-out commit")
+    else:
+        head_sha = _head_commit(args.head) or None  # v0.3.2: terminal mode binds the plan to the head commit too, so a commit added after approval refuses the apply
     text = prs.render_plan(host, title, prs.azure_description(body) if azure else body, args.base, args.head, [args.id], tasks_row, head_sha)
     _plan(args, text)
     info = {"applied": args.apply, "host": host, "title": title, "base": args.base, "head": args.head}
@@ -295,6 +297,11 @@ def _pr(client, args):
     else:
         res = prs.github_create(title, body, args.base, args.head, draft)
     return res if res.get("error") else {**info, **res}
+
+
+def _head_commit(head):
+    """The full commit id of the local branch `head`, or "" when it is not a local branch (the plan then names no head commit)."""
+    return strict._rev(".", f"refs/heads/{head}")
 
 
 def dispatch(client, args):

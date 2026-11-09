@@ -1142,9 +1142,9 @@ def test_pr_create_comment_mode_refuses_a_head_that_is_not_checked_out(venv, cap
 
 
 def test_terminal_mode_pr_create_unchanged(venv, capsys):
-    env = venv("pr-create", real_trust=True)  # no trust keys: no review check, no head row, no approval read
+    env = venv("pr-create", real_trust=True)  # no trust keys: no review check, no approval read; since v0.3.2 the plan still names the head commit
     plan = env.preview().decode()
-    assert "head commit" not in plan and "| head | feat |" in plan
+    assert "| head commit | " in plan and "| head | feat |" in plan
     assert env.apply() == 0 and len(env.writes()) == 1
     assert not any("/permissions/" in c["path"] or "/comments" in c["path"] for c in env.seen["c"].calls)
 

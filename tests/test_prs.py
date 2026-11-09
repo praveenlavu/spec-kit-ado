@@ -52,7 +52,8 @@ def test_render_plan_single_line_cells():
     assert sent == "\n\nline1\x1b[2J\nline2 | y"
 
 
-def _env(tmp_path, monkeypatch, host="github", repository="", responses=()):
+def _env(tmp_path, monkeypatch, host="github", repository="", responses=(), real_head=False):
+    """`real_head=True` keeps the real head-commit lookup (it runs git); the other tests forbid or fake every subprocess, so they get none."""
     from ado import __main__ as m
     (tmp_path / "ado.config.json").write_text(json.dumps(
         {"organization": "contoso", "project": "Fabrikam", "repo_host": host, "repository": repository}))
@@ -67,6 +68,8 @@ def _env(tmp_path, monkeypatch, host="github", repository="", responses=()):
     monkeypatch.setattr(m, "AdoClient", make)
     monkeypatch.setattr(m, "trusted", lambda repo=".", base=None: Trust([], "terminal", {}))  # these tests forbid or fake every subprocess; the trust read runs git
     monkeypatch.setattr(m, "_pr_trust", lambda base: Trust([], "terminal", {}))  # (`pr create` also resolves --base with git)
+    if not real_head:
+        monkeypatch.setattr(m, "_head_commit", lambda head: "")
     return m, fake
 
 
@@ -1021,3 +1024,54 @@ def test_github_body_reaches_gh_as_utf8_bytes(tmp_path, monkeypatch):
     monkeypatch.setattr(locale, "getpreferredencoding", lambda *a, **k: "ascii")  # a locale that could not encode the body
     assert m.main(ARGS + ["--apply"]) == 0
     assert out.read_bytes() == body.encode("utf-8")
+
+
+# ---- v0.3.2: the plan names the head commit in EVERY mode, so a commit added after approval refuses the apply (Copilot review, spec-kit PR 5312) ----
+def _git_repo_with_head(tmp_path):
+    git(tmp_path, "init", "-q", "-b", "feat")
+    return commit(tmp_path, "docs: first", {"f.txt": "one\n"})
+
+
+def test_the_terminal_mode_plan_names_the_head_commit(tmp_path, monkeypatch):
+    m, _ = _env(tmp_path, monkeypatch, "github", real_head=True)
+    _git_repo_with_head(tmp_path)
+    full = git(tmp_path, "rev-parse", "refs/heads/feat")
+    _prepared(tmp_path)
+    assert m.main(["pr", "create", "1001", "--from-prepared", "--push", "--plan-out", ".ado/plan-pr.md"]) == 0
+    assert f"| head commit | {full} |" in (tmp_path / ".ado" / "plan-pr.md").read_text()
+
+
+def test_a_commit_added_after_approval_refuses_the_apply_and_pushes_nothing(tmp_path, monkeypatch, capsys):
+    m, fake = _env(tmp_path, monkeypatch, "github", real_head=True)
+    _git_repo_with_head(tmp_path)
+    _prepared(tmp_path)
+    assert m.main(["pr", "create", "1001", "--from-prepared", "--push", "--plan-out", ".ado/plan-pr.md"]) == 0
+    commit(tmp_path, "feat: added while paused at approve-pr", {"f.txt": "two\n"})  # the human approved the plan above, not this commit
+    real_run, seen = subprocess.run, []
+
+    def run(args, *a, **k):
+        if args[:2] in (["git", "push"], ["gh", "pr"]):
+            seen.append(args)
+            raise AssertionError("an unapproved commit must not be pushed")
+        return real_run(args, *a, **k)
+    monkeypatch.setattr(subprocess, "run", run)
+    capsys.readouterr()
+    assert m.main(["pr", "create", "1001", "--from-prepared", "--push", "--apply", "--expect-plan", ".ado/plan-pr.md"]) == 2
+    assert CHANGED in capsys.readouterr().err and seen == [] and fake["c"].calls == []
+    assert "| head commit |" in (tmp_path / ".ado" / "plan-pr.md.new").read_text()
+
+
+def test_an_unchanged_head_still_applies_in_terminal_mode(tmp_path, monkeypatch):
+    m, _ = _env(tmp_path, monkeypatch, "github", real_head=True)
+    _git_repo_with_head(tmp_path)
+    _prepared(tmp_path)
+    assert m.main(["pr", "create", "1001", "--from-prepared", "--plan-out", ".ado/plan-pr.md"]) == 0
+    real_run, created = subprocess.run, []
+
+    def run(args, *a, **k):
+        if args[:3] == ["gh", "pr", "create"]:
+            created.append(args)
+            return subprocess.CompletedProcess(args, 0, "https://example.invalid/pull/1\n", "")
+        return real_run(args, *a, **k)
+    monkeypatch.setattr(subprocess, "run", run)
+    assert m.main(["pr", "create", "1001", "--from-prepared", "--apply", "--expect-plan", ".ado/plan-pr.md"]) == 0 and len(created) == 1

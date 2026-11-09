@@ -378,7 +378,8 @@ def push_branch(head):
 
 
 def render_plan(host, title, body, base, head, work_item_ids, tasks_row=None, head_sha=None):
-    """`head_sha` (comment mode only): the full commit id the head branch is at, shown so an `approve-pr` approval names that commit."""
+    """`head_sha`: the full commit id the head branch is at (every mode, when it is a local branch). Shown so an `approve-pr` approval names that
+    commit, and so a commit added after the approval changes the plan: `--apply --expect-plan` then refuses."""
     preview = " ".join(body.split())  # escaped once, with the whole value, by _cell below
     if len(preview) > 120:
         preview = preview[:120] + "..."

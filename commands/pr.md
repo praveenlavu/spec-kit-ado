@@ -276,12 +276,13 @@ ado pr create <id> --from-prepared --push --apply --expect-plan .ado/plan-pr.md 
   [--allow-incomplete]  # same as in the preview, only after the human said yes to a draft
 ```
 
-In `approval: "comment"` mode the preview shows the head commit and the apply also needs `review-review` approved for the checked-out HEAD (exit 2 with the gate named when a commit or a re-review came after that approval: ask the approver to approve `review-review` again, never write the comment yourself). In that mode this apply, and `ado branch <id> --link --apply`, also need a trusted approver's `/approve approve-pr <hash>` (respectively `branch-link <hash>`) comment on the story for this exact plan; on exit 2 `comment approval: no valid approval ...` nothing was sent: show the human the line and wait, never post it yourself (`rules/hitl.md`).
+The preview shows the head commit in every mode. In `approval: "comment"` mode the apply also needs `review-review` approved for the checked-out HEAD (exit 2 with the gate named when a commit or a re-review came after that approval: ask the approver to approve `review-review` again, never write the comment yourself). In that mode this apply, and `ado branch <id> --link --apply`, also need a trusted approver's `/approve approve-pr <hash>` (respectively `branch-link <hash>`) comment on the story for this exact plan; on exit 2 `comment approval: no valid approval ...` nothing was sent: show the human the line and wait, never post it yourself (`rules/hitl.md`).
 
 The CLI re-renders the plan and compares it with the file the user approved. If they differ
 (exit 2, `plan changed since approval`), nothing was written and the current plan is in
-`.ado/plan-pr.md.new`: preview again (step 3) and ask again. The plan does not list commits, so after new commits
-preview again yourself.
+`.ado/plan-pr.md.new`: preview again (step 3) and ask again. The plan names the head commit (`head commit`, the full
+id of the local `--head` branch, in every approval mode), so a commit added after the approval changes the plan and
+the apply refuses; the plan still does not list the commits or their changes, so read the diff before you approve.
 
 ### 6. Report
 
