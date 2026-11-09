@@ -589,8 +589,8 @@ def test_readme_has_upgrade_section_from_0_2_0():
                    "a symlink, a file that is not a regular file and a file over 5 MiB", "`done --base REF`", "(`ADO_CONFIG`, `config-path`)", "a dangling `origin/HEAD`",
                    "terminal-mode run on a checkout whose `origin/HEAD` dangles stops at its first `check-*` step", "`ado pr create <id> --check-committed`", "` · via:`",
                    "`[spec-kit-ado:decisions]` comment", "`specify extension add` refuses the 0.3.0 extension", "`config-target` and `approvers` rows", "no row for symlinked or oversized files",
-                   "`ado doctor` after upgrading", "pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.1",
-                   "specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.1.zip", "toolkit-ref: v0.3.1",
+                   "`ado doctor` after upgrading", "pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2",
+                   "specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.2.zip", "toolkit-ref: v0.3.2",
                    "without the bypass-rules permission, never as an approver"):
         assert needle in sec, needle
     assert "a 0.3.0 upgrade section is written at release prep" not in raw
@@ -1267,7 +1267,7 @@ def test_cli_version_requirement_and_release_bump_documented():
         text = _flat(doc)
         assert "reports 0.2.0" not in text and "release bump" not in text and "Release checklist for 0.3.0" not in text, doc
     wf = _flat("workflows/ado-lifecycle/README.md")
-    assert "The `ado` CLI 0.3.0 or later on `PATH`" in wf and "pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.1" in wf
+    assert "The `ado` CLI 0.3.0 or later on `PATH`" in wf and "pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2" in wf
 
 
 def test_stack_detect_documented_read_only_with_fixed_texts():
@@ -2747,7 +2747,7 @@ def test_calibrate_doc_pins():
 # ---- P4-17: Azure-only positioning, tracker boundary, install commands, submission pack ----
 AZURE_ONLY = "Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported."
 # The pack is written for the release target; the version bump itself is release prep.
-TARGET = "0.3.1"  # the current release; docs/catalog-submission.md is the filed 0.3.0 pack (PACK_TARGET)
+TARGET = "0.3.2"  # the current release; docs/catalog-submission.md is the filed 0.3.0 pack (PACK_TARGET)
 PACK_TARGET = "0.3.0"
 _INSTALL_PROGRAMS = ("pipx", "uv", "uvx", "specify", "curl")
 
@@ -3141,3 +3141,9 @@ def test_changelogs_describe_0_3_1():
     for path in ("CHANGELOG.md", "workflows/ado-lifecycle/CHANGELOG.md"):
         text = (ROOT / path).read_text(encoding="utf-8")
         assert "## 0.3.1" in text and "max_iterations" in text.split("## 0.3.1", 1)[1].split("## 0.3.0", 1)[0]
+
+
+def test_changelogs_describe_0_3_2():
+    for path in ("CHANGELOG.md", "workflows/ado-lifecycle/CHANGELOG.md"):
+        text = (ROOT / path).read_text(encoding="utf-8")
+        assert "head commit" in text.split("## 0.3.2", 1)[1].split("## 0.3.1", 1)[0], path

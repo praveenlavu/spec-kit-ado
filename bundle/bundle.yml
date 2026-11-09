@@ -3,7 +3,7 @@ schema_version: "1.0"
 bundle:
   id: "ado"
   name: "Spec Kit for Azure DevOps"
-  version: "0.3.1"
+  version: "0.3.2"
   role: "developer"
   description: "The ado extension plus the ado-lifecycle workflow: an ADO story to Done with a human gate on every board or PR change."
   author: "praveenlavu"
@@ -17,10 +17,10 @@ requires:
 provides:
   extensions:
     - id: "ado"
-      version: "0.3.1"
+      version: "0.3.2"
   workflows:
     - id: "ado-lifecycle"
-      version: "0.3.1"
+      version: "0.3.2"
 
 tags:
   - "azure-devops"

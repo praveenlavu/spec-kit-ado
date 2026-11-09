@@ -4,6 +4,10 @@ Changes to the `ado-lifecycle` workflow. The workflow is versioned with the `ado
 the full project history is in the
 [repository CHANGELOG](https://github.com/praveenlavu/spec-kit-ado/blob/main/CHANGELOG.md).
 
+## 0.3.2 — 2026-11-09
+
+- Version string only; no step, input or gate changed. The release fixes the `ado` CLI behind the `pr-loop` steps: the PR plan now names the head commit in every approval mode, so a commit added while the run is paused at `approve-pr` makes the apply refuse (it ends the run FAILED: start a new run). Use the CLI at v0.3.2 (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2`).
+
 ## 0.3.1 — 2026-11-08
 
 - Security fix: the seven preview, gate, apply loops (`questions-loop`, `plan-questions-loop`, `answers-questions-loop`, `push-loop`, `decisions-loop`, `sync-loop`, `pr-loop`) now run one pass (`max_iterations: 1`). Before, when an apply refused a plan that had changed after approval, the loop previewed again and a verdict already supplied with `specify workflow resume --input verdict_<gate>=approve` (which stays set in the run inputs) passed the second gate with no prompt, so the new plan was applied without a new human decision. Now the refused apply ends the run FAILED through the `*-applied` step (start a new run). Comment mode was already guarded by the approver's comment for the exact plan. Found by an automated review on the Spec Kit workflow catalog PR; pinned by real-engine tests in `tests/test_speckit_contract.py`.

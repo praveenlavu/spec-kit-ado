@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "spec-kit-ado"
-version = "0.3.1"
+version = "0.3.2"
 license = {text = "MIT"}
 description = "Azure DevOps CLI for spec-kit-ado: work items, DoD ledger, gate, task push"
 requires-python = ">=3.9"

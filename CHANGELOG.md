@@ -2,6 +2,12 @@
 
 All notable changes are listed here. Versions follow [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md).
 
+## 0.3.2 — 2026-11-09
+
+### Fixed
+
+- **`pr create`: a commit added after approval now refuses the apply.** In terminal approval mode the PR plan named the branch but not its commit, so a commit added while a run was paused at `approve-pr` still matched `--expect-plan`, and `--push` published it without a new approval. The plan now carries `head commit` (the full id of the local `--head` branch) in every approval mode, so a new commit changes the plan and the apply exits 2 (`plan changed since approval`). Found by an automated review (Copilot) on the Spec Kit workflow catalog PR. The fix is in the `ado` CLI: install the CLI at v0.3.2 (the extension's floor stays `ado >= 0.3.0`). The workflow has no step change in 0.3.2 (version string only). The plan still does not list the commits or their changes: read the diff before approving.
+
 ## 0.3.1 — 2026-11-08
 
 ### Fixed

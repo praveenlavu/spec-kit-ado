@@ -29,7 +29,7 @@ Run each and report a short table (tool, found version, required/optional):
 
 - `python3 --version` — required.
 - `ado --version` — required, `>= 0.3.0`. Missing → tell the user to install it
-  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.1`) and stop.
+  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2`) and stop.
 - `git --version` — required. Missing → stop.
 - `gh --version` and `az --version` — optional; note which repo host each enables.
 

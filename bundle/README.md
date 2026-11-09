@@ -9,17 +9,17 @@ workflow, which runs an Azure DevOps story from spec to an open pull request.
 
 | Component | Id | Version | What it is |
 |---|---|---|---|
-| Extension | `ado` | 0.3.1 | The 13 `speckit.ado.*` commands and 2 optional hooks. |
-| Workflow | `ado-lifecycle` | 0.3.1 | The story-to-PR run with a human gate before every Azure Boards or PR change. |
+| Extension | `ado` | 0.3.2 | The 13 `speckit.ado.*` commands and 2 optional hooks. |
+| Workflow | `ado-lifecycle` | 0.3.2 | The story-to-PR run with a human gate before every Azure Boards or PR change. |
 
 It does **not** install the `ado` command-line program (the extension and the workflow's shell steps call it): install that
 from the same tag with `pipx`, step 1 below. The bundle, the extension, the workflow and the CLI are released together and
 carry the same version; mixing versions is not supported. Spec Kit 1.2.1 or later (the supported floor; nothing below it was tried, see
 [docs/compatibility.md](../docs/compatibility.md)) and Python 3.9 or later are required.
 
-**Release.** `ado-0.3.1.zip` is attached to the [v0.3.1 release](https://github.com/praveenlavu/spec-kit-ado/releases/tag/v0.3.1). The bundle is not listed in the
+**Release.** `ado-0.3.2.zip` is attached to the [v0.3.2 release](https://github.com/praveenlavu/spec-kit-ado/releases/tag/v0.3.2). The bundle is not listed in the
 Spec Kit community bundle catalog yet, so install it from the file as below. To build it yourself: `specify bundle build --path bundle --output <dir>` writes
-`ado-<bundle.yml version>.zip`, which is `ado-0.3.1.zip`; its pinned components resolve from the two catalogs below.
+`ado-<bundle.yml version>.zip`, which is `ado-0.3.2.zip`; its pinned components resolve from the two catalogs below.
 
 ## Install
 
@@ -27,22 +27,22 @@ Spec Kit community bundle catalog yet, so install it from the file as below. To 
    `ado setup` in your own terminal:
 
    ```bash
-   pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.1
+   pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2
    ```
 
-2. The two component catalogs. The bundle pins `ado@0.3.1` and `ado-lifecycle@0.3.1`, and
+2. The two component catalogs. The bundle pins `ado@0.3.2` and `ado-lifecycle@0.3.2`, and
    the Spec Kit community catalogs are discovery-only, so `specify bundle install` resolves
    them from these install-allowed catalogs published with the release:
 
    ```bash
-   specify extension catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.1/catalog/extensions.json --name ado --install-allowed
-   specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.1/catalog/workflows.json --name ado
+   specify extension catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.2/catalog/extensions.json --name ado --install-allowed
+   specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.2/catalog/workflows.json --name ado
    ```
 
    Adding an install-allowed catalog means anything it lists installs without the
    untrusted-source prompt (`specify workflow catalog add` is always install-allowed). These
-   two list only `ado@0.3.1` and `ado-lifecycle@0.3.1` from this repository's `v0.3.1` tag:
-   read them and [workflow.yml](https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.1/workflows/ado-lifecycle/workflow.yml) first.
+   two list only `ado@0.3.2` and `ado-lifecycle@0.3.2` from this repository's `v0.3.2` tag:
+   read them and [workflow.yml](https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.2/workflows/ado-lifecycle/workflow.yml) first.
 
    A project catalog list replaces the built-in one for that project, so `search` then shows
    only these catalogs; `specify extension catalog remove ado` and
@@ -51,12 +51,12 @@ Spec Kit community bundle catalog yet, so install it from the file as below. To 
 3. The bundle, from the release artifact; it installs the extension and the workflow:
 
    ```bash
-   curl -L -o ado-0.3.1.zip https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.1/ado-0.3.1.zip
-   specify bundle install ./ado-0.3.1.zip
+   curl -L -o ado-0.3.2.zip https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.2/ado-0.3.2.zip
+   specify bundle install ./ado-0.3.2.zip
    ```
 
    Without the catalogs, install the components first instead:
-   `specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.1.zip`
+   `specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.2.zip`
    and `specify workflow add --dev <path-to-spec-kit-ado>/workflows/ado-lifecycle`.
 
 Then run the lifecycle for a story:
