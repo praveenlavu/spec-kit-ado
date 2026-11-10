@@ -17,8 +17,8 @@ from the same tag with `pipx`, step 1 below. The bundle, the extension, the work
 carry the same version; mixing versions is not supported. Spec Kit 1.2.1 or later (the supported floor; nothing below it was tried, see
 [docs/compatibility.md](../docs/compatibility.md)) and Python 3.9 or later are required.
 
-**Release.** `ado-0.3.2.zip` is attached to the [v0.3.2 release](https://github.com/praveenlavu/spec-kit-ado/releases/tag/v0.3.2). The bundle is not listed in the
-Spec Kit community bundle catalog yet, so install it from the file as below. To build it yourself: `specify bundle build --path bundle --output <dir>` writes
+**Release.** `ado-0.3.2.zip` is attached to the [v0.3.2 release](https://github.com/praveenlavu/spec-kit-ado/releases/tag/v0.3.2). The bundle is listed in the
+Spec Kit community bundle catalog, which is for discovery only, so install it from the file as below. To build it yourself: `specify bundle build --path bundle --output <dir>` writes
 `ado-<bundle.yml version>.zip`, which is `ado-0.3.2.zip`; its pinned components resolve from the two catalogs below.
 
 ## Install

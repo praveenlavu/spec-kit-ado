@@ -201,7 +201,7 @@ You also need the tools that install and run it. `specify` is the Spec Kit comma
 its own environment: `python3 -m pip install --user pipx` is one way to get `pipx` (see the [pipx docs](https://pipx.pypa.io/)). It was tried on
 macOS by hand and on Linux in CI. Windows: the package installs and `ado --version` starts on a Windows runner (checked once, 2026-11-07), but the test suite and strict mode (it runs your test command through `/bin/sh` in its own process group) are POSIX-only, and the PAT file has no Keychain or `chmod 600` there (see the security notes below). On Windows use WSL.
 
-There is no PyPI package, and the project is not listed in the Spec Kit community catalog yet, so install from GitHub with the commands below.
+There is no PyPI package. The project is listed in the Spec Kit community catalog (as the extension `ado`, the workflow `ado-lifecycle` and the bundle `ado`), but that catalog is for discovery only, so install from GitHub with the commands below.
 
 ```bash
 # 1. The ado CLI (stdlib only)

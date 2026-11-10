@@ -2816,7 +2816,7 @@ def test_install_commands_parse_and_have_no_placeholders():
     # --from comes before the catalog route in the README, and the docs say what is not published yet
     r = _flat("README.md")
     assert r.index("--from https://github.com/praveenlavu/spec-kit-ado/archive") < r.index("specify extension catalog add")
-    for needle in ("no PyPI package", "not listed in the Spec Kit community catalog yet"):
+    for needle in ("no PyPI package", "listed in the Spec Kit community catalog"):
         assert needle in r, needle
     assert "nothing is published yet" not in r and "the repository is private" not in r
 
