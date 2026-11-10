@@ -1,5 +1,144 @@
 # spec-kit-ado
 
+**Let your AI agent do the work on an Azure DevOps story, and approve every change it makes to your board.**
+
+An add-on for [Spec Kit](https://github.com/github/spec-kit) that connects your AI coding agent to Azure DevOps (ADO). The agent
+writes the spec, the plan and the code. Before it changes anything in Azure DevOps, it shows you the exact change and waits for
+your yes.
+
+**Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.**
+
+> Community project. Not an official GitHub or Microsoft product.
+
+## What you get
+
+- **One checklist per story.** Each acceptance criterion (a line saying what "done" means) is linked to the test that proves it.
+- **Nothing happens behind your back.** New Tasks, comments and pull requests are shown first and written only after you say yes.
+- **Questions go to the right person.** Open questions are posted to the story for the product owner, and the answers come back into the plan.
+- **Works with your stack.** It uses whatever Spec Kit setup you already have, for any language.
+- **Your token stays private.** The access token (PAT) is typed into your own terminal and never goes through the agent chat.
+
+## How it works
+
+```mermaid
+flowchart TD
+    A([1. You pick a story in Azure DevOps]) --> B[2. The agent reads it and starts a spec<br/>and a checklist file for the story]
+    B --> C[3. The agent lists any open questions]
+    C --> D{{You approve: post the questions<br/>to the story}}
+    D --> E[4. The product owner answers]
+    E --> F[5. The agent writes a plan and a task list]
+    F --> G{{You approve: create the Tasks<br/>on the board}}
+    G --> H[6. The agent writes the code and the tests]
+    H --> I[7. Checks and a review of the change]
+    I --> J{{You approve: open the pull request}}
+    J --> K[8. Your team reviews and merges it]
+    K --> L([9. The story is closed and the checklist is attached])
+
+    classDef you fill:#fff3cd,stroke:#b58900,color:#3d2f00;
+    class D,G,J you;
+```
+
+The yellow diamonds are the moments you decide. The agent can read from Azure DevOps freely, but it cannot write to it until you approve.
+The story is closed after the merge, by your CI or by you running `speckit.ado.done`.
+
+## Quick setup
+
+**You need:** Python 3.9 or later, `git`, [Spec Kit](https://github.com/github/spec-kit) 1.2.1 or later (the `specify` command), a Spec Kit
+project with an AI agent, an Azure DevOps story with acceptance criteria (note its number), and a Personal Access Token
+(PAT) with **Work Items: Read & Write** and **Project and Team: Read**. Create the token in Azure DevOps under User settings, then
+Personal access tokens. Plan on roughly 10 minutes (an estimate, not timed).
+
+On Windows, use WSL. On macOS and Linux it works directly.
+
+**1. Install the `ado` command.**
+
+```bash
+pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2
+```
+
+No `pipx`? Run `python3 -m pip install --user pipx && python3 -m pipx ensurepath`, then open a new terminal. `uv tool install` works too.
+
+**2. Add the extension to your Spec Kit project** (run this in the project folder).
+
+```bash
+specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.2.zip
+```
+
+**3. Connect to Azure DevOps.** Run this in **your own terminal**, not in the agent chat (in Claude Code, type `! ado setup --profile starter`).
+
+```bash
+ado setup --profile starter
+```
+
+It asks for your organization and project, then for the token through a hidden prompt. It writes `ado.config.json` (names only, no
+secret, safe to commit). The `starter` profile only reports problems and blocks nothing.
+
+**4. Check that it works.**
+
+```bash
+ado doctor
+```
+
+Each line says `ok`, `warn`, `fail` or `unknown`, with the fix next to it. Fix every `fail`, then run it again.
+
+**5. Pull your first story.** In your AI agent, in the project folder:
+
+```text
+/speckit.ado.pull 1001
+```
+
+Replace `1001` with your story number. In Claude Code, GitHub Copilot and Cursor, type a hyphen instead of a dot:
+`/speckit-ado-pull 1001`. The story is copied into `dod/DoD_1001.md`, and the agent starts the spec from it.
+
+## How to use it
+
+Not sure what comes next? Run `ado status 1001` in your terminal. It prints where the story is and the one command to run next.
+
+| Step | Type | What happens |
+|---|---|---|
+| 1 | `/speckit.ado.pull 1001` | Reads the story and starts the spec and the checklist file. |
+| 2 | `/speckit.ado.plan 1001` | Writes the plan and lists questions for the product owner. You approve before they are posted. |
+| 3 | `/speckit.ado.tasks 1001` | Turns the plan into a task list. |
+| 4 | `/speckit.ado.push 1001` | Shows the child Tasks it would create on the board. They are created after your yes. Running it again updates them, it never duplicates. |
+| 5 | `/speckit.ado.implement 1001` | The agent writes the code and the tests, and ticks Tasks off after your yes. |
+| 6 | `/speckit.ado.gate` and `/speckit.ado.review` | Checks the work against the checklist and reviews the change. Results are saved in the checklist file. |
+| 7 | `/speckit.ado.pr` | Builds the pull request description and opens the pull request after your yes. |
+| 8 | `/speckit.ado.done` | After the merge: attaches the checklist and closes the story, after your yes. |
+
+Every board change goes in two moves: a preview you read, then an apply that refuses to run if the plan changed after you read it.
+The agent does both and asks for your yes in between. A full walk-through with the exact commands is in the
+[quickstart](docs/quickstart.md); you can also [watch it catch a fake "green" commit](docs/demo.md) with no Azure DevOps account.
+
+## If something goes wrong
+
+| What you see | What to do |
+|---|---|
+| `ado: command not found` | Run `python3 -m pipx ensurepath` and open a new terminal. |
+| `ado doctor` shows `fail` | Do what the fix on that line says, then run `ado doctor` again. |
+| Error 401 or 403 | The token has the wrong scopes or has expired. Create a new one and run `ado setup` again. |
+| Error 404 | Wrong project or story number. Check `ado.config.json`, or run `ado setup` again. |
+| `ado status` keeps asking for the plan | A question for the product owner is still open. See step 5 of the [quickstart](docs/quickstart.md#5-follow-ado-status-about-4-minutes). |
+| A word you do not know | Every term has a one-line meaning in the [glossary](docs/glossary.md). |
+
+## Want more control?
+
+- **Block bad pull requests:** `ado setup --profile team` makes the gate and the review able to block a pull request.
+- **Prove tests were written first:** `ado setup --profile strict` (see [Strict mode](#strict-mode) below).
+- **Run the whole lifecycle with built-in approval steps:** the `ado-lifecycle` workflow (see the [workflow guide](https://github.com/praveenlavu/spec-kit-ado/blob/main/workflows/ado-lifecycle/README.md)).
+- **Run it in CI, or with nobody at a terminal:** [GitHub](docs/ci-github.md), [Azure Pipelines](docs/ci-azure-pipelines.md), [unattended](docs/unattended.md).
+- **Every setting:** [configuration](docs/configuration.md).
+
+This is guard rails for a team that reviews its pull requests, not a security lock. Details are in
+[What this does and does not do](#what-this-does-and-does-not-do).
+
+---
+
+# Full reference
+
+Everything above is the short version. Everything below is the detailed technical reference.
+
+## Technical overview
+
 > **Spec-driven development for Azure DevOps teams, with a person approving every change an agent makes.**
 > Pull a story into a per-story ledger that ties each acceptance criterion to a named test, let your AI agent do the work
 > through Spec Kit, and see the exact Azure Boards or pull request change before it is applied, and only after you say yes.
