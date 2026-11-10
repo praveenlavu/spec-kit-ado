@@ -2,6 +2,14 @@
 
 ![spec-kit-ado: an AI agent works an Azure DevOps story, you say yes at each step, and the story is done](docs/assets/banner.svg)
 
+**Let your AI agent do the work on an Azure DevOps story, and approve every change it makes to your board.**
+
+> [!NOTE]
+> **Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.**
+> A community project, not an official GitHub or Microsoft product.
+
+<div align="center">
+
 [![CI](https://github.com/praveenlavu/spec-kit-ado/actions/workflows/ci.yml/badge.svg)](https://github.com/praveenlavu/spec-kit-ado/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/praveenlavu/spec-kit-ado)](https://github.com/praveenlavu/spec-kit-ado/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -9,23 +17,21 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
 [![Listed in the Spec Kit community catalog](https://img.shields.io/badge/Spec%20Kit%20community%20catalog-listed-brightgreen)](https://github.com/github/spec-kit/blob/main/docs/community/extensions.md)
 
-**Let your AI agent do the work on an Azure DevOps story, and approve every change it makes to your board.**
+**[Quick setup](#quick-setup)** · **[How to use it](#how-to-use-it)** · **[Troubleshooting](#if-something-goes-wrong)** · **[Quickstart guide](docs/quickstart.md)** · **[Report a problem](https://github.com/praveenlavu/spec-kit-ado/issues)**
+
+</div>
 
 An add-on for [Spec Kit](https://github.com/github/spec-kit) that connects your AI coding agent to Azure DevOps (ADO). The agent
 writes the spec, the plan and the code. Before it changes anything in Azure DevOps, it shows you the exact change and waits for
 your yes.
 
-**Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.**
-
-> Community project. Not an official GitHub or Microsoft product.
-
 ## What you get
 
-- **One checklist per story.** Each acceptance criterion (a line saying what "done" means) is linked to the test that proves it.
-- **Nothing happens behind your back.** New Tasks, comments and pull requests are shown first and written only after you say yes.
-- **Questions go to the right person.** Open questions are posted to the story for the product owner, and the answers come back into the plan.
-- **Works with your stack.** It uses whatever Spec Kit setup you already have, for any language.
-- **Your token stays private.** The access token (PAT) is typed into your own terminal and never goes through the agent chat.
+- ✅ **One checklist per story.** Each acceptance criterion (a line saying what "done" means) is linked to the test that proves it.
+- 🛑 **Nothing happens behind your back.** New Tasks, comments and pull requests are shown first and written only after you say yes.
+- 💬 **Questions go to the right person.** Open questions are posted to the story for the product owner, and the answers come back into the plan.
+- 🧩 **Works with your stack.** It uses whatever Spec Kit setup you already have, for any language.
+- 🔒 **Your token stays private.** The access token (PAT) is typed into your own terminal and never goes through the agent chat.
 
 ## How it works
 
@@ -58,6 +64,9 @@ project with an AI agent, an Azure DevOps story with acceptance criteria (note i
 Personal access tokens. Plan on roughly 10 minutes (an estimate, not timed).
 
 On Windows, use WSL. On macOS and Linux it works directly.
+
+> [!IMPORTANT]
+> Type your token only into your own terminal, at the hidden prompt of `ado setup`. Never paste it into the agent chat.
 
 **1. Install the `ado` command.**
 
@@ -101,7 +110,12 @@ Replace `1001` with your story number. In Claude Code, GitHub Copilot and Cursor
 
 ## How to use it
 
-Not sure what comes next? Run `ado status 1001` in your terminal. It prints where the story is and the one command to run next.
+> [!TIP]
+> Not sure what comes next? Run `ado status 1001` in your terminal. It prints where the story is and the one command to run next.
+
+![An illustrated terminal session: the agent previews four Tasks for story 1001 and asks for a yes before anything is written](docs/assets/demo.svg)
+
+The picture above is an illustration with made-up data. This is the moment that matters: the agent shows the change, and nothing is written until you answer yes.
 
 | Step | Type | What happens |
 |---|---|---|

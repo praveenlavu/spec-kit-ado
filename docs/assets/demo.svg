@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 420" width="900" height="420" role="img" aria-labelledby="t d">
+  <title id="t">An illustrated terminal session</title>
+  <desc id="d">A made-up example. The agent previews four Tasks for story 1001 and asks for a yes. Nothing is written to Azure DevOps until the person answers y.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0a1020"/><stop offset="1" stop-color="#12344f"/></linearGradient>
+    <filter id="sh" x="-10%" y="-10%" width="120%" height="130%"><feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000" flood-opacity="0.4"/></filter>
+  </defs>
+  <style>
+    .l0{animation:k0 16.0s infinite}@keyframes k0{0%{opacity:0}3.75%{opacity:0}4.55%{opacity:1}93%{opacity:1}97%{opacity:0}100%{opacity:0}} .l1{animation:k1 16.0s infinite}@keyframes k1{0%{opacity:0}10.00%{opacity:0}10.80%{opacity:1}93%{opacity:1}97%{opacity:0}100%{opacity:0}} .l2{animation:k2 16.0s infinite}@keyframes k2{0%{opacity:0}15.00%{opacity:0}15.80%{opacity:1}93%{opacity:1}97%{opacity:0}100%{opacity:0}} .l3{animation:k3 16.0s infinite}@keyframes k3{0%{opacity:0}18.75%{opacity:0}19.55%{opacity:1}93%{opacity:1}97%{opacity:0}100%{opacity:0}} .l4{animation:k4 16.0s infinite}@keyframes k4{0%{opacity:0}22.50%{opacity:0}23.30%{opacity:1}93%{opacity:1}97%{opacity:0}100%{opacity:0}} .l5{animation:k5 16.0s infinite}@keyframes k5{0%{opacity:0}26.25%{opacity:0}27.05%{opacity:1}93%{opacity:1}97%{opacity:0}100%{opacity:0}} .l6{animation:k6 16.0s infinite}@keyframes k6{0%{opacity:0}33.75%{opacity:0}34.55%{opacity:1}93%{opacity:1}97%{opacity:0}100%{opacity:0}} .l7{animation:k7 16.0s infinite}@keyframes k7{0%{opacity:0}47.50%{opacity:0}48.30%{opacity:1}93%{opacity:1}97%{opacity:0}100%{opacity:0}} .l8{animation:k8 16.0s infinite}@keyframes k8{0%{opacity:0}55.00%{opacity:0}55.80%{opacity:1}93%{opacity:1}97%{opacity:0}100%{opacity:0}}
+    .cur{animation:blink 1.1s steps(1) infinite}@keyframes blink{50%{opacity:0}}
+    @media (prefers-reduced-motion: reduce){ [class^="l"], .cur{animation:none;opacity:1} }
+  </style>
+  <rect width="900" height="420" rx="16" fill="url(#bg)"/>
+  <g filter="url(#sh)"><rect x="20" y="20" width="860" height="380" rx="12" fill="#08111f" stroke="#2b567d"/></g>
+  <circle cx="44" cy="46" r="6" fill="#f87171"/><circle cx="64" cy="46" r="6" fill="#fbbf24"/><circle cx="84" cy="46" r="6" fill="#4ade80"/>
+  <text x="450.0" y="51" font-family="-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="14" fill="#7f9bb5" text-anchor="middle">your agent, in your project folder</text>
+  <g font-family="ui-monospace,'SF Mono',Menlo,Consolas,'Liberation Mono',monospace" font-size="17">
+    <text class="l0" x="48" y="118" fill="#7dd3fc">&gt; /speckit.ado.push 1001</text>
+    <text class="l1" x="48" y="148" fill="#9fb6cc">Preview: 4 child Tasks would be created under story 1001</text>
+    <text class="l2" x="48" y="178" fill="#86efac">  + Add the sign-in form</text>
+    <text class="l3" x="48" y="206" fill="#86efac">  + Validate the email field</text>
+    <text class="l4" x="48" y="234" fill="#86efac">  + Show an error on a wrong password</text>
+    <text class="l5" x="48" y="262" fill="#86efac">  + Add tests for the sign-in flow</text>
+    <text class="l6" x="48" y="290" fill="#fde68a" font-weight="700">Create these 4 Tasks on the board? [y/N]</text>
+    <text class="l7" x="48" y="326" fill="#fbbf24" font-weight="700">&gt; y</text>
+    <text class="l8" x="48" y="356" fill="#4ade80" font-weight="700">Done. 4 Tasks created. Nothing else was changed.</text>
+  </g>
+  <text x="864" y="388" font-family="-apple-system,'Segoe UI',Helvetica,Arial,sans-serif" font-size="12" fill="#6f8aa3" text-anchor="end">Illustration with made-up data</text>
+</svg>
