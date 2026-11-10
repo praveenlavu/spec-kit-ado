@@ -17,8 +17,8 @@
 
   <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
     <text x="100" y="230" font-size="110" font-weight="700" fill="#ffffff">spec-kit-ado</text>
-    <text x="104" y="305" font-size="40" fill="#cfe0f2">You approve every change your AI agent</text>
-    <text x="104" y="355" font-size="40" fill="#cfe0f2">makes to Azure DevOps.</text>
+    <text x="104" y="305" font-size="40" fill="#cfe0f2">Your AI agent does the grunt work.</text>
+    <text x="104" y="355" font-size="40" fill="#cfe0f2">You say yes before the board changes.</text>
     <rect x="104" y="400" width="380" height="52" rx="26" fill="none" stroke="#5eead4" stroke-opacity="0.7" stroke-width="2"/>
     <text x="294" y="435" font-size="24" fill="#5eead4" text-anchor="middle">A Spec Kit extension</text>
   </g>
