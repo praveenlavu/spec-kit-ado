@@ -57,8 +57,8 @@
   <rect x="60" y="64" width="64" height="6" rx="3" fill="url(#accent)"/>
   <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
     <text x="60" y="146" font-size="68" font-weight="800" fill="url(#title)" letter-spacing="-1">spec-kit-ado</text>
-    <text x="62" y="194" font-size="25" fill="#cfe0f2">You approve every change your AI agent</text>
-    <text x="62" y="227" font-size="25" fill="#cfe0f2">makes to Azure DevOps.</text>
+    <text x="62" y="194" font-size="25" fill="#cfe0f2">Your AI agent does the grunt work.</text>
+    <text x="62" y="227" font-size="25" fill="#cfe0f2">You say yes before the board changes.</text>
     <g font-size="14" font-weight="600" text-anchor="middle">
       <rect x="62" y="258" width="150" height="32" rx="16" fill="#5eead4" fill-opacity="0.12" stroke="#5eead4" stroke-opacity="0.7"/>
       <text x="137" y="279" fill="#5eead4">A Spec Kit extension</text>

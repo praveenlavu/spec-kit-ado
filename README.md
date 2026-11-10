@@ -1,8 +1,11 @@
 # spec-kit-ado
 
-![spec-kit-ado: an AI agent works an Azure DevOps story, you say yes at each step, and the story is done](docs/assets/banner.svg)
+![spec-kit-ado: your AI agent does the grunt work on an Azure DevOps story, and you say yes before anything on the board changes](docs/assets/banner.svg)
 
-**Let your AI agent do the work on an Azure DevOps story, and approve every change it makes to your board.**
+**Your AI agent does the Azure DevOps grunt work. You press yes.**
+
+Pick a story. The agent reads it, writes the spec, makes the plan and builds it. Before anything touches your board, you see the
+exact change and decide. No surprises, no cleanup.
 
 > [!NOTE]
 > **Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.**
@@ -21,11 +24,10 @@
 
 </div>
 
-An add-on for [Spec Kit](https://github.com/github/spec-kit) that connects your AI coding agent to Azure DevOps (ADO). The agent
-writes the spec, the plan and the code. Before it changes anything in Azure DevOps, it shows you the exact change and waits for
-your yes.
+spec-kit-ado is an add-on for [Spec Kit](https://github.com/github/spec-kit) that plugs your AI coding agent into Azure DevOps (ADO).
+The agent can read your board all day. It can only write to it after you approve.
 
-## What you get
+## Why you'll like it
 
 - ✅ **One checklist per story.** Each acceptance criterion (a line saying what "done" means) is linked to the test that proves it.
 - 🛑 **Nothing happens behind your back.** New Tasks, comments and pull requests are shown first and written only after you say yes.
