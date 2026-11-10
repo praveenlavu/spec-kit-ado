@@ -1,5 +1,14 @@
 # spec-kit-ado
 
+![spec-kit-ado: an AI agent works an Azure DevOps story, you say yes at each step, and the story is done](docs/assets/banner.svg)
+
+[![CI](https://github.com/praveenlavu/spec-kit-ado/actions/workflows/ci.yml/badge.svg)](https://github.com/praveenlavu/spec-kit-ado/actions/workflows/ci.yml)
+[![Latest release](https://img.shields.io/github/v/release/praveenlavu/spec-kit-ado)](https://github.com/praveenlavu/spec-kit-ado/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Spec Kit 1.2.1+](https://img.shields.io/badge/Spec%20Kit-1.2.1%2B-blue)](https://github.com/github/spec-kit)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org/)
+[![Listed in the Spec Kit community catalog](https://img.shields.io/badge/Spec%20Kit%20community%20catalog-listed-brightgreen)](https://github.com/github/spec-kit/blob/main/docs/community/extensions.md)
+
 **Let your AI agent do the work on an Azure DevOps story, and approve every change it makes to your board.**
 
 An add-on for [Spec Kit](https://github.com/github/spec-kit) that connects your AI coding agent to Azure DevOps (ADO). The agent

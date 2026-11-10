@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="t d">
+  <title id="t">spec-kit-ado social preview</title>
+  <desc id="d">spec-kit-ado: you approve every change your AI agent makes to Azure DevOps.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#14405f"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5eead4"/>
+      <stop offset="1" stop-color="#60a5fa"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <rect x="100" y="120" width="96" height="8" rx="4" fill="url(#accent)"/>
+
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+    <text x="100" y="230" font-size="110" font-weight="700" fill="#ffffff">spec-kit-ado</text>
+    <text x="104" y="305" font-size="40" fill="#cfe0f2">You approve every change your AI agent</text>
+    <text x="104" y="355" font-size="40" fill="#cfe0f2">makes to Azure DevOps.</text>
+    <rect x="104" y="400" width="380" height="52" rx="26" fill="none" stroke="#5eead4" stroke-opacity="0.7" stroke-width="2"/>
+    <text x="294" y="435" font-size="24" fill="#5eead4" text-anchor="middle">A Spec Kit extension</text>
+  </g>
+
+  <g stroke="#7aa2c8" stroke-width="5" stroke-linecap="round">
+    <line x1="200" y1="540" x2="330" y2="540"/>
+    <line x1="410" y1="540" x2="520" y2="540"/>
+    <line x1="590" y1="540" x2="680" y2="540"/>
+  </g>
+  <g font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" text-anchor="middle" fill="#cfe0f2">
+    <circle cx="150" cy="540" r="44" fill="#1d4f7a" stroke="#60a5fa" stroke-width="4"/>
+    <path d="M131 522h38v36h-38z M140 533h20 M140 541h20 M140 549h12" fill="none" stroke="#e6f1fb" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="150" y="615">Story</text>
+
+    <circle cx="370" cy="540" r="44" fill="#1d4f7a" stroke="#5eead4" stroke-width="4"/>
+    <path d="M370 510l7 19 19 7-19 7-7 19-7-19-19-7 19-7z" fill="none" stroke="#e6f1fb" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>
+    <text x="370" y="615">AI agent</text>
+
+    <path d="M555 490l50 50-50 50-50-50z" fill="#fbbf24" stroke="#fde68a" stroke-width="4" stroke-linejoin="round"/>
+    <path d="M537 541l13 13 25-28" fill="none" stroke="#3d2f00" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="555" y="615" fill="#fde68a">You say yes</text>
+
+    <circle cx="740" cy="540" r="44" fill="#14532d" stroke="#4ade80" stroke-width="4"/>
+    <path d="M722 541l13 13 25-28" fill="none" stroke="#bbf7d0" stroke-width="6.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="740" y="615">Done</text>
+  </g>
+</svg>
