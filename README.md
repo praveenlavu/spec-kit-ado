@@ -4,8 +4,7 @@
 
 **Your AI agent does the Azure DevOps grunt work. You press yes.**
 
-Pick a story. The agent reads it, writes the spec, makes the plan and builds it. Before anything touches your board, you see the
-exact change and decide. No surprises, no cleanup.
+Pick a story. The agent reads it, writes the spec, makes the plan and builds it. You stay in charge of what matters: the questions, the tangents worth exploring, and the yes. Before anything touches your board, you see the exact change and decide. No surprises, no cleanup.
 
 > [!NOTE]
 > **Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.**
@@ -24,18 +23,21 @@ exact change and decide. No surprises, no cleanup.
 
 </div>
 
-spec-kit-ado is an add-on for [Spec Kit](https://github.com/github/spec-kit) that plugs your AI coding agent into Azure DevOps (ADO).
-The agent can read your board all day. It can only write to it after you approve.
+spec-kit-ado is an add-on for [Spec Kit](https://github.com/github/spec-kit), a toolkit that has your AI coding agent agree a written spec and plan with you before it writes code.
+This add-on connects that agent to your Azure DevOps (ADO) board, so it can read your stories and do the grunt work of planning, coding and testing.
+It can only write to the board after you approve, which leaves your time for the questions, the tangents and the yes.
 
 ## Why you'll like it
 
-- ✅ **One checklist per story.** Each acceptance criterion (a line saying what "done" means) is linked to the test that proves it.
+- ✅ **Proof, not promises.** Every acceptance criterion (a line saying what "done" means) is tied to a test that proves it, all in one checklist per story.
 - 🛑 **Nothing happens behind your back.** New Tasks, comments and pull requests are shown first and written only after you say yes.
-- 💬 **Questions go to the right person.** Open questions are posted to the story for the product owner, and the answers come back into the plan.
+- 💬 **The right questions get asked up front.** The agent lists what is unclear, you approve what is posted to the story for the product owner, and the answers come back into the plan.
 - 🧩 **Works with your stack.** It uses whatever Spec Kit setup you already have, for any language.
 - 🔒 **Your token stays private.** The access token (PAT) is typed into your own terminal and never goes through the agent chat.
 
 ## How it works
+
+Nine steps from story to done. The agent does the grunt work, and you give three yeses, marked in yellow.
 
 ```mermaid
 flowchart TD
@@ -55,7 +57,7 @@ flowchart TD
     class D,G,J you;
 ```
 
-The yellow diamonds are the moments you decide. The agent can read from Azure DevOps freely, but it cannot write to it until you approve.
+The yellow steps are your moments to decide: send the questions, create the Tasks, open the pull request. The agent can read from Azure DevOps freely but cannot write to it until you approve.
 The story is closed after the merge, by your CI or by you running `speckit.ado.done`.
 
 ## Quick setup
@@ -147,13 +149,13 @@ The agent does both and asks for your yes in between. A full walk-through with t
 
 ## Want more control?
 
-- **Block bad pull requests:** `ado setup --profile team` makes the gate and the review able to block a pull request.
+- **Block bad pull requests:** `ado setup --profile team` lets the checks and the review stop a pull request that is not ready.
 - **Prove tests were written first:** `ado setup --profile strict` (see [Strict mode](#strict-mode) below).
 - **Run the whole lifecycle with built-in approval steps:** the `ado-lifecycle` workflow (see the [workflow guide](https://github.com/praveenlavu/spec-kit-ado/blob/main/workflows/ado-lifecycle/README.md)).
 - **Run it in CI, or with nobody at a terminal:** [GitHub](docs/ci-github.md), [Azure Pipelines](docs/ci-azure-pipelines.md), [unattended](docs/unattended.md).
 - **Every setting:** [configuration](docs/configuration.md).
 
-This is guard rails for a team that reviews its pull requests, not a security lock. Details are in
+These are guard rails for a team that reviews its pull requests, not a security lock. Details are in
 [What this does and does not do](#what-this-does-and-does-not-do).
 
 ---
