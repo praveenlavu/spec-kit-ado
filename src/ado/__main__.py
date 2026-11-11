@@ -6,7 +6,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, approvals, attachments, branch, calibrate, comments, decisions, dod, done, doctor, gate, kits, prs, push, questions, rules, stack, status, strict, tasks, workitems
+from . import __version__, approvals, attachments, branch, calibrate, comments, decisions, dod, done, doctor, gate, kits, mode, prs, push, questions, rules, stack, status, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid, trusted
@@ -721,6 +721,25 @@ def _status(args):
     return 0
 
 
+def _mode(args):
+    """`ado mode [ROLE | --clear | --require a,b] [--json]`: the role picked at this keyboard (a local file; prompts only, no enforcing command reads it).
+    Picking asks ADO who the token is only when the target branch has `roles.map`; every other form is local (no token, no request)."""
+    if args.clear:
+        mode.clear()
+        role = None
+    elif args.require is not None:
+        role = mode.require(args.require)
+    elif args.role:
+        roles = trusted(".").roles
+        if roles:
+            mode.check_identity(AdoClient(_config(args)), roles, args.role)
+        role = mode.write(args.role)
+    else:
+        role = mode.read()
+    print(json.dumps({"role": role}) if args.json else f"role: {role or 'none'}")
+    return 0
+
+
 def _calibrate(args):
     """`ado calibrate (--emit PATH | --score FILE)`: local only (no token, no network, no model). `--emit` writes the plane 8 rubric and the 12
     unlabelled golden items under `.ado/`; `--score` reads a model's answer (under `.ado/`, at most 64 KiB) and exits 0 only at agreement >= 10 of 12
@@ -877,6 +896,12 @@ def main(argv=None):
     g = p.add_mutually_exclusive_group(required=True)
     g.add_argument("--emit", metavar="PATH", help="write the calibration prompt to PATH (a .md file under .ado/)")
     g.add_argument("--score", metavar="FILE", help='score the answer in FILE (under .ado/, at most 64 KiB): {"G1": "asserts|partial|does not assert", ...}')
+    p = sub.add_parser("mode", help="Pick the role you work as (bpo, tpo, dev, qa): shows it, sets it, --clear removes it, --require a,b exits 2 unless it is "
+                       "one of those (or none is set). Steers the agent's prompts only; nothing that enforces reads it")
+    p.add_argument("role", nargs="?", choices=mode.ROLE_IDS, help="the role to work as")
+    p.add_argument("--clear", action="store_true", help="forget the picked role")
+    p.add_argument("--require", metavar="ROLES", help="comma-separated roles: exit 0 if none is picked or the picked one is listed, else 2")
+    p.add_argument("--json", action="store_true", help='print {"role": ...} instead of text')
     p = sub.add_parser("get", help="Get a work item (with relations)")
     p.add_argument("id", type=int)
     p = sub.add_parser("query", help="Run a WIQL query")
@@ -1165,6 +1190,8 @@ def main(argv=None):
             parser.error(stack.E_ROLE)
         if getattr(args, "story", None) is not None and not stack.valid_story(args.story):
             parser.error("--story must be a work item id (digits only, no leading zero)")
+    if args.command == "mode" and sum(x is not None and x is not False for x in (args.role, args.clear, args.require)) > 1:
+        parser.error("give a role, --clear or --require, not more than one")
     if args.command == "doctor" and args.probe_item is not None and not 1 <= args.probe_item <= prs.MAX_ID:
         parser.error(f"--probe-item must be a work item id between 1 and {prs.MAX_ID}")
     if args.command == "status" and not 1 <= args.id <= prs.MAX_ID:
@@ -1190,6 +1217,8 @@ def main(argv=None):
             return run_setup(profile=args.profile)
         if args.command == "doctor":  # rows, not an exception: every failure is a row
             return _doctor(args)
+        if args.command == "mode":  # a local file: ADO is asked only to check who may pick a role
+            return _mode(args)
         if args.command == "calibrate":  # local only: no token, no request, no config
             return _calibrate(args)
         if args.command == "status":  # a report: every failure is a stage, not an exception

@@ -8,7 +8,7 @@ Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issue
 
 **Counts, so the right number goes in the right field.** The catalog entry's `provides.commands` counts the
 **extension commands** registered from `extension.yml`: 13 extension commands (`speckit.ado.*`), 2 hooks. The `ado`
-command-line program is a separate thing and has 26 top-level CLI verbs (`ado --help`; `ado doctor`, `ado status` and
+command-line program is a separate thing and has 27 top-level CLI verbs (`ado --help`; `ado doctor`, `ado status` and
 `ado calibrate` are among them); those are not counted in the catalog entry. A doc test pins both numbers to
 `extension.yml` and `ado --help`.
 
