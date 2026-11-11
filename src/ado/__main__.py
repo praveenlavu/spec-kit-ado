@@ -6,7 +6,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, approvals, attachments, branch, calibrate, comments, decisions, dod, done, doctor, gate, kits, mode, prs, push, qa, questions, rules, stack, status, strict, tasks, workitems
+from . import __version__, approvals, attachments, branch, calibrate, comments, decisions, dod, done, doctor, gate, kits, mode, prs, push, qa, questions, rules, signoff, stack, status, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid, trusted
@@ -567,13 +567,29 @@ def _comment_mode(trust):
 def _approvals_check(args):
     """`approvals check ID --gate G` (P4-12b): terminal mode is a no-op that reads nothing from ADO (not even a token); comment mode needs the approvers' comments
     (`approvals.check`). Exit 2 with a fixed text when the gate is unknown, not checkable here or not met."""
+    if args.gate in signoff.GATES:
+        return _signoff_check(args)
     if args.gate not in approvals.GATES:
         raise ValueError(approvals.E_GATE)
+    if args.offline:
+        raise ValueError(signoff.E_OFFLINE_GATE)
     trust = trusted(".")
     if not _comment_mode(trust):
         return approvals.check(None, trust, args.id, args.gate, None)
     client = AdoClient(_config(args))
     return approvals.check(client, trust, args.id, args.gate, client.config)
+
+
+def _signoff_check(args):
+    """`approvals check ID --gate signoff-<role> [--offline]`: not required (the target branch's `roles.signoff` omits the role, or `roles` is absent) reads nothing;
+    (also with `--offline`: there is nothing to sign) otherwise the sign-off comment (`signoff.check`), or with `--offline` the line a signer comments, from the working tree alone (exit 2: never a pass)."""
+    role, trust = signoff.role_of(args.gate), trusted(".")
+    if not signoff.required(trust, role):
+        return signoff.not_required(args.gate)
+    if args.offline:
+        return signoff.offline(trust, args.id, role, _config(args))
+    client = AdoClient(_config(args))
+    return signoff.check(client, trust, args.id, role, client.config)
 
 
 def _approvals_sync(args):
@@ -1154,7 +1170,9 @@ def main(argv=None):
                         "`/approve <gate> <hash>`; wait-po-answers and wait-po-validation are met by the approvers' /answer, /approve and /reject comments; "
                         "a no-op when approval is not \"comment\"")
     q.add_argument("id", type=int, help="story id")
-    q.add_argument("--gate", required=True, metavar="GATE", help="one of: " + ", ".join(approvals.GATES))
+    q.add_argument("--gate", required=True, metavar="GATE", help="one of: " + ", ".join(approvals.GATES + signoff.GATES))
+    q.add_argument("--offline", action="store_true", help="signoff gates only: print the exact `/approve signoff-<role> <hash>` line a signer comments, from the "
+                   "working tree alone (no token, no request; exit 2, never a pass)")
     q = asub.add_parser("sync", help="The poller (comment mode only, for a local or persistent runner): reads the gate a Spec Kit run is paused at, prints "
                         "{gate, verdict: approve|reject|waiting} from the approvers' comments, and with --resume resumes the run with that verdict. When "
                         "`unattended.approval_requests` is true on the target branch it also posts one approval-request comment per hash (the one write "
@@ -1336,6 +1354,9 @@ def main(argv=None):
         return 1
     if args.command == "gate" and out.get("blocking"):
         return 1
+    if args.command == "approvals" and args.approvals_command == "check" and out.get("met") is False:  # --offline: the line to copy, not verified
+        print(f"error: {signoff.E_OFFLINE}", file=sys.stderr)
+        return 2
     return 0
 
 
