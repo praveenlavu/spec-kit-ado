@@ -327,12 +327,13 @@ def _edited(client, story_id, c):
     return not ([v["version"] for v in vs] == list(range(1, c["version"] + 1)) and all(v["text"] == c.get("html") for v in vs))
 
 
-def guard(client, story_id, c, approvers, excluded):
+def guard(client, story_id, c, approvers, excluded, holders=None):
     """Why comment `c` (a `comments.fetch(with_meta=True)` row) cannot count as an approver's, or None when it can:
     `on-behalf` (the raw comment had a `createdOnBehalfOf` key: what a bypassRules forge leaves), `excluded-author` (the token identity, a kit posting
     identity, the CI identity), `not-approver` (author not in `approvers`; compared as lowercase GUIDs), `edited` (version != 1 unless edited by the
     author with identical text in every version, the versions listed being exactly 1..n; an unreadable versions list is an edit), `forged` (`authorized_as` says another identity
-    authenticated the write; skipped when that cannot be told). Cheap checks run first; the requests only for a comment that passed them."""
+    authenticated the write; skipped when that cannot be told). `holders` (None: no role is asked for; the sign-off gates pass the identities that hold the role) adds
+    `not-role` after `not-approver`: an approver who does not hold it. Cheap checks run first; the requests only for a comment that passed them."""
     author = c.get("author")
     author = author.lower() if isinstance(author, str) else None
     if c.get("on_behalf"):
@@ -341,6 +342,8 @@ def guard(client, story_id, c, approvers, excluded):
         return "excluded-author"
     if author is None or is_anonymous(author) or author not in {str(a).lower() for a in approvers}:
         return "not-approver"
+    if holders is not None and author not in {str(h).lower() for h in holders}:
+        return "not-role"
     if _edited(client, story_id, c):
         return "edited"
     who = authorized_as(client, story_id, c)
@@ -363,7 +366,7 @@ def _order(c):
     return None if when is None else (when, (0, int(cid)) if str(cid).isdigit() else (1, str(cid)))
 
 
-def newest(client, story_id, comments, target, approvers, excluded, tally=None):
+def newest(client, story_id, comments, target, approvers, excluded, tally=None, holders=None):
     """The newest VALID command for `target`, by (created time, id), as `{"verb", "target", "hash", "text", "id", "created", "author", "bad_newer"}`,
     else None. Valid = the grammar holds (`parse_command`) and `guard` returns None. An invalid comment is skipped, so a later invalid comment (the
     agent's, an edited or quoted one) never cancels an earlier valid one, while a later VALID `/reject` is the newest and does. Its `hash` is for
@@ -372,7 +375,7 @@ def newest(client, story_id, comments, target, approvers, excluded, tally=None):
     different well-formed target (`_elsewhere`: `/reject D3.` and `/reject (D3)` count for D3) cannot be told from a retraction typed wrong, so it is counted in `bad_newer` (and in `tally`, also when there is no
     winner): the caller must show that count (fixed text, a number only) next to the verdict, never ignore it.
     `tally` (a dict) is filled with counts only: `bad` (command-looking lines that break the grammar, any author and target), `bad_newer`, `date`
-    (an unreadable creation time) and one count per guard rule; no comment text is ever kept or printed. An HTTP error from a guard is raised."""
+    (an unreadable creation time) and one count per guard rule; no comment text is ever kept or printed. `holders` is passed to `guard` (see there). An HTTP error from a guard is raised."""
     tally = {} if tally is None else tally
     count = lambda k, n=1: tally.__setitem__(k, tally.get(k, 0) + n)  # noqa: E731
     wanted, found, bads = {str(a).lower() for a in approvers}, [], []
@@ -393,7 +396,7 @@ def newest(client, story_id, comments, target, approvers, excluded, tally=None):
         found.append((key, cmd, c))
     out = None
     for key, cmd, c in sorted(found, key=lambda t: t[0], reverse=True):
-        why = guard(client, story_id, c, approvers, excluded)
+        why = guard(client, story_id, c, approvers, excluded, holders)
         if why is None:
             out = (key, {**cmd, "id": c["id"], "created": c["date"], "author": c["author"]})
             break
