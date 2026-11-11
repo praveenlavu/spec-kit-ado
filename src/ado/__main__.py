@@ -6,7 +6,7 @@ from datetime import date
 
 from pathlib import Path
 
-from . import __version__, approvals, attachments, branch, calibrate, comments, decisions, dod, done, doctor, gate, kits, mode, prs, push, questions, rules, stack, status, strict, tasks, workitems
+from . import __version__, approvals, attachments, branch, calibrate, comments, decisions, dod, done, doctor, gate, kits, mode, prs, push, qa, questions, rules, stack, status, strict, tasks, workitems
 from .auth import AuthError
 from .client import AdoClient, AdoError
 from .config import Config, ConfigError, ConfigInvalid, trusted
@@ -740,6 +740,18 @@ def _mode(args):
     return 0
 
 
+def _qa(args):
+    """`ado qa ID [--check]`: create `<dod_path>/QA_<id>.md` from the template (once; never rewritten), or with `--check` trace its cases against the ledger's AC lines
+    and the in-scope business rules (exit 2 when anything is uncovered or malformed; ids and line numbers only). Local only: no token, no request."""
+    cfg = Config.load()
+    if args.check:
+        out = qa.check(cfg, args.id)
+    else:
+        out = {"id": args.id, "file": str(qa.qa_file(cfg.dod_path, args.id)), "created": qa.create(cfg.dod_path, args.id)}
+    print(json.dumps(out, indent=2))
+    return 0 if out.get("ok", True) else 2
+
+
 def _calibrate(args):
     """`ado calibrate (--emit PATH | --score FILE)`: local only (no token, no network, no model). `--emit` writes the plane 8 rubric and the 12
     unlabelled golden items under `.ado/`; `--score` reads a model's answer (under `.ado/`, at most 64 KiB) and exits 0 only at agreement >= 10 of 12
@@ -902,6 +914,10 @@ def main(argv=None):
     p.add_argument("--clear", action="store_true", help="forget the picked role")
     p.add_argument("--require", metavar="ROLES", help="comma-separated roles: exit 0 if none is picked or the picked one is listed, else 2")
     p.add_argument("--json", action="store_true", help='print {"role": ...} instead of text')
+    p = sub.add_parser("qa", help="Create the QA file dod/QA_<id>.md from a template (once, never rewritten); --check lists the acceptance criteria and business "
+                       "rules no case covers and the malformed case lines (ids and line numbers only; exit 2 when any; local only)")
+    p.add_argument("id", type=int)
+    p.add_argument("--check", action="store_true", help="trace the cases against the ledger and the rules instead of creating the file")
     p = sub.add_parser("get", help="Get a work item (with relations)")
     p.add_argument("id", type=int)
     p = sub.add_parser("query", help="Run a WIQL query")
@@ -1194,7 +1210,7 @@ def main(argv=None):
         parser.error("give a role, --clear or --require, not more than one")
     if args.command == "doctor" and args.probe_item is not None and not 1 <= args.probe_item <= prs.MAX_ID:
         parser.error(f"--probe-item must be a work item id between 1 and {prs.MAX_ID}")
-    if args.command == "status" and not 1 <= args.id <= prs.MAX_ID:
+    if args.command in ("status", "qa") and not 1 <= args.id <= prs.MAX_ID:
         parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
     if args.command == "approvals" and args.approvals_command == "check" and not 1 <= args.id <= prs.MAX_ID:
         parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
@@ -1219,6 +1235,8 @@ def main(argv=None):
             return _doctor(args)
         if args.command == "mode":  # a local file: ADO is asked only to check who may pick a role
             return _mode(args)
+        if args.command == "qa":  # local only: no token, no request
+            return _qa(args)
         if args.command == "calibrate":  # local only: no token, no request, no config
             return _calibrate(args)
         if args.command == "status":  # a report: every failure is a stage, not an exception
