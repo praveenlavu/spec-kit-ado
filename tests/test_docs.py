@@ -2468,9 +2468,9 @@ def test_trust_keys_doc_pins():
     cfg, readme, agents, hitl, glossary = (_flat(n) for n in ("docs/configuration.md", "README.md", "AGENTS.md", "rules/hitl.md", "docs/glossary.md"))
     log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert heading_030_index(log) < log.index("(P4-7a)") < log.index("## 0.2")
-    for needle in ("| `approvers` | list of strings | `[]` |", "| `approval` |", "| `unattended` |", "`assume_after_hours`", "`approval_requests`",
+    for needle in ("| `approvers` | list of strings | `[]` |", "| `approval` |", "| `unattended` |", "| `roles` |", "roles.signoff: no approver holds", "`assume_after_hours`", "`approval_requests`",
                    "0 to 20", "the anonymous identity", "a duplicate is rejected", "Read only from the target branch", "`config.trusted(repo, base)`",
-                   "set origin/HEAD or pass --base", "`Trust(approvers, approval, unattended)`", "not a plain ref name", "a `warn` row would not change the exit code", "### Approvers and comment mode: the recommended setup",
+                   "set origin/HEAD or pass --base", "`Trust(approvers, approval, unattended, roles)`", "not a plain ref name", "a `warn` row would not change the exit code", "### Approvers and comment mode: the recommended setup",
                    "never runs as an admin or an approver", 'Contributor without the "Bypass rules on work item updates" permission', "never an approver",
                    "Deleting `origin/HEAD`", "`refs/remotes/origin/<base>`", "ado setup --profile team", "optional"):
         assert needle in cfg, needle

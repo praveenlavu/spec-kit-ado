@@ -795,7 +795,7 @@ def test_trusted_unreadable_target_refuses(tmp_path, git_env):
 def test_trusted_returns_only_the_three_trust_keys(tmp_path, git_env):
     from ado.config import Trust, trusted
     t = trusted(str(_trust_repo(tmp_path, {**TRUST_BASE, "approvers": [G1]})))
-    assert isinstance(t, Trust) and t._fields == ("approvers", "approval", "unattended") and t.approvers == [G1]
+    assert isinstance(t, Trust) and t._fields == ("approvers", "approval", "unattended", "roles") and t.approvers == [G1] and t.roles is None
     assert not hasattr(t, "organization") and not hasattr(t, "mode")
 
 
@@ -816,7 +816,7 @@ def test_no_base_no_trust_keys_defaults(tmp_path, git_env, monkeypatch):
     assert trusted(str(tmp_path / "none")).approval == "terminal"  # not even a config file
 
 
-@pytest.mark.parametrize("extra", [{"approvers": []}, {"approvers": [G1]}, {"approval": "terminal"}, {"approval": "comment"}, {"unattended": {}}, {"unattended": {"approval_requests": False}}])
+@pytest.mark.parametrize("extra", [{"approvers": []}, {"approvers": [G1]}, {"approval": "terminal"}, {"approval": "comment"}, {"unattended": {}}, {"unattended": {"approval_requests": False}}, {"roles": {}}])
 def test_no_base_with_trust_keys_refuses(tmp_path, git_env, monkeypatch, extra):
     from ado.config import trusted
     monkeypatch.delenv("ADO_CONFIG", raising=False)
@@ -925,3 +925,99 @@ def test_absent_keys_byte_identical_outputs(tmp_path):
     diffs = [f"{a[0]}: rc {a[1]}->{b[1]}, stdout same {a[2] == b[2]}, stderr same {a[3] == b[3]}" for a, b in zip(old, new) if a != b]
     assert not diffs, "\n".join(diffs)
     assert any(o[2] for o in old[:-3]) and "approvers" in "".join(o[2] for o in old)  # not vacuous: doctor's rows were printed
+
+
+# ---- piece 5 (S-1): the trust key `roles` ----
+ROLES = {"map": {G1: ["bpo", "tpo"], G2: ["qa"]}, "signoff": ["tpo", "qa"]}
+G3 = "0a0a0a0a-0b0b-0c0c-0d0d-0e0e0e0e0e0e"  # has letters, so .upper() differs
+ROLE_IDS = "bpo, tpo, dev, qa"
+
+
+def test_roles_absent_is_off(tmp_path):
+    assert _load(tmp_path).roles is None
+    assert _load(tmp_path, approvers=[G1], approval="comment").roles is None
+
+
+def test_roles_parsed_and_normalised(tmp_path):
+    cfg = _load(tmp_path, approvers=[G1, G2], roles={"map": {G1: ["tpo", "bpo"], G2: ["qa"], G3.upper(): ["dev", "qa"]}, "signoff": ["qa", "tpo"]})
+    assert cfg.roles == {"map": {G1: ["tpo", "bpo"], G2: ["qa"], G3: ["dev", "qa"]}, "signoff": ["qa", "tpo"]}
+    assert _load(tmp_path, roles={"map": {G3: ["dev"]}}).roles == {"map": {G3: ["dev"]}, "signoff": []}  # signoff is optional: modes only
+    assert _load(tmp_path, approvers=[G1], roles={"map": {G1: ["bpo", "tpo", "dev", "qa"]}, "signoff": ["bpo", "tpo", "qa"]}).roles["signoff"] == ["bpo", "tpo", "qa"]
+    many = {f"{i:08x}-0000-0000-0000-000000000000": ["dev"] for i in range(1, 51)}
+    assert len(_load(tmp_path, roles={"map": many}).roles["map"]) == 50  # 50 is the cap
+
+
+@pytest.mark.parametrize("roles, where", [
+    ("SECRETVALUE", "'roles' must be a JSON object"),
+    (["SECRETVALUE"], "'roles' must be a JSON object"),
+    ({}, "'roles.map' must be an object of 1 to 50 identity ids"),
+    ({"map": "SECRETVALUE"}, "'roles.map' must be an object"),
+    ({"map": {}}, "'roles.map' must be an object"),
+    ({"map": {f"{i:08x}-0000-0000-0000-000000000000": ["dev"] for i in range(1, 52)}}, "'roles.map' must be an object of 1 to 50"),
+    ({"map": {G3: ["dev"]}, "SECRETVALUE": 1}, "roles entry #2: unknown key (valid: map, signoff)"),
+    ({"map": {"SECRETVALUE": ["dev"]}}, "roles.map entry #1: not an identity id"),
+    ({"map": {G3: ["dev"], "{" + G1 + "}": ["dev"]}}, "roles.map entry #2: not an identity id"),
+    ({"map": {ANON: ["dev"]}}, "roles.map entry #1: the anonymous identity cannot hold a role"),
+    ({"map": {G3: ["dev"], G3.upper(): ["qa"]}}, "roles.map entry #2: duplicate of an earlier entry"),
+    ({"map": {G3: "SECRETVALUE"}}, f"roles.map entry #1: roles must be 1 to 4 distinct of {ROLE_IDS}"),
+    ({"map": {G3: []}}, f"roles.map entry #1: roles must be 1 to 4 distinct of {ROLE_IDS}"),
+    ({"map": {G3: ["dev", "qa", "bpo", "tpo", "dev"]}}, "roles.map entry #1: roles must be 1 to 4 distinct"),
+    ({"map": {G3: ["dev", "dev"]}}, "roles.map entry #1: roles must be 1 to 4 distinct"),
+    ({"map": {G3: ["SECRETVALUE"]}}, "roles.map entry #1: roles must be 1 to 4 distinct"),
+    ({"map": {G3: ["Dev"]}}, "roles.map entry #1: roles must be 1 to 4 distinct"),
+    ({"map": {G3: [5]}}, "roles.map entry #1: roles must be 1 to 4 distinct"),
+    ({"map": {G3: ["dev"]}, "signoff": "SECRETVALUE"}, "'roles.signoff' must be 0 to 3 distinct of bpo, tpo, qa"),
+    ({"map": {G3: ["dev"]}, "signoff": ["dev"]}, "'roles.signoff' must be 0 to 3 distinct of bpo, tpo, qa"),
+    ({"map": {G3: ["dev"]}, "signoff": ["qa", "qa"]}, "'roles.signoff' must be 0 to 3 distinct"),
+    ({"map": {G3: ["dev"]}, "signoff": ["qa", "tpo", "bpo", "qa"]}, "'roles.signoff' must be 0 to 3 distinct"),
+    ({"map": {G3: ["dev"]}, "signoff": [5]}, "'roles.signoff' must be 0 to 3 distinct"),
+    ({"map": {G3: ["dev"]}, "signoff": ["SECRETVALUE"]}, "'roles.signoff' must be 0 to 3 distinct"),
+])
+def test_roles_validated(tmp_path, roles, where):
+    with pytest.raises(ConfigInvalid) as e:
+        _load(tmp_path, approvers=[G1, G2], roles=roles)
+    assert where in str(e.value)
+    for secret in ("SECRETVALUE", G1, G2, G3, G1.upper(), "-0000-0000"):
+        assert secret not in str(e.value), "a value was echoed"
+
+
+@pytest.mark.parametrize("approvers, roles, role", [
+    ([G1], {"map": {G1: ["tpo"], G2: ["qa"]}, "signoff": ["tpo", "qa"]}, "qa"),  # the qa holder is not an approver
+    ([], {"map": {G1: ["qa"]}, "signoff": ["qa"]}, "qa"),  # no approvers at all
+    ([G1], {"map": {G1: ["dev"]}, "signoff": ["bpo"]}, "bpo"),  # nobody holds it
+    ([G2], {"map": {G1: ["qa", "tpo"], G2: ["qa"]}, "signoff": ["qa", "tpo"]}, "tpo"),
+])
+def test_every_signoff_role_needs_an_approver_who_holds_it(tmp_path, approvers, roles, role):
+    with pytest.raises(ConfigInvalid) as e:
+        _load(tmp_path, approvers=approvers, roles=roles)
+    assert f"roles.signoff: no approver holds {role}" in str(e.value)
+    for secret in (G1, G2):
+        assert secret not in str(e.value)
+
+
+def test_roles_validated_from_the_target_branch_too(tmp_path, git_env):
+    repo = _ref_repo(tmp_path, json.dumps({**TRUST_BASE, "approvers": [G1], "roles": {"map": {G1: ["tpo"]}, "signoff": ["qa"]}}))
+    with pytest.raises(ConfigInvalid, match="roles.signoff: no approver holds qa"):
+        Config.load_from_ref("refs/heads/main", repo=str(repo))
+
+
+def test_trusted_reads_roles_from_the_target_branch_only(tmp_path, git_env):
+    from ado.config import trusted
+    target = {**TRUST_BASE, "approvers": [G1, G2], "roles": ROLES}
+    head = {**TRUST_BASE, "approvers": [G1, G2], "roles": {"map": {G1: ["dev"]}, "signoff": []}}  # the PR rewrites the map and drops the sign-offs
+    t = trusted(str(_trust_repo(tmp_path, target, head)))
+    assert t.roles == {"map": {G1: ["bpo", "tpo"], G2: ["qa"]}, "signoff": ["tpo", "qa"]}
+    (tmp_path / "b").mkdir()
+    assert trusted(str(_trust_repo(tmp_path / "b", {**TRUST_BASE, "approvers": [G1]}, {**TRUST_BASE, "approvers": [G1], "roles": ROLES}))).roles is None  # the PR adds roles
+    (tmp_path / "c").mkdir()
+    assert trusted(str(_trust_repo(tmp_path / "c", None, {**TRUST_BASE, "roles": ROLES}))).roles is None  # no target config
+
+
+def test_roles_in_a_non_root_config_are_refused(tmp_path, git_env, monkeypatch):
+    from ado.config import trusted
+    repo = _trust_repo(tmp_path, TRUST_BASE)
+    other = tmp_path / "elsewhere.json"
+    other.write_text(json.dumps({**TRUST_BASE, "roles": ROLES}))
+    monkeypatch.setenv("ADO_CONFIG", str(other))
+    with pytest.raises(ConfigInvalid, match="not the repo-root ado.config.json"):
+        trusted(str(repo))
