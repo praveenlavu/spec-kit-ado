@@ -1,10 +1,8 @@
-# Catalog submissions (DRAFT)
+# Catalog submissions (filed record)
 
-> **DRAFT for 0.3.0, for the owner to file after publishing.** Nothing here has been run against published
-> URLs: nothing is published yet (the repository is private, `v0.3.0` is not tagged, there is no release, the extension is not published and
-> there is no catalog listing), and no submission has been made. Do not file these while the repo is private. Work through
-> [Go-public checklist](#go-public-checklist) first, then file the three submissions in this order: extension,
-> workflow, bundle. Items marked **TO CONFIRM** need a value or a check that only exists after publishing.
+> **Filed record: this was the DRAFT for 0.3.0, and all three submissions are now merged.** Extension `ado`: github/spec-kit PR 5348 (now 0.3.2). Workflow `ado-lifecycle`: PR 5312 (0.3.1; the 0.3.2 bump, PR 5345, is open). Bundle `ado`: PR 5335, then PR 5346 (0.3.2, merged).
+> The pack below is kept as it was filed at 0.3.0, so its URLs and versions stay at that version; the live catalog entries pin newer tags.
+> The Spec Kit catalogs are for discovery only: users still install from this repository, as the [README](../README.md) says.
 
 Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.
 
