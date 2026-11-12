@@ -126,7 +126,7 @@ Every refusal is a fixed text; no comment text is ever shown. The rule id is in 
 | `not-role` | an approver commented but does not hold the role | someone who holds it signs |
 | `not-approver`, `excluded-author` | not in `approvers`, or the token identity or a kit posting identity | a trusted approver signs |
 | `malformed-newer` | a newer command line by an approver on the gate is malformed (for example a `/reject` with no hash) | post a well-formed line |
-| `edited`, `on-behalf`, `forged` | the comment was edited, written on someone's behalf, or its author is not who authenticated the write | post a new comment |
+| `edited`, `on-behalf`, `forged` | the comment was edited, written on someone's behalf, or its author is not who authenticated the write; an edited `/reject` by the signer still blocks, so it cannot be read as unsaid | post a new comment |
 | `artifact` | what the gate covers cannot be read | see Limits |
 | `open-decisions` | with `bpo` required, a `D<n>` in `Decisions_<id>.md` is still open | a person validates or rejects it: `ado decisions <id> --sync` |
 | `signoff-terminal` | `approval` is not `"comment"` on the target branch | set it there |
@@ -142,7 +142,7 @@ Every refusal is a fixed text; no comment text is ever shown. The rule id is in 
 - A non-holder's `/reject` is ignored by design: only an approver who holds the role can reject its sign-off.
 - A posted request voids a standing approval: a request comment newer than a sign-off makes it stale, which is why `ado approvals request` refuses when
   `signoff-bpo` is already met.
-- A sign-off comment that was edited never counts and a deleted one is missing; who may edit or delete comments is decided by Azure DevOps.
+- A sign-off comment that was edited never counts and a deleted one is missing; who may edit or delete comments is decided by Azure DevOps. A `/reject` the signer edited keeps blocking; a deleted `/reject` cannot be told from one never posted.
 - Rules whose text changed since the business owner approved are still in scope; the request comment shows the current text, not a diff.
 - The workflow `ado-lifecycle` does not wait for sign-offs; `implement` is never blocked by one. The checks are at `ado done`.
 

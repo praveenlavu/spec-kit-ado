@@ -305,6 +305,18 @@ def test_a_later_approval_after_a_reject_counts_and_a_malformed_newer_line_block
     assert run(cfg, ok, "qa", tmp_path)["met"] is True
 
 
+def test_an_edited_reject_by_the_holder_still_blocks_the_older_approval(tmp_path, cfg):
+    h = hash_of("qa", tmp_path, cfg)
+    rej = raw_comment(12, f"/reject signoff-qa {h}: TC-2 fails", T2, author=QA_P, version=2)  # the holder fixed a typo in their own rejection
+    versions = versions_response((1, rej["text"].replace("fails", "fials"), T2), (2, rej["text"], T2))  # the text really changed
+    e = refused(cfg, [sign("qa", tmp_path, cfg), rej], "qa", tmp_path, responses=[versions])
+    assert e.rule == "edited" and "rejection" in str(e)
+    again = sign("qa", tmp_path, cfg, cid=13, date=T3)  # a fresh approval newer than the edited rejection counts, like after any reject
+    assert run(cfg, [sign("qa", tmp_path, cfg), rej, again], "qa", tmp_path, responses=[versions])["comment_id"] == 13
+    stranger = raw_comment(14, f"/reject signoff-qa {h}", T2, author=DEV_P, version=2)  # a non-holder's edited reject stays ignored
+    assert run(cfg, [sign("qa", tmp_path, cfg), stranger], "qa", tmp_path)["met"] is True
+
+
 def test_a_changed_file_after_signing_makes_the_signoff_stale(tmp_path, cfg):
     raws = [sign("qa", tmp_path, cfg), sign("tpo", tmp_path, cfg, cid=12)]
     assert run(cfg, raws, "qa", tmp_path)["met"] and run(cfg, raws, "tpo", tmp_path)["met"]
