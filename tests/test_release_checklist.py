@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DOC = ROOT / "docs" / "release-checklist.md"
 TEXT = DOC.read_text(encoding="utf-8")
 STEPS = [("1", "`ci` on `main`"), ("2", "the contract job"), ("3", "a private GitHub consumer repository"), ("4", "the same cases with `pipelines/*.yml`"),
-         ("5", "acceptance criterion 8"), ("6", "tag, release, move `v0` last")]
+         ("5", "acceptance criterion 8"), ("6", "tag, release, move `v0` last"), ("7", "the role sign-offs")]
 GH = {"run list", "run view", "run watch", "run rerun", "workflow run", "repo create", "repo edit", "repo view", "repo delete", "api", "secret set",
       "secret delete", "pr create", "pr checks", "pr view", "pr close", "issue close", "release create", "release delete", "auth refresh", "auth switch"}
 
@@ -35,8 +35,9 @@ def test_it_says_plainly_what_has_run():
     assert "Owner decision, 2026-11-03" in TEXT and "is skipped for 0.3.0" in TEXT  # the live comment-mode proof
     sheet = section("Record sheet")
     rows = sheet.count("| | NOT RUN |")
-    assert rows == 1 and sheet.count("NOT RUN") == rows + 1  # step 4 (Azure Pipelines), and the sentence above the table
-    assert sheet.count("| PASS |") == 2 and "PASS (filings pending)" in sheet and "run 42441029679" in sheet  # steps 6.1-6.5 and 6.6-6.8: evidence
+    assert rows == 1 and sheet.count("NOT RUN") == rows + 2  # the sentence above the table, and 7b (the live sign-off cases that need a second identity)
+    assert "| 7b role sign-offs" in sheet and "| 7a role sign-offs" in sheet
+    assert sheet.count("| PASS |") == 3 and "PASS (filings pending)" in sheet and "run 42441029679" in sheet  # steps 6.1-6.5 and 6.6-6.8: evidence
     assert "PASS (a to d), SKIPPED (e, f)" in sheet and "run 42431132933" in sheet  # step 3: cases a-d on a hosted runner
     assert sheet.count("PASS (pre-RC)") == 2 and "run 41563615813" in sheet and "run 41562104349" in sheet  # steps 1 and 2: evidence, not assertion
     assert "| SKIPPED |" in sheet  # step 5

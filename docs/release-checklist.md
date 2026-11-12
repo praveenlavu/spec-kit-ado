@@ -402,7 +402,7 @@ first command printed nothing, `v0` did not exist before, and the undo is to del
 
 ## Step 7: the role sign-offs against Azure DevOps (0.4.0)
 
-**Who:** the controller runs the refusals; the **Owner** supplies the second identity and posts the signer comments in the Azure DevOps web UI.
+**Who:** Controller (runs the cases); the Owner supplies the second identity and posts the signer comments in the Azure DevOps web UI.
 
 **What it needs.** The agent's token must not hold "Bypass rules on work item updates", and the signer must be another identity: a sign-off by the token's own
 identity is `excluded-author`. So: a second Azure DevOps user in the smoke project as a Contributor with a PAT (Work Items: Read & Write), whose `ado doctor`
@@ -420,7 +420,16 @@ a Spec dir with `spec.md` and `plan.md`, and `ado qa <id>` for the QA file.
 5. **a fake attachment does not change what `done` records.** Attach a file named `QA_<id>.md` with other text (`ado attach`), then `ado done <id> --plan-out .ado/plan-done.md` and `--apply --expect-plan .ado/plan-done.md`: the plan and the story's history line name the comment ids and the commit SHA of the real tree, and the QA file is not attached.
 6. **the refusals that need no second identity** (run today, with a token that holds the bypass permission): the three rows below.
 
-*Expected:* each result is the rule id and exit code the case names. *Rollback:* none needed; remove the smoke story afterwards.
+```bash
+ado approvals check <id> --gate signoff-qa --offline
+ado approvals check <id> --gate signoff-qa
+ado approvals request <id> --gate signoff-bpo --plan-out .ado/plan-request.md
+ado approvals request <id> --gate signoff-bpo --apply --expect-plan .ado/plan-request.md
+ado done <id> --plan-out .ado/plan-done.md
+ado done <id> --apply --expect-plan .ado/plan-done.md
+```
+
+**Expected:** each result is the rule id and exit code its case names. **Rollback:** none needed; remove the smoke story afterwards.
 
 ## Global rollback
 
