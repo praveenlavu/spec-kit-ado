@@ -11,6 +11,7 @@ command runs it, explains it, and appends it to ledger section 4.
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal.
 - Follow `rules/hitl.md`.
 - A ledger `<dod_path>/DoD_<id>.md` exists (`speckit.ado.pull`). `ado gate` also reads the story's
   `<dod_path>/Decisions_<id>.md` when it exists (see `open_decisions` below).

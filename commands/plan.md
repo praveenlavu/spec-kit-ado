@@ -9,6 +9,7 @@ the plan are written down in ledger section 2 before the command is allowed to f
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal.
 - Follow `rules/hitl.md`.
 - Phase routing follows `rules/routing.md`.
 - A ledger `<dod_path>/DoD_<id>.md` exists for the story (run `speckit.ado.pull <id>`).

@@ -2,6 +2,18 @@
 
 All notable changes are listed here. Versions follow [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md).
 
+## Unreleased
+
+### Added
+
+- **Role modes and sign-offs (opt-in).** A new trust key `roles` (read only from the target branch, like `approvers`) maps identities to `bpo`, `tpo`, `dev` and `qa` (`roles.map`) and lists the sign-offs `ado done` requires (`roles.signoff`). With `roles` absent every output is unchanged. Guide: [docs/roles.md](docs/roles.md), starting with the QA-only recipe.
+- **`ado mode`** picks the role you work as (`.ado/mode.json`; `--clear`, `--require a,b`, `--json`). It steers the prompts only: nothing that enforces reads it. With `roles.map` on the target branch, picking a role needs the token identity to hold it. The 14th command `speckit.ado.mode` (14 commands, was 13) gives each role's playbook; every command carries a one-line role note and `rules/roles.md` states what a role never does.
+- **`ado qa <id>`** creates the QA file `<dod_path>/QA_<id>.md` from a template, once; `ado qa <id> --check` lists `uncovered-ac`, `uncovered-rule` and `malformed-case` (ids and line numbers only, exit 2 when any). Local only.
+- **Sign-off gates `signoff-tpo`, `signoff-qa`, `signoff-bpo`** (separate from the 12 workflow gates): an approver who holds the role comments `/approve signoff-<role> <hash>`, the hash covering the exact bytes signed (the Spec dir except `tasks.md` for `tpo`, the QA file for `qa` and `bpo`). `ado approvals check <id> --gate signoff-<role> [--offline]` checks one; `--offline` needs no token and prints the line to copy. New rule ids `not-role`, `signoff-bypass`, `signoff-unreadable`, `signoff-terminal`, `signoff-trust` and the warning `signoff-one-person`.
+- **`ado done` enforces the required sign-offs** once the ledger is ready, in advisory and strict mode alike (exit 2, nothing sent): its plan and the story's history record each `signoff <role>: comment <id>` and the `bytes: <commit>`. With `bpo` required, an open `D<n>` also holds it. The CI close step waits with a green `awaiting signoff-…` warning instead of failing; a human runs `ado done --apply`.
+- **`ado approvals request <id> --gate signoff-bpo`** previews and, with `--apply --expect-plan FILE`, posts the one comment that asks the business owner to sign: each in-scope rule with its AC ids and QA results, every `D<n>`, the exclusions and the `/approve` and `/reject` lines.
+- **A published "not promised" list** (README and docs/roles.md): the sign-offs do not promise that tests ran, that merged code is what QA saw, that code cannot merge unsigned, that the story cannot reach Done another way, that the mode is honest, that a signer read the file, separation of duties, or anything against approver, bypass-rules or admin rights.
+
 ## 0.3.2 — 2026-11-09
 
 ### Fixed

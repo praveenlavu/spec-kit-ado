@@ -10,6 +10,7 @@ the active state.
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal.
 - Follow `rules/hitl.md`.
 - Phase routing follows `rules/routing.md`.
 - `ado.config.json` exists (run `speckit.ado.setup` first).

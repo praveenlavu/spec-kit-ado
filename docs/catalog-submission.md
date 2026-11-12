@@ -7,7 +7,7 @@
 Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.
 
 **Counts, so the right number goes in the right field.** The catalog entry's `provides.commands` counts the
-**extension commands** registered from `extension.yml`: 13 extension commands (`speckit.ado.*`), 2 hooks. The `ado`
+**extension commands** registered from `extension.yml`: 14 extension commands (`speckit.ado.*`), 2 hooks. The `ado`
 command-line program is a separate thing and has 28 top-level CLI verbs (`ado --help`; `ado doctor`, `ado status` and
 `ado calibrate` are among them); those are not counted in the catalog entry. A doc test pins both numbers to
 `extension.yml` and `ado --help`.
@@ -57,7 +57,7 @@ components from them. The release therefore carries two install-allowed catalogs
 | Documentation URL | `https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.0/README.md` |
 | Changelog URL | `https://github.com/praveenlavu/spec-kit-ado/blob/v0.3.0/CHANGELOG.md` |
 | Required Spec Kit Version | `>=1.2.1` |
-| Number of Commands | `13` |
+| Number of Commands | `14` |
 | Number of Hooks | `2` |
 | Tags | `azure-devops, issue-tracking, hitl, workflow, governance` |
 
@@ -117,7 +117,7 @@ components from them. The release therefore carries two install-allowed catalogs
 
 **Test scenarios:**
 1. Installed the ado CLI with pipx from the v0.3.0 tag
-2. Installed the extension with `specify extension add ado --from <download URL>`; 13 commands and 2 hooks registered (confirm the numbers against `specify extension list`)
+2. Installed the extension with `specify extension add ado --from <download URL>`; 14 commands and 2 hooks registered (confirm the numbers against `specify extension list`)
 3. Ran /speckit.ado.setup and /speckit.ado.pull on a test story
 4. Ran ado push and ado done without --apply and confirmed no writes; applied after review
 5. Ran the unit test suite (no network): <N> passed
@@ -160,7 +160,7 @@ specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/arc
       ]
     },
     "provides": {
-      "commands": 13,
+      "commands": 14,
       "hooks": 2
     },
     "tags": ["azure-devops", "issue-tracking", "hitl", "workflow", "governance"],
@@ -291,7 +291,7 @@ community catalogs are discovery-only, so "None" would fail the submission check
 **Key Features**
 
 ```markdown
-- Installs the ado extension (13 speckit.ado.* commands, 2 optional hooks)
+- Installs the ado extension (14 speckit.ado.* commands, 2 optional hooks)
 - Installs the ado-lifecycle workflow: spec, plan, tasks, push, implement, gate, review, PR (the story closes after merge)
 - Every Azure Boards or PR change in the workflow is a dry-run preview, a gate step that shows the plan file, then an apply step; rejecting any gate aborts the run
 ```
@@ -486,7 +486,7 @@ GitHub no-reply address).
 7. **Clean-project tests,** each in a fresh `specify init` project, on the Spec Kit floor you chose and on the latest:
    the extension (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.0`, then
    `specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.0.zip`;
-   `specify extension list` shows 13 commands and 2 hooks; run `/speckit.ado.setup` and `/speckit.ado.pull` on a test story);
+   `specify extension list` shows 14 commands and 2 hooks; run `/speckit.ado.setup` and `/speckit.ado.pull` on a test story);
    the workflow (add the workflow catalog, `specify workflow add ado-lifecycle --version 0.3.0`, `specify workflow info
    ado-lifecycle`, then `specify workflow run ado-lifecycle -i story_id=<test story>`, rejecting one gate and approving through
    to the PR); the bundle from the artifact (the [bundle README](../bundle/README.md) steps verbatim, then `specify bundle list`).

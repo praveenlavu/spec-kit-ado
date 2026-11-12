@@ -16,6 +16,7 @@ Review reads and reports. It **never edits code, tests, the spec, or ledger sect
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal.
 - Follow `rules/hitl.md`.
 - A ledger `<dod_path>/DoD_<id>.md` with `Spec dir:` set; the branch has commits.
 - Running `speckit.ado.gate` first is recommended; review does not replace it.

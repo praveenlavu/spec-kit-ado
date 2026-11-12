@@ -10,6 +10,7 @@ no ADO changes.
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal. `roles` is a trust key read from the target branch; never edit it for the user.
 - Follow `rules/hitl.md` throughout. In particular: never ask for, accept, or echo a token.
 - Run from the project root (the directory holding `.specify/`).
 

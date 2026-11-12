@@ -10,6 +10,7 @@ approved batch.
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal. A required sign-off never blocks this step.
 - Follow `rules/hitl.md`.
 - In strict mode (`"mode": "strict"` in `ado.config.json`), run `ado strict check <id> --phase implement` first and stop on exit 2, showing its findings and fixes.
 - Phase routing follows `rules/routing.md`.

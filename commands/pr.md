@@ -10,6 +10,7 @@ review results, then opens the PR through `ado pr create` — via `gh` when `rep
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal. Opening the PR needs no sign-off; the role sign-offs are checked at `ado done`.
 - Follow `rules/hitl.md`.
 - A ledger `<dod_path>/DoD_<id>.md`; `speckit.ado.gate` and `speckit.ado.review` have
   logged results in section 4.
