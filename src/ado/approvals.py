@@ -366,7 +366,7 @@ def _order(c):
     return None if when is None else (when, (0, int(cid)) if str(cid).isdigit() else (1, str(cid)))
 
 
-def newest(client, story_id, comments, target, approvers, excluded, tally=None, holders=None):
+def newest(client, story_id, comments, target, approvers, excluded, tally=None, holders=None, edited_reject_blocks=False):
     """The newest VALID command for `target`, by (created time, id), as `{"verb", "target", "hash", "text", "id", "created", "author", "bad_newer"}`,
     else None. Valid = the grammar holds (`parse_command`) and `guard` returns None. An invalid comment is skipped, so a later invalid comment (the
     agent's, an edited or quoted one) never cancels an earlier valid one, while a later VALID `/reject` is the newest and does. Its `hash` is for
@@ -375,7 +375,9 @@ def newest(client, story_id, comments, target, approvers, excluded, tally=None, 
     different well-formed target (`_elsewhere`: `/reject D3.` and `/reject (D3)` count for D3) cannot be told from a retraction typed wrong, so it is counted in `bad_newer` (and in `tally`, also when there is no
     winner): the caller must show that count (fixed text, a number only) next to the verdict, never ignore it.
     `tally` (a dict) is filled with counts only: `bad` (command-looking lines that break the grammar, any author and target), `bad_newer`, `date`
-    (an unreadable creation time) and one count per guard rule; no comment text is ever kept or printed. `holders` is passed to `guard` (see there). An HTTP error from a guard is raised."""
+    (an unreadable creation time) and one count per guard rule; no comment text is ever kept or printed. `holders` is passed to `guard` (see there). An HTTP error from a guard is raised.
+    `edited_reject_blocks` (the sign-off gates): a `/reject` whose only fault is `edited`, by an approver who holds the role, is the newest command and
+    comes back as `{"verb": "reject", "edited": True, ...}`, so an older approval cannot count again just because the signer fixed a typo in their rejection."""
     tally = {} if tally is None else tally
     count = lambda k, n=1: tally.__setitem__(k, tally.get(k, 0) + n)  # noqa: E731
     wanted, found, bads = {str(a).lower() for a in approvers}, [], []
@@ -401,6 +403,9 @@ def newest(client, story_id, comments, target, approvers, excluded, tally=None, 
             out = (key, {**cmd, "id": c["id"], "created": c["date"], "author": c["author"]})
             break
         count(why)
+        if edited_reject_blocks and why == "edited" and cmd["verb"] == "reject":  # `guard` returns `edited` only after the approver and role checks passed
+            out = (key, {**cmd, "id": c["id"], "created": c["date"], "author": c["author"], "edited": True})
+            break
     newer = sum(1 for k in bads if k is None or out is None or k > out[0])
     if newer:
         count("bad_newer", newer)

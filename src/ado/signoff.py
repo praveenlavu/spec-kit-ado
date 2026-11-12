@@ -40,7 +40,7 @@ WHY = {
     "not-role": "an approver commented, but does not hold this role in `roles.map`",
     "not-approver": "a comment was made by someone who is not in `approvers`",
     "excluded-author": "a comment is by the token identity or a kit posting identity, which can never sign",
-    "edited": "a sign-off comment was edited",
+    "edited": "a sign-off comment was edited (an edited rejection by the signer still blocks: it cannot be read as unsaid)",
     "on-behalf": "a sign-off comment was written on someone's behalf (what a rules-bypass write leaves)",
     "forged": "a sign-off comment's author is not the identity that authenticated the write",
     "malformed-newer": "a newer malformed command line by an approver is on the thread",
@@ -177,11 +177,11 @@ def check(client, trust, story_id, role, cfg, repo=".", ci_identity=None):
     except approvals.ApprovalMissing as e:  # (no approvers cannot happen: `roles.signoff` needs an approver who holds the role)
         raise SignoffRefused("signoff-unreadable", str(e)) from None
     found, tally = approvals.cached(found), {}
-    win = approvals.newest(client, story_id, found, gate_id, trust.approvers, skip, tally=tally, holders=holders(trust, role))
+    win = approvals.newest(client, story_id, found, gate_id, trust.approvers, skip, tally=tally, holders=holders(trust, role), edited_reject_blocks=True)
     if win is None:
         rule = next((r for r in _SKIPPED if tally.get(r)), "missing")
     elif win["verb"] == "reject":
-        rule = "rejected"
+        rule = "edited" if win.get("edited") else "rejected"
     elif win["hash"] != h:
         rule = "stale"
     else:
