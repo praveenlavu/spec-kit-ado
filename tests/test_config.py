@@ -981,6 +981,20 @@ def test_roles_validated(tmp_path, roles, where):
         assert secret not in str(e.value), "a value was echoed"
 
 
+def test_a_repeated_identity_in_roles_map_is_a_duplicate_even_with_the_same_spelling(tmp_path, git_env):
+    raw = ('{"organization": "contoso", "project": "Fabrikam", "roles": {"map": {"%s": ["dev"], "%s": ["qa"]}}}' % (G3, G3))  # json.loads alone keeps the last
+    (tmp_path / "ado.config.json").write_text(raw)
+    with pytest.raises(ConfigInvalid) as e:
+        Config.load(start_dir=tmp_path)
+    assert "roles.map entry #2: duplicate of an earlier entry" in str(e.value) and G3 not in str(e.value)
+    repo = _ref_repo(tmp_path / "ref", raw) if (tmp_path / "ref").mkdir() is None else None  # the target-branch read applies the same rule
+    with pytest.raises(ConfigInvalid, match="roles.map entry #2: duplicate"):
+        from ado.config import trusted
+        trusted(repo, "main")
+    (tmp_path / "ado.config.json").write_text('{"organization": "contoso", "project": "Fabrikam", "mode": "strict", "mode": "advisory"}')
+    assert Config.load(start_dir=tmp_path).mode == "advisory"  # a repeated key anywhere else keeps its 0.3.2 meaning: the last wins
+
+
 @pytest.mark.parametrize("approvers, roles, role", [
     ([G1], {"map": {G1: ["tpo"], G2: ["qa"]}, "signoff": ["tpo", "qa"]}, "qa"),  # the qa holder is not an approver
     ([], {"map": {G1: ["qa"]}, "signoff": ["qa"]}, "qa"),  # no approvers at all
