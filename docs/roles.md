@@ -137,7 +137,7 @@ Every refusal is a fixed text; no comment text is ever shown. The rule id is in 
 
 ## Limits
 
-- **Every file in the Spec dir must be UTF-8 text under 1 MiB**, and the directory at most 200 files and 8 MiB, with no link, no hard link and no odd
+- **Every file in the Spec dir must be UTF-8 text under 1 MiB**, and the directory at most 200 files, 8 MiB and 32 folders deep, with no link, no hard link and no odd
   file name. Anything else is `artifact`, and the TPO sign-off is blocked until the directory is fixed. The QA file has the same 1 MiB, UTF-8 and no-link rules. A Spec dir that is empty or holds only `tasks.md` is `artifact` too: there is nothing to sign.
 - A non-holder's `/reject` is ignored by design: only an approver who holds the role can reject its sign-off.
 - A posted request voids a standing approval: a request comment newer than a sign-off makes it stale, which is why `ado approvals request` refuses when
