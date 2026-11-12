@@ -9,6 +9,7 @@ Nothing is written anywhere — not ADO, not the ledger.
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal. It does not read the role or the sign-offs.
 - Follow `rules/hitl.md` (every call here is in the "free" read class).
 - `ado.config.json` exists.
 

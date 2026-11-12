@@ -13,12 +13,12 @@ E_NO_QA = "there is no QA file for this story: run `ado qa <id>` to create it"
 E_READ = "cannot read the QA file (a link, a hard link, outside the dod_path, over 1 MiB or not UTF-8)"
 E_LEDGER = "cannot read the DoD ledger for this story (missing, a link, outside the dod_path, over 1 MiB or not UTF-8)"
 E_SECTION = "the QA file needs exactly one `## QA verification` section"
-NOTE = ("A defect QA finds goes back to the team as `/reject signoff-qa` on the story, naming the failing case ids (for example TC-2); "
+NOTE = ("A defect QA finds goes back to the team as `/reject signoff-qa <hash>: TC-2, TC-5` on the story (the failing case ids after the colon; `ado approvals check <id> --gate signoff-qa --offline` prints the hash); "
         "this check only traces what the cases cover.")
 TEMPLATE = """# QA verification for story {id}
 
 > Written by QA, in QA's own words. Nothing in this file is computed: run `ado qa {id} --check` to see which acceptance criteria and business rules
-> no case covers yet. A defect goes back with `/reject signoff-qa`, naming the failing case ids.
+> no case covers yet. A defect goes back with `/reject signoff-qa <hash>: TC-2, TC-5` (hash from `ado approvals check {id} --gate signoff-qa --offline`).
 
 ## Test plan
 

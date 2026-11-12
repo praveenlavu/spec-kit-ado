@@ -29,7 +29,7 @@ def test_readme_lists_all_commands():
     names = [c["name"] for c in manifest["provides"]["commands"]]
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     missing = [n for n in names if n not in readme]
-    assert len(names) == 13 and not missing, f"README is missing: {missing}"
+    assert len(names) == 14 and not missing, f"README is missing: {missing}"
 
 
 def _slug(heading):
@@ -1582,7 +1582,7 @@ def test_stack_command_documented_everywhere():
     assert "`speckit.ado.stack`" in _flat("README.md")
     log = _flat("CHANGELOG.md")
     assert heading_030_index(log) < log.index("`speckit.ado.stack`") < log.index("## 0.2")
-    assert "13 `speckit.ado.*` commands" in _flat("bundle/README.md") and "12 `speckit.ado" not in _flat("bundle/README.md")
+    assert "14 `speckit.ado.*` commands" in _flat("bundle/README.md") and "12 `speckit.ado" not in _flat("bundle/README.md")
 
 
 # ---- P2-15: boundaries, seed list, two-PR flow, flags/ids/files/exit codes pinned to the code ----
@@ -2409,7 +2409,7 @@ GLOSSARY = [
     ("Strict mode", "strict"), ("Order evidence", "strict"), ("Verification record", "strict"), ("AC fidelity", "strict"),
     ("Override", "strict"), ("Stack profile", "strict"), ("Kit pin", "strict"),
     ("Business rules", "opt-in"), ("Rules file", "opt-in"), ("Rules from:", "opt-in"), ("Rules reviewed:", "opt-in"),
-    ("Workflow", "opt-in"),
+    ("Workflow", "opt-in"), ("Role", "opt-in"), ("Mode", "opt-in"), ("Sign-off", "opt-in"), ("QA file", "opt-in"),
     ("Approver", "team"), ("Approval mode", "opt-in"), ("Unattended", "opt-in"),
     ("Approve and reject commands", "opt-in"), ("Approvals check", "opt-in"), ("Poller", "opt-in"), ("Approval comment", "opt-in"), ("Sync", "opt-in"), ("Done-time cross-check", "opt-in"),
 ]

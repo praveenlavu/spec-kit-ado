@@ -51,6 +51,15 @@ this build the keys, `config.trusted`, the doctor row, the `ado setup --profile 
 `/approve`, `/reject` and `/answer` grammar on the first non-empty line, quoted text ignored, and the guards that make a comment from the agent's token
 identity, a kit posting identity, a non-approver, an edited comment or one carrying `createdOnBehalfOf` count for nothing) exist; `ado decisions <id> --sync` and `ado questions <id> --sync` act on the approvers' comments (local writes, below); with `approval: "comment"` the five ADO applies need an approver's comment too (row below). With `approvers` set, `ado done` (preview and apply) and the CI close step also cross-check the decisions file against the story's comments (`decisions-xcheck-marker|dropped|verdict|truncated|unreachable`): a `validated` or `rejected` line that no approver comment backs, or a `posted:` marker that no kit comment backs, or a line set back to an older posting than the newest one that lists it (the same "newest posting" rule `--sync` and `wait-po-validation` apply), blocks in strict mode and warns in advisory mode, so you never hand-write one. On Azure Repos the target branch's merge types must be limited to "Merge (no fast-forward)" and "Squash" (required: after a rebase or fast-forward merge the pre-merge approvers cannot be read; `ado doctor` cannot check this). Comment mode is refused while the token identity can bypass work item rules, or when that cannot be read. See [docs/configuration.md](../docs/configuration.md#approvers-and-comment-mode-the-recommended-setup) for the setup and residuals.
 
+## Roles and sign-offs: `roles`, `ado mode`
+
+`roles` is a trust key like `approvers`: read only from the target branch, never from a pull request. When it requires a sign-off, `ado done` needs
+an approver's `/approve signoff-tpo <hash>`, `/approve signoff-qa <hash>` or `/approve signoff-bpo <hash>` comment for each required role, written by a person
+who holds that role. The agent will never post a sign-off or a `/reject signoff-<role>`, on anyone's behalf, and never adds an identity to `roles`: when `done`
+refuses with `signoff-<role>`, show the user the line it prints and wait. The one write the agent may offer is `ado approvals request <id> --gate signoff-bpo`,
+a batch verb with the usual preview, yes and `--apply --expect-plan`. `ado mode` records the person's role in `.ado/mode.json`; the file is agent-writable, so it steers
+the prompts only and never grants or removes an approval. `implement` is never blocked by a sign-off. Details: `rules/roles.md`, `docs/roles.md`.
+
 ## How to preview
 
 - **Batch verbs** (`ado push`, `ado done`, `ado pr create`, `ado questions <id> --post`, `ado decisions <id> --post`, `ado branch <id> --link`) are dry-run by default. Run

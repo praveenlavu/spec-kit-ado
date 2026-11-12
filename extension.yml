@@ -62,6 +62,9 @@ provides:
     - name: "speckit.ado.stack"
       file: "commands/stack.md"
       description: "Detect the stack, then find a kit or research a cited draft profile for the human to approve; never installs a kit."
+    - name: "speckit.ado.mode"
+      file: "commands/mode.md"
+      description: "Pick the role you work as (BPO, TPO, Dev or QA) and get that role's playbook; it steers the prompts only."
 
 hooks:
   after_tasks:

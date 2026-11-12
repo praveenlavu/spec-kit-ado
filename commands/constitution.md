@@ -9,6 +9,7 @@ to `.specify/memory/constitution.md`. Existing principles are kept exactly as th
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal.
 - Follow `rules/hitl.md`.
 - The articles to add: `templates/constitution-articles.md`.
 

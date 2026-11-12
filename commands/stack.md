@@ -11,6 +11,7 @@ and writes no ADO data.
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal.
 - Follow `rules/hitl.md` throughout.
 - Run from the project root (the directory holding `.specify/` and `ado.config.json`).
 - A git repository with at least one commit: detection reads the files tracked at `HEAD`.

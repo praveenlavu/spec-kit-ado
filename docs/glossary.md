@@ -47,3 +47,7 @@ approval by a comment on the story, the rule for which comment counts, and the v
 | **Poller** | opt-in | `ado approvals sync <run id> --resume`, the command a human schedules on a local machine so that a paused run continues once an approver has commented. |
 | **Unattended** | opt-in | The `unattended` object on the target branch, with `assume_after_hours` and `approval_requests`, for runs with nobody at a terminal. |
 | **Workflow** | opt-in | `ado-lifecycle`, the Spec Kit workflow that runs the whole lifecycle with a human gate before every ADO write. |
+| **Role** | opt-in | One of `bpo`, `tpo`, `dev`, `qa`, held by an identity in `roles.map` on the target branch (`bsa` is a name for `tpo`). It decides who may sign; see [roles](roles.md). |
+| **Mode** | opt-in | The role the person at the keyboard picked with `ado mode`, kept in `.ado/mode.json`. It steers the prompts only; nothing that enforces reads it. |
+| **Sign-off** | opt-in | An approver's comment `/approve signoff-<role> <hash>` on the story, for the gates `signoff-tpo`, `signoff-qa` and `signoff-bpo`; `ado done` needs every role in `roles.signoff`. The hash covers the exact bytes signed. |
+| **QA file** | opt-in | `<dod_path>/QA_<id>.md`, created once by `ado qa <id>` and written only by QA: a test plan and one line per case. The `qa` and `bpo` sign-offs cover its bytes. |

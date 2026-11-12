@@ -7,7 +7,7 @@ import ado
 
 ROOT = Path(__file__).resolve().parent.parent
 COMMANDS = ["setup", "constitution", "pull", "plan", "tasks", "implement",
-            "push", "gate", "review", "pr", "status", "done", "stack"]
+            "push", "gate", "review", "pr", "status", "done", "stack", "mode"]
 ROUTED = ["pull", "plan", "tasks", "implement"]
 
 
@@ -62,7 +62,7 @@ def test_routed_implement_instructions_bind_verbatim_ac():
     assert "verbatim" in text.split("### 2. Route the implement phase")[1].split("### 3.")[0]
 
 
-def test_thirteen_commands():
+def test_fourteen_commands():
     names = [c["name"] for c in _manifest()["provides"]["commands"]]
     assert sorted(names) == sorted(f"speckit.ado.{c}" for c in COMMANDS)
 

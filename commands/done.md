@@ -11,6 +11,7 @@ checklist is incomplete, and never sets the state if the attachment failed.
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal. A required role sign-off is checked by `ado done` itself, from the story's comments; never post one.
 - Follow `rules/hitl.md`.
 - A ledger `<dod_path>/DoD_<id>.md` exists. The PR is merged (or the team's equivalent).
 - In strict mode run `ado strict check <id> --phase done` first and stop on exit 2 (`ado done` runs the same check itself, preview and apply, and refuses with exit 2, no plan file and no request; the working tree must hold the merged ledger and `Decisions_<id>.md`; an apply stamps `used` on the overrides it relied on, an uncommitted local change: commit the stamped decisions file afterwards): it adds `decision-open` (every decision line needs the PO's

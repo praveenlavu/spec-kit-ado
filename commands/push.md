@@ -10,6 +10,7 @@ tag, so a re-run updates existing Tasks instead of creating duplicates.
 
 ## Prerequisites
 
+- Role: if `ado mode` shows a role, follow that role's playbook in `rules/roles.md`; a role steers this prompt only and never skips a step, an approval or a refusal.
 - Follow `rules/hitl.md`.
 - A ledger `<dod_path>/DoD_<id>.md` with `Spec dir:` set, and `<spec dir>/tasks.md`
   exists (`speckit.ado.tasks`).

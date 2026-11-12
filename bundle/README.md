@@ -2,14 +2,14 @@
 
 Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.
 
-Installs the `ado` Spec Kit extension (13 `speckit.ado.*` commands) and the `ado-lifecycle`
+Installs the `ado` Spec Kit extension (14 `speckit.ado.*` commands) and the `ado-lifecycle`
 workflow, which runs an Azure DevOps story from spec to an open pull request.
 
 ## What it installs
 
 | Component | Id | Version | What it is |
 |---|---|---|---|
-| Extension | `ado` | 0.3.2 | The 13 `speckit.ado.*` commands and 2 optional hooks. |
+| Extension | `ado` | 0.3.2 | The 14 `speckit.ado.*` commands and 2 optional hooks. |
 | Workflow | `ado-lifecycle` | 0.3.2 | The story-to-PR run with a human gate before every Azure Boards or PR change. |
 
 It does **not** install the `ado` command-line program (the extension and the workflow's shell steps call it): install that
