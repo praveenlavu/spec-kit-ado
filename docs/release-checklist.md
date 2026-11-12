@@ -400,6 +400,28 @@ git tag -f v0 v0.3.0 && git push -f origin v0
 *Rollback:* if `v0` existed, move it back to the previous release tag: `git tag -f v0 <previous tag> && git push -f origin v0` (for example `v0.2.0`). If the
 first command printed nothing, `v0` did not exist before, and the undo is to delete it: `git push origin :refs/tags/v0` and `git tag -d v0`.
 
+## Step 7: the role sign-offs against Azure DevOps (0.4.0)
+
+**Who:** the controller runs the refusals; the **Owner** supplies the second identity and posts the signer comments in the Azure DevOps web UI.
+
+**What it needs.** The agent's token must not hold "Bypass rules on work item updates", and the signer must be another identity: a sign-off by the token's own
+identity is `excluded-author`. So: a second Azure DevOps user in the smoke project as a Contributor with a PAT (Work Items: Read & Write), whose `ado doctor`
+`bypass` row is `ok`; and the owner's own account as the signer. `ado.config.json` on the target branch (a local bare `origin` is enough, the trust keys are
+read from `origin/HEAD`): `"approval": "comment"`, `"approvers": ["<signer id>"]`, `"roles": {"map": {"<signer id>": ["qa", "bpo"]}, "signoff": ["qa", "bpo"]}`.
+Find the signer id with `ado comments <id> --author-ids` after the signer has commented once. Use a story of its own, a ledger with section 5 ticked,
+a Spec dir with `spec.md` and `plan.md`, and `ado qa <id>` for the QA file.
+
+**Run, one case at a time (each output is recorded as it came):**
+
+1. **met.** `ado approvals check <id> --gate signoff-qa --offline` prints the line; the signer comments it as the first line in the web UI; `ado approvals check <id> --gate signoff-qa` exits 0.
+2. **stale.** Change one byte of `QA_<id>.md`; the same check exits 2 with `stale`. Restore the byte; it exits 0 again.
+3. **rejected.** The signer comments `/reject signoff-qa <hash>: TC-1`; the check exits 2 with `rejected`. A bare `/reject signoff-qa` is `malformed-newer`.
+4. **the request comment.** `ado approvals request <id> --gate signoff-bpo --plan-out .ado/plan-request.md`, read it, then `--apply --expect-plan .ado/plan-request.md`; open the story in the web UI: the comment lists the rules, AC ids, QA results, decisions and the `/approve` and `/reject` lines. Run it again: it refuses while the sign-off is met.
+5. **a fake attachment does not change what `done` records.** Attach a file named `QA_<id>.md` with other text (`ado attach`), then `ado done <id> --plan-out .ado/plan-done.md` and `--apply --expect-plan .ado/plan-done.md`: the plan and the story's history line name the comment ids and the commit SHA of the real tree, and the QA file is not attached.
+6. **the refusals that need no second identity** (run today, with a token that holds the bypass permission): the three rows below.
+
+*Expected:* each result is the rule id and exit code the case names. *Rollback:* none needed; remove the smoke story afterwards.
+
 ## Global rollback
 
 Use the smallest one that fits. Consumers who pin a SHA or an exact tag are not affected by any of these; tell the ones who pin `@v0` first.
@@ -452,3 +474,5 @@ the exit codes and rule ids seen, and anything that differed from the expected c
 | 6.1 to 6.4 tag the `RC`, bundle, push the tag, make public | tag equals `RC`, `ado-0.3.0.zip: OK`, `PUBLIC` | 2026-11-08: annotated tag `v0.3.0` on `RC` = `fcc41df` (verified, not created by the controller); the bundle rebuilt independently from the tag has sha256 `6e809016a7a0…b6a92f`, equal to the release asset and to `SHA256SUMS`; repository `PUBLIC` with secret scanning, push protection, private vulnerability reporting, fork-PR approval and `main` protection on. | PASS |
 | 6.5 strict-verify (c) and (d) through the shipped file | (c) green, (d) fails with `green-fails` | 2026-11-08, cross-repository `uses: ...ado-strict-verify.yml@v0` with no toolkit token: (c) run 42441029679 green, `strict verify passed.`; (d) run 42441031914 red, `green-fails`. | PASS |
 | 6.6 to 6.8 release, filings, `v0` last | every URL 200, checksum equal, `v0` at `v0.3.0` | 2026-11-08: release `v0.3.0` with `ado-0.3.0.zip` and `SHA256SUMS`; 10 URLs 200; extension archive sha256 `8506838e…db54a` (equal on two downloads); `v0` at `fcc41df`; a consumer at `@v0` with no toolkit token green (run 42440974441); clean-project installs on Spec Kit 1.2.4.dev0: extension (13 commands, 2 hooks), workflow, bundle from the file and by id. Catalog filings not yet made. | PASS (filings pending) |
+| 7a role sign-offs: refusals with a bypass-capable token | `signoff-bypass`, `signoff-terminal`, the offline line | 2026-11-12, toolkit `da4831d`, Python 3.9, smoke story #131, local bare origin: `ado done 131` exit 2 `signoff-bypass`; `ado approvals check 131 --gate signoff-qa` exit 2 `signoff-bypass`; `ado approvals request 131 --gate signoff-bpo` exit 2 `signoff-bypass` (nothing posted); with `approval` unset `ado done 131` exit 2 `signoff-terminal`; `--offline` printed `/approve signoff-qa <hash>`, exit 2, `verified: false`. | PASS |
+| 7b role sign-offs: met, stale, rejected, request comment, fake attachment | per step 7, cases 1 to 5 | Not run: needs a second Azure DevOps identity (the token of the smoke project holds the bypass permission, and a sign-off by the token identity is `excluded-author`). Covered by tests with fixtures only; not seen against Azure DevOps. | NOT RUN |
