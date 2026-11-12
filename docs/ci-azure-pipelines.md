@@ -148,7 +148,7 @@ step also logs the warning `spec-kit-ado gate could not run (see the PR comment 
   comment, `transitionState` and, with `closeStory: true`, the close. Mention other work
   items without the `AB#` prefix.
 - **Pin the toolkit code.** Set the toolkit repository resource's `ref` to a release tag
-  (for example `refs/tags/v0.3.2`) rather than the moving `refs/tags/v0`, so the code
+  (for example `refs/tags/v0.4.0`) rather than the moving `refs/tags/v0`, so the code
   that handles the token is fixed and reviewed.
 - **Bash.** The scripts need bash 4.4 or later (see Agent requirements). They are
   exercised only in CI, not by this repo's tests.

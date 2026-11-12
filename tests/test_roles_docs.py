@@ -126,7 +126,7 @@ def test_glossary_agents_hitl_configuration_and_changelog():
     assert "`signoff-" in hitl and "rules/roles.md" in hitl and "never post" in hitl
     assert "(roles.md)" in _flat("docs/configuration.md")
     log = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert log.split("\n## ")[1].startswith("Unreleased"), "the newest changelog section is Unreleased"
+    assert log.split("\n## ")[1].startswith("0.4.0"), "the newest changelog section is 0.4.0"
     unreleased = " ".join(log.split("\n## ")[1].split())
     for needle in ("`roles`", "`ado mode`", "`ado qa <id>`", "`speckit.ado.mode`", "`signoff-tpo`", "`signoff-qa`", "`signoff-bpo`", "`ado approvals request <id>",
                    "`ado done`", "14 commands"):

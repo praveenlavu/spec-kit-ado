@@ -2,7 +2,7 @@
 
 Four reusable workflows (the fourth is optional and secret-free) in this repo's `.github/workflows/` can be called from a
 GitHub repository whose work is tracked in Azure Boards. Reference them at the moving
-`v0` tag (see [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md)) or at a release tag such as `v0.3.2`.
+`v0` tag (see [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md)) or at a release tag such as `v0.4.0`.
 
 | Workflow | Call it on | What it does |
 |---|---|---|
@@ -150,7 +150,7 @@ Secrets: `ADO_TOKEN` (required), `TOOLKIT_READ_TOKEN` (optional; falls back to
 - **Link-on-merge acts on every `AB#<n>`** in the PR title and body: each one gets the
   comment, `transition-state` and, with `close-story: true`, the close. Mention other work
   items without the `AB#` prefix.
-- **Pin the toolkit code.** Pinning `uses: …@v0.3.2` does not pin the CLI the workflows
+- **Pin the toolkit code.** Pinning `uses: …@v0.4.0` does not pin the CLI the workflows
   install: that comes from `toolkit-ref` (default: the moving `v0` tag). Set
   `toolkit-ref` to a release tag or commit SHA so the code that handles `ADO_TOKEN` is
   fixed and reviewed.

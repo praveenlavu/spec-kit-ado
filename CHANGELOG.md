@@ -2,7 +2,7 @@
 
 All notable changes are listed here. Versions follow [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md).
 
-## Unreleased
+## 0.4.0 — 2026-11-12
 
 ### Added
 

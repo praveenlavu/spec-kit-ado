@@ -585,12 +585,12 @@ def test_readme_has_upgrade_section_from_0_2_0():
     raw = (ROOT / "README.md").read_text(encoding="utf-8")
     assert "## Upgrading from 0.2.0" in raw and raw.index("## Upgrading from 0.2.0") < raw.index("## Upgrading from 0.1.1")
     sec = " ".join(raw.split("## Upgrading from 0.2.0", 1)[1].split("\n## ", 1)[0].split())
-    for needle in ("Advisory-mode additions in 0.3.0", "eighteen such changes", "all opt-in", "`doctor`", "`status`", "Spec Kit 1.2.1 or later", "`ado` CLI 0.3.0 or later",
+    for needle in ("Advisory-mode additions in 0.3.0", "eighteen such changes", "all opt-in", "`doctor`", "`status`", "Spec Kit 1.2.1 or later", "`ado` CLI 0.4.0 or later",
                    "a symlink, a file that is not a regular file and a file over 5 MiB", "`done --base REF`", "(`ADO_CONFIG`, `config-path`)", "a dangling `origin/HEAD`",
                    "terminal-mode run on a checkout whose `origin/HEAD` dangles stops at its first `check-*` step", "`ado pr create <id> --check-committed`", "` · via:`",
                    "`[spec-kit-ado:decisions]` comment", "`specify extension add` refuses the 0.3.0 extension", "`config-target` and `approvers` rows", "no row for symlinked or oversized files",
-                   "`ado doctor` after upgrading", "pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2",
-                   "specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.2.zip", "toolkit-ref: v0.3.2",
+                   "`ado doctor` after upgrading", "pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.4.0",
+                   "specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.4.0.zip", "toolkit-ref: v0.4.0",
                    "without the bypass-rules permission, never as an approver"):
         assert needle in sec, needle
     assert "a 0.3.0 upgrade section is written at release prep" not in raw
@@ -1267,7 +1267,7 @@ def test_cli_version_requirement_and_release_bump_documented():
         text = _flat(doc)
         assert "reports 0.2.0" not in text and "release bump" not in text and "Release checklist for 0.3.0" not in text, doc
     wf = _flat("workflows/ado-lifecycle/README.md")
-    assert "The `ado` CLI 0.3.0 or later on `PATH`" in wf and "pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2" in wf
+    assert "The `ado` CLI 0.3.0 or later on `PATH`" in wf and "pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.4.0" in wf
 
 
 def test_stack_detect_documented_read_only_with_fixed_texts():
@@ -2747,7 +2747,7 @@ def test_calibrate_doc_pins():
 # ---- P4-17: Azure-only positioning, tracker boundary, install commands, submission pack ----
 AZURE_ONLY = "Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported."
 # The pack is written for the release target; the version bump itself is release prep.
-TARGET = "0.3.2"  # the current release; docs/catalog-submission.md is the filed 0.3.0 pack (PACK_TARGET)
+TARGET = "0.4.0"  # the current release; docs/catalog-submission.md is the filed 0.3.0 pack (PACK_TARGET)
 PACK_TARGET = "0.3.0"
 _INSTALL_PROGRAMS = ("pipx", "uv", "uvx", "specify", "curl")
 

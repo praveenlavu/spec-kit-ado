@@ -184,7 +184,7 @@ The workflow is the same file in both modes:
 - Spec Kit `>=1.2.1` and a project initialized with any integration.
 - The `ado` CLI 0.3.0 or later on `PATH` (the new steps need strict mode and `ado decisions --post --if-any`; with a 0.2.0 CLI
   `decisions-preview` fails on the unknown flag), and the extension, connected with `ado setup`
-  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2`).
+  (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.4.0`).
 - `git`; `gh` only when the PR goes to GitHub.
 
 The shell steps run `ado` with your token and privileges. Read them in
@@ -196,7 +196,7 @@ Install it with the extension through the `ado` bundle (see the
 [bundle README](https://github.com/praveenlavu/spec-kit-ado/blob/main/bundle/README.md)), or on its own:
 
 ```bash
-specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.2/catalog/workflows.json --name ado
+specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.4.0/catalog/workflows.json --name ado
 specify workflow add ado-lifecycle
 ```
 
