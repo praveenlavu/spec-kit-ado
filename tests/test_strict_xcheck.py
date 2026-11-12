@@ -363,10 +363,10 @@ def test_done_reads_approvers_from_the_given_base_and_refuses_what_it_cannot_tru
     _dec_env(tmp_path, monkeypatch, md, raws, base_seen=bases)
     monkeypatch.setattr(m.Config, "load_from_ref", classmethod(lambda cls, ref, repo=".": None))  # the target has no config of its own
     _ledger(tmp_path)
-    assert m.main(["done", "1001", "--base", base]) == 0 and bases == [base]
+    assert m.main(["done", "1001", "--base", base]) == 0 and bases == [base, base]  # the cross-check and the sign-off gate each read the target
     capsys.readouterr()
     assert m.main(["done", "1001", "--base", ""]) == 2  # an empty base must not fall back to origin/HEAD, the merged branch
-    assert "--base" in capsys.readouterr().err and bases == [base]
+    assert "--base" in capsys.readouterr().err and bases == [base, base]  # (the empty-base run read nothing more)
     _dec_env(tmp_path, monkeypatch, md, raws, approvers=ConfigInvalid("the target config is unreadable"))
     assert m.main(["done", "1001", "--apply"]) == 2  # an unreadable target config refuses; nothing is sent
     assert "unreadable" in capsys.readouterr().err

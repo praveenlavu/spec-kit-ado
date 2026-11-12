@@ -1267,6 +1267,47 @@ def test_link_on_merge_refusal_with_hostile_rule_ids_stays_one_line_of_ids(tmp_p
     assert ids == ["errorpwnvsotaskcompleteresultSucceeded", "x" * 40, "5", "31mbidi"] and not re.search(r"[^\x20-\x7e]", line), repr(line)
 
 
+WARN_PREFIX = {"github": "::warning::", "azure": "##vso[task.logissue type=warning]"}
+
+
+def _signoff_doc(*rules):
+    return {"phase": "done", "mode": "advisory", "ok": False, "findings": [{"rule": r, "fix": "HOSTILE-DETAIL"} for r in rules], "overrides_used": []}
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_a_missing_signoff_is_awaiting_not_a_failure(tmp_path, path, shell_flags):
+    family = "azure" if path.parent.name == "pipelines" else "github"
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path, doc=_signoff_doc("signoff-bpo")), ids="7 8")
+    assert rc == 0, out  # the job stays green
+    lines = [l for l in out.splitlines() if "awaiting" in l]
+    assert len(lines) == 2 and lines[0].startswith(f"{WARN_PREFIX[family]}7: awaiting signoff-bpo - a human closes the story with ado done 7") and "8: awaiting signoff-bpo" in lines[1], out
+    assert "strict done refused" not in out and "could not evaluate" not in out and "HOSTILE-DETAIL" not in out
+    assert not any("--apply" in c for c in _calls(tmp_path))  # nothing attached, nothing closed
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_awaiting_story_is_not_transitioned_either(tmp_path, path, shell_flags):
+    # a story closed by hand must not be moved back to `transitionState`, and a transition to the done state must not close it without its sign-offs
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path, doc=_signoff_doc("signoff-bpo")), state="Resolved")
+    assert rc == 0 and "awaiting signoff-bpo" in out, out
+    assert not [c for c in _calls(tmp_path) if c.startswith("update")], _calls(tmp_path)
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+def test_link_on_merge_awaiting_names_every_missing_role(tmp_path, path, shell_flags):
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path, doc=_signoff_doc("signoff-tpo", "signoff-qa", "signoff-bpo")))
+    assert rc == 0 and "7: awaiting signoff-tpo signoff-qa signoff-bpo - " in out, out
+
+
+@pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
+@pytest.mark.parametrize("rules", [("signoff-bypass",), ("signoff-unreadable",), ("signoff-terminal",), ("signoff-trust",), ("signoff-bpo", "signoff-bypass"),
+                                   ("signoff-bpo", "decisions-xcheck-verdict"), ("signoff-bpo\n::error::x",)])
+def test_link_on_merge_only_a_pure_awaiting_list_is_awaiting(tmp_path, path, rules, shell_flags):
+    # a refusal of the whole gate (bypass token, unreadable thread, terminal mode) or any other rule is the strict refusal: red
+    rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path, doc=_signoff_doc(*rules)))
+    assert rc == 1 and "strict done refused" in out and "awaiting" not in out, out
+
+
 @pytest.mark.parametrize("path", LINK_FILES, ids=["github", "azure"])
 def test_link_on_merge_a_result_with_ready_is_never_a_refusal(tmp_path, path, shell_flags):
     rc, out = _link_run(tmp_path, path, _refused_ado(tmp_path, doc={"ready": False, "findings": [{"rule": "x"}]}, plan_rc=1))
@@ -1761,7 +1802,7 @@ def test_azure_link_on_merge_refuses_to_close_when_the_pre_merge_target_cannot_b
     done = [c for c in calls if c.startswith("done 7")]
     if refused:
         assert rc == 1 and not done, (out, calls)
-        assert "##vso[task.logissue type=error]7: close refused: approvers, approval, unattended or mode changed in the last 50 commits" in out and "ado done 7 locally" in out
+        assert "##vso[task.logissue type=error]7: close refused: approvers, approval, unattended, roles or mode changed in the last 50 commits" in out and "ado done 7 locally" in out
     else:
         assert rc == 0 and len(done) == 2 and "close refused" not in out, (out, calls)
         assert all(c.endswith(f"--base {parents[0]}") for c in done), (done, parents)  # the first parent: the real target tip for a merge commit and a squash
@@ -1802,7 +1843,7 @@ def test_azure_a_pr_that_only_sets_advisory_mode_is_refused_too(tmp_path, monkey
     # `mode` is read from the target as well: a PR that keeps `approvers` but sets `mode: advisory` would turn the blocking cross-check into a warning
     _topo(tmp_path, monkeypatch, kind, True, tgt=STRICT_CFG, pr=ADVISORY_CFG)
     rc, out, calls = _az_close(tmp_path, shell_flags)
-    assert rc == 1 and "close refused: approvers, approval, unattended or mode changed" in out and not [c for c in calls if c.startswith("done 7")], out
+    assert rc == 1 and "close refused: approvers, approval, unattended, roles or mode changed" in out and not [c for c in calls if c.startswith("done 7")], out
     _topo_dir = tmp_path / "ctl"
     _topo_dir.mkdir()
     _topo(_topo_dir, monkeypatch, kind, False, tgt=STRICT_CFG, pr=ADVISORY_CFG)  # the same repo without that change closes

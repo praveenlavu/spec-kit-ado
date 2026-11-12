@@ -66,7 +66,8 @@ def render_plan(work_item_id, chk, config, work_item=None, decisions=None):
             + "".join(f"- {_cell(u)}\n" for u in chk["unticked"]))
 
 
-def apply(client, work_item_id, ledger_path, work_item=None, decisions=None):
+def apply(client, work_item_id, ledger_path, work_item=None, decisions=None, note=None):
+    """`note`: a history line recorded with the state change (the sign-offs it relied on); nothing is recorded for a story already in done_state."""
     done_state = client.config.done_state
     in_done = _status(work_item, "", done_state)[0]
     files = [p for p in (ledger_path, decisions) if p and not _has(work_item, Path(p).name)]  # attached by name -> skipped
@@ -77,7 +78,7 @@ def apply(client, work_item_id, ledger_path, work_item=None, decisions=None):
     if res["failed"]:  # never Done without its ledger attached
         return {**res, "state": None}
     try:
-        workitems.update(client, work_item_id, state=done_state)
+        workitems.update(client, work_item_id, state=done_state, fields={"System.History": note} if note else None)
     except AdoError as e:  # keep the attach result: it already happened
         return {**res, "state": None, "error": str(e)}
     return {**res, "state": done_state}

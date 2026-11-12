@@ -2589,7 +2589,7 @@ def test_done_time_cross_check_is_documented():
     assert "non-approver identity (the agent token" in _flat("src/ado/strict.py") and "first 64 characters" in log
     assert "configuration.md), Without" not in _flat("docs/business-rules-reference.md")
     # fix round 2: `mode` is guarded too, the backstop's two bypasses and the invisible-prefix limits are named, the merge-type limit is the control
-    assert "`approvers`, `approval`, `unattended` or `mode`" in cfg and "or mode changed in the last 50 commits" in cfg and "shallow" in cfg
+    assert "`approvers`, `approval`, `unattended`, `roles` or `mode`" in cfg and "or mode changed in the last 50 commits" in cfg and "shallow" in cfg
     assert "Known bypasses of the backstop" in cfg and "Padding" in cfg and "Rebase and fast-forward" in cfg and "a backstop, not the control" in cfg
     assert "padding" in ci_az and "backstop" in ci_az and "backstop" in azr and "the merge-type limit is the control" in azr
     assert "Hangul fillers" in cfg and "variation-selector" in cfg and "first 64 characters" in cfg and "variation-selector" in log

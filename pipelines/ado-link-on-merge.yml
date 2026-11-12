@@ -49,12 +49,18 @@ steps:
           return 1
         fi
         if [ "$trust_moved" = true ]; then
-          echo "##vso[task.logissue type=error]$id: close refused: approvers, approval, unattended or mode changed in the last 50 commits of a one-parent history, or the checkout is shallow, so the target branch's approvers cannot be established (a rebase or fast-forward merge cannot be told from a squash): a human runs ado done $id locally"
+          echo "##vso[task.logissue type=error]$id: close refused: approvers, approval, unattended, roles or mode changed in the last 50 commits of a one-parent history, or the checkout is shallow, so the target branch's approvers cannot be established (a rebase or fast-forward merge cannot be told from a squash): a human runs ado done $id locally"
           refused=true; story_refused=true  # a refused story is not transitioned either
           return 1
         fi
         # Dry run first: only a genuinely not-ready ledger is a quiet info line.
         ado "done" "$id" --plan-out "${AGENT_TEMPDIRECTORY}/plan_${id}.md" --base "$base_sha" > "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2> "${AGENT_TEMPDIRECTORY}/done_${id}.err" || true
+        # A sign-off still missing (rule ids `signoff-bpo|tpo|qa` and nothing else) is not a refusal: the story stays open and a human runs `ado done` once they are in.
+        if aw=$(python3 -I -c 'import json,re,sys;r=json.load(open(sys.argv[1]));assert "ready" not in r;x=[str(f["rule"]) for f in r["findings"][:20]];assert x and all(re.fullmatch("signoff-(bpo|tpo|qa)",i) for i in x);print(" ".join(x))' "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2>/dev/null); then
+          echo "##vso[task.logissue type=warning]$id: awaiting $aw - a human closes the story with ado done $id once they are in"
+          story_refused=true  # not closed, so not transitioned either (a Done story must not be moved back); the job stays green
+          return 1
+        fi
         # A strict refusal (exit 2, a findings JSON without `ready` on stdout) is not an evaluation failure: report its rule ids, never its text, and fail the build at the end.
         if rules=$(python3 -I -c 'import json,re,sys;r=json.load(open(sys.argv[1]));assert "ready" not in r;print(" ".join(re.sub("[^A-Za-z0-9_-]","",str(x["rule"]))[:40] for x in r["findings"][:20]) or "none")' "${AGENT_TEMPDIRECTORY}/done_${id}.json" 2>/dev/null); then
           echo "##vso[task.logissue type=error]$id: strict done refused: $rules"
@@ -102,7 +108,7 @@ steps:
       [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" != true ] || trust_moved=true
       if [ "$(git rev-list --parents -n 1 HEAD 2>/dev/null | wc -w)" -eq 2 ]; then
         n=$(for c in $(git rev-list --first-parent -n 50 HEAD 2>/dev/null); do
-          { git show "$c:ado.config.json" 2>/dev/null || true; } | python3 -I -c 'import json,sys;t=sys.stdin.buffer.read();d=json.loads(t.decode("utf-8")) if t.strip() else None;print(json.dumps({k: d.get(k) for k in ("approvers", "approval", "unattended", "mode")}, sort_keys=True) if isinstance(d, dict) else "absent")' 2>/dev/null || echo invalid
+          { git show "$c:ado.config.json" 2>/dev/null || true; } | python3 -I -c 'import json,sys;t=sys.stdin.buffer.read();d=json.loads(t.decode("utf-8")) if t.strip() else None;print(json.dumps({k: d.get(k) for k in ("approvers", "approval", "unattended", "roles", "mode")}, sort_keys=True) if isinstance(d, dict) else "absent")' 2>/dev/null || echo invalid
         done | sort -u | wc -l)
         [ "$((n))" = 1 ] || trust_moved=true
       fi
