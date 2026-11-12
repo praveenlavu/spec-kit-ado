@@ -5,7 +5,7 @@ Turn it on when a story must not close until named people have said so: the test
 business owner (`bpo`).
 
 - A **role** is `bpo`, `tpo`, `dev` or `qa`. `ado mode` records which one the person at the keyboard works as; it steers the prompts only. `bsa` is the same
-  role as `tpo` (a name, not a fifth role), and `dev` is a role id only: it has no sign-off and no playbook of its own.
+  role as `tpo` (a name in these docs, not a fifth role: `ado mode` and `roles.map` accept `tpo` only and refuse `bsa`), and `dev` is a role id only: it has no sign-off and no playbook of its own.
 - A **sign-off** is an approver's comment on the story, `/approve signoff-<role> <hash>`, where the hash covers the exact bytes signed. A person with the
   web UI signs, no token and no CLI. The gates are `signoff-tpo`, `signoff-qa` and `signoff-bpo`; they are separate from the 12 workflow gates.
 - `ado done` refuses to close the story until every required sign-off is met on the bytes now on disk.
@@ -108,7 +108,7 @@ what QA wrote, so re-running a check or a gate never changes it. The QA bytes ar
 - Nothing is attached for them. The plan lists `signoff <role>: comment <id>` per role and `bytes: <commit>` (with a note when the tree has uncommitted
   changes), and the story's history records the same line.
 - `--base` is the pull request's target branch and `origin/HEAD` the default branch; when both are strict they must agree on `roles`, `approvers` and
-  `approval`, else `done` refuses (`signoff-trust` for `roles`; a difference in `approvers` or `approval` is refused by the cross-check before it): close the story without `--base`.
+  `approval`, else `done` refuses (`signoff-trust` for a difference in `roles` or `approval`; a difference in `approvers` is refused by the cross-check before it): close the story without `--base`.
 - In CI the close step never closes a story that is waiting on a person: it prints `awaiting signoff-bpo` (or the roles named) as a green
   warning, exit 0, whenever every refusal is a per-role one (missing, `stale`, `rejected`, `not-role`, `edited`, `artifact`, `open-decisions` and the like), and a
   human runs `ado done --apply` once they are in. `signoff-bypass`, `signoff-unreadable`, `signoff-terminal` and `signoff-trust` stay a red failure, as does
@@ -132,7 +132,7 @@ Every refusal is a fixed text; no comment text is ever shown. The rule id is in 
 | `signoff-terminal` | `approval` is not `"comment"` on the target branch | set it there |
 | `signoff-bypass` | the token holds the "Bypass rules on work item updates" permission (or that could not be read), so comment mode cannot be trusted | use a token without that permission |
 | `signoff-unreadable` | the story's comments could not be read in full | retry; nothing is guessed |
-| `signoff-trust` | `--base` and `origin/HEAD` differ in `roles` (both are strict) | close the story without `--base`. A difference in `approvers` or `approval` is refused earlier by the cross-check every strict `done` runs (exit 2, an error text, not a rule id) |
+| `signoff-trust` | `--base` and `origin/HEAD` differ in `roles` or `approval` (both are strict) | close the story without `--base`. A difference in `approvers` is refused earlier by the cross-check every strict `done` runs (exit 2, an error text, not a rule id); a difference in `approval` is `signoff-trust` too |
 | `signoff-one-person` | one identity gave two or more sign-offs | a warning only |
 
 ## Limits
