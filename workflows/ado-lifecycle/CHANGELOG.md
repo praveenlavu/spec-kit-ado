@@ -4,6 +4,10 @@ Changes to the `ado-lifecycle` workflow. The workflow is versioned with the `ado
 the full project history is in the
 [repository CHANGELOG](https://github.com/praveenlavu/spec-kit-ado/blob/main/CHANGELOG.md).
 
+## 0.4.0 — 2026-11-12
+
+- Version string only; no step, input or gate changed. The release adds role sign-offs to the `ado` CLI and extension (`ado mode`, `ado qa`, the `signoff-*` gates checked by `ado done`); the workflow does not wait for sign-offs.
+
 ## 0.3.2 — 2026-11-09
 
 - Version string only; no step, input or gate changed. The release fixes the `ado` CLI behind the `pr-loop` steps: the PR plan now names the head commit in every approval mode, so a commit added while the run is paused at `approve-pr` makes the apply refuse (it ends the run FAILED: start a new run). Use the CLI at v0.3.2 (`pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2`).

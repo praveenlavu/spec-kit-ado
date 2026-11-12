@@ -3,7 +3,7 @@ schema_version: "1.0"
 extension:
   id: "ado"
   name: "Spec Kit for Azure DevOps — human-gated lifecycle"
-  version: "0.3.2"
+  version: "0.4.0"
   description: "Azure DevOps story to Done through Spec Kit, with a human sign-off before every board change."
   author: "praveenlavu"
   repository: "https://github.com/praveenlavu/spec-kit-ado"
@@ -14,7 +14,7 @@ requires:
   speckit_version: ">=1.2.1"
   tools:
     - name: "ado"
-      version: ">=0.3.0"
+      version: ">=0.4.0"
       required: true
     - name: "git"
       required: true

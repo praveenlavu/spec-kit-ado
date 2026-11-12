@@ -17,11 +17,11 @@ RAW = f"https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v{V}"
 # the tests below require the code, manifests, catalogs and the pack's tool floor to agree on DOC_V.
 RELEASE_PREP_PENDING = False
 PREV_V = "0.2.0"  # the only code version accepted while RELEASE_PREP_PENDING is True
-DOC_V = "0.3.2"  # the current release
+DOC_V = "0.4.0"  # the current release
 DOC_RAW = f"https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v{DOC_V}"
 PACK_V = "0.3.0"  # docs/catalog-submission.md is the filed 0.3.0 pack: its URLs and versions stay at the version that was filed
 PACK_RAW = f"https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v{PACK_V}"
-FLOOR_V = "0.3.0"  # the extension still needs only ado >= 0.3.0
+FLOOR_V = "0.4.0"  # the extension needs ado >= 0.4.0 (speckit.ado.mode calls `ado mode` and `ado qa`)
 
 
 def _yaml(path):
@@ -39,7 +39,7 @@ def test_workflow_folder_has_readme_license_changelog():
     assert "story_id" in readme and "integration" in readme
     assert f"{REPO}/blob/main/README.md" in readme
     changelog = (wf_dir / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert re.findall(r"^## (\d+\.\d+\.\d+)", changelog, re.M) == [V] + [v for v in ("0.3.1", "0.3.0", "0.2.0", "0.1.1", "0.1.0") if v != V]  # newest first; V is the current version
+    assert re.findall(r"^## (\d+\.\d+\.\d+)", changelog, re.M) == [V] + [v for v in ("0.3.2", "0.3.1", "0.3.0", "0.2.0", "0.1.1", "0.1.0") if v != V]  # newest first; V is the current version
 
 
 def test_workflow_readme_names_every_gate():
@@ -109,7 +109,7 @@ def test_submission_versions_match_the_real_versions():
     text = (ROOT / "docs/catalog-submission.md").read_text(encoding="utf-8")
     ext = _yaml("extension.yml")
     allowed_specs = {ext["requires"]["speckit_version"]} | {
-        t["version"] for t in ext["requires"]["tools"] if "version" in t} | {">=3.9"} | ({f">={DOC_V}"} if RELEASE_PREP_PENDING else set())
+        t["version"] for t in ext["requires"]["tools"] if "version" in t} | {">=3.9", f">={PACK_V}"} | ({f">={DOC_V}"} if RELEASE_PREP_PENDING else set())  # the pack keeps the CLI floor it was filed with
     # Only the field tables and JSON blocks: Testing Details are free text the owner fills in
     # (e.g. "Spec Kit 1.2.4").
     fields = [ln for ln in text.splitlines() if ln.startswith("|")]
@@ -167,7 +167,7 @@ def test_release_prep_state_is_consistent():
     else:
         # Release prep done: a version bump to anything but DOC_V, a missed file or a forgotten tool floor fails here.
         assert set(versions.values()) == {DOC_V}, versions
-        assert _manifest_floor() == f">={FLOOR_V}" and pack == _manifest_floor()
+        assert _manifest_floor() == f">={FLOOR_V}" and pack == ">=0.3.0"  # the pack is the filed 0.3.0 record: it keeps the floor that was filed
         assert PREV_V not in (ROOT / "bundle/README.md").read_text(encoding="utf-8")  # drop the "ado-0.2.0.zip today" sentence
 
 
@@ -243,14 +243,14 @@ def test_docs_carry_the_spec_kit_floor_and_the_v0_3_0_install_tags():
               "workflows/ado-lifecycle/README.md": "Spec Kit `>=1.2.1` and a project initialized"}
     for doc, needle in floors.items():
         assert needle in _flat(doc), doc
-    assert "`ado --version` — required, `>= 0.3.0`" in _flat("commands/setup.md")
-    tags = {"AGENTS.md": ("@v0.3.2", 2), "commands/setup.md": ("@v0.3.2", 1), "docs/ci-github.md": ("v0.3.2", 2), "docs/ci-azure-pipelines.md": ("refs/tags/v0.3.2", 1),
-            "VERSIONING.md": ("@v0.3.2", 1), "workflows/ado-lifecycle/README.md": ("@v0.3.2", 1)}
+    assert "`ado --version` — required, `>= 0.4.0`" in _flat("commands/setup.md")
+    tags = {"AGENTS.md": ("@v0.4.0", 2), "commands/setup.md": ("@v0.4.0", 1), "docs/ci-github.md": ("v0.4.0", 2), "docs/ci-azure-pipelines.md": ("refs/tags/v0.4.0", 1),
+            "VERSIONING.md": ("@v0.4.0", 1), "workflows/ado-lifecycle/README.md": ("@v0.4.0", 1)}
     for doc, (needle, n) in tags.items():
         text = (ROOT / doc).read_text(encoding="utf-8")
         assert text.count(needle) == n, (doc, needle)
         assert "v0.2.0" not in text, doc
-    assert "archive/refs/tags/v0.3.2.zip" in (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert "archive/refs/tags/v0.4.0.zip" in (ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
 
 def test_post_flip_removal_list_names_the_quickstart_paragraph():

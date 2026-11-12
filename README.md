@@ -75,7 +75,7 @@ On Windows, use WSL. On macOS and Linux it works directly.
 **1. Install the `ado` command.**
 
 ```bash
-pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2
+pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.4.0
 ```
 
 No `pipx`? Run `python3 -m pip install --user pipx && python3 -m pipx ensurepath`, then open a new terminal. `uv tool install` works too.
@@ -83,7 +83,7 @@ No `pipx`? Run `python3 -m pip install --user pipx && python3 -m pipx ensurepath
 **2. Add the extension to your Spec Kit project** (run this in the project folder).
 
 ```bash
-specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.2.zip
+specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.4.0.zip
 ```
 
 **3. Connect to Azure DevOps.** Run this in **your own terminal**, not in the agent chat (in Claude Code, type `! ado setup --profile starter`).
@@ -233,24 +233,24 @@ There is no PyPI package. The project is listed in the Spec Kit community catalo
 
 ```bash
 # 1. The ado CLI (stdlib only)
-pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2
-# or: uv tool install git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2
+pipx install git+https://github.com/praveenlavu/spec-kit-ado@v0.4.0
+# or: uv tool install git+https://github.com/praveenlavu/spec-kit-ado@v0.4.0
 
 # 2. The extension, in your Spec Kit project
-specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.2.zip
+specify extension add ado --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.4.0.zip
 ```
 
 ### Install the bundle (workflow + extension)
 
 ```bash
-specify extension catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.2/catalog/extensions.json --name ado --install-allowed
-specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.3.2/catalog/workflows.json --name ado
-curl -L -o ado-0.3.2.zip https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.3.2/ado-0.3.2.zip
-specify bundle install ./ado-0.3.2.zip
+specify extension catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.4.0/catalog/extensions.json --name ado --install-allowed
+specify workflow catalog add https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/v0.4.0/catalog/workflows.json --name ado
+curl -L -o ado-0.4.0.zip https://github.com/praveenlavu/spec-kit-ado/releases/download/v0.4.0/ado-0.4.0.zip
+specify bundle install ./ado-0.4.0.zip
 ```
 
 Install-allowed catalogs install what they list without the untrusted-source prompt (workflow
-catalogs always are); these list only `ado` and `ado-lifecycle` from the `v0.3.2` tag, so read
+catalogs always are); these list only `ado` and `ado-lifecycle` from the `v0.4.0` tag, so read
 them and `workflow.yml` first. Details: [bundle README](https://github.com/praveenlavu/spec-kit-ado/blob/main/bundle/README.md).
 
 The Spec Kit community catalog is for discovery only, so a bare `specify extension add ado`
@@ -353,7 +353,7 @@ profiles and pinned kits, business rules, comment approvals (`"approval": "comme
 (`unattended`) do nothing until you configure them.
 
 **Floors.** Spec Kit 1.2.1 or later (the supported floor; 0.2.0 declared 0.9.0 and nothing below 1.2.1 was tried) and the `ado` CLI
-0.3.0 or later (the extension's commands call `status`, `doctor` and `--sync`). Python 3.9 or later, as before. With a Spec Kit older
+0.4.0 or later (the extension's commands call `status`, `doctor`, `--sync`, `mode` and `qa`). Python 3.9 or later, as before. With a Spec Kit older
 than 1.2.1, `specify extension add` refuses the 0.3.0 extension (the 0.2.0 one you have installed keeps running) and `ado doctor`
 shows `fail` on its `specify` row whatever extension is installed.
 
@@ -363,17 +363,17 @@ attachments or decisions lines, so those show up as the refusals described above
 
 In each project:
 
-1. **CLI.** `pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2` (or
-   `uv tool install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.3.2`), then check `ado --version`. Do this first:
-   the 0.3.0 extension requires `ado` 0.3.0 or later.
+1. **CLI.** `pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.4.0` (or
+   `uv tool install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.4.0`), then check `ado --version`. Do this first:
+   the extension requires `ado` 0.4.0 or later.
 2. **Spec Kit.** `specify --version` must be 1.2.1 or later; upgrade it first if not.
-3. **Extension.** `specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.3.2.zip`.
+3. **Extension.** `specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.4.0.zip`.
 4. **Workflow**, if you use it: `specify workflow remove ado-lifecycle`, then add it again (the bundle install above, or
-   `specify workflow add --dev <path-to-spec-kit-ado>/workflows/ado-lifecycle` from a v0.3.2 checkout). It has new steps, gates and
+   `specify workflow add --dev <path-to-spec-kit-ado>/workflows/ado-lifecycle` from a v0.4.0 checkout). It has new steps, gates and
    inputs: start new runs with it (resuming a run begun on 0.2.0 was not tried).
 5. **CI consumers.** `@v0` and `toolkit-ref: v0` follow the latest `v0.Y.Z` tag. To stay on a reviewed version, pin
-   `uses: praveenlavu/spec-kit-ado/.github/workflows/ado-gate.yml@v0.3.2` with `toolkit-ref: v0.3.2` (GitHub), or
-   `ref: refs/tags/v0.3.2` on the `spec-kit-ado` repository resource (Azure Pipelines). CI's `ADO_TOKEN` should be a service
+   `uses: praveenlavu/spec-kit-ado/.github/workflows/ado-gate.yml@v0.4.0` with `toolkit-ref: v0.4.0` (GitHub), or
+   `ref: refs/tags/v0.4.0` on the `spec-kit-ado` repository resource (Azure Pipelines). CI's `ADO_TOKEN` should be a service
    identity that is not an approver and cannot bypass rules; see [docs/ci-github.md](docs/ci-github.md).
 6. **Config and ledgers.** Keep `ado.config.json` and your ledgers as they are; no refresh is needed. To use comment mode,
    follow [docs/configuration.md](docs/configuration.md) and run the agent as a Contributor identity without the bypass-rules
