@@ -76,6 +76,24 @@ def reject_control_chars(node, where, path):
             reject_control_chars(v, f"{where}[{i}]", path)
 
 
+class _Dup(dict):
+    """A JSON object that repeated a key, as `json.loads` hands it over (the last value won). Only `roles.map` looks at it; everywhere else a repeated key keeps its meaning."""
+    dup_at = 0
+
+
+def _pairs(pairs):
+    out = dict(pairs)
+    if len(out) != len(pairs):
+        seen = set()
+        for n, (k, _) in enumerate(pairs, 1):
+            if k in seen:
+                out = _Dup(out)
+                out.dup_at = n
+                break
+            seen.add(k)
+    return out
+
+
 class ConfigError(Exception):
     """No usable ado.config.json found."""
 
@@ -270,6 +288,8 @@ class Config:
         raw = roles.get("map")
         if not (isinstance(raw, dict) and 1 <= len(raw) <= MAX_ROLE_MAP):
             raise ConfigInvalid(f"{path}: 'roles.map' must be an object of 1 to {MAX_ROLE_MAP} identity ids")
+        if isinstance(raw, _Dup):  # the same spelling twice: the parser kept the last, so say where the repeat is
+            raise ConfigInvalid(f"{path}: roles.map entry #{raw.dup_at}: duplicate of an earlier entry")
         held = {}
         for n, (who, held_roles) in enumerate(raw.items(), 1):
             if not GUID_RE.fullmatch(who):
@@ -338,7 +358,7 @@ class Config:
         if raw is None:
             return None  # the path does not exist at that commit
         try:
-            data = json.loads(raw.decode("utf-8"))
+            data = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs)
         except ValueError as e:  # includes UnicodeDecodeError
             raise fail(f"invalid JSON: {e}")
         except RecursionError:
@@ -357,7 +377,7 @@ class Config:
         for path in candidates:
             if path.is_file():
                 try:
-                    data = json.loads(path.read_text(encoding="utf-8"))
+                    data = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_pairs)
                 except OSError as e:
                     raise ConfigInvalid(f"{path}: cannot read ({e})")
                 except ValueError as e:  # includes UnicodeDecodeError
@@ -388,7 +408,7 @@ def _has_trust_keys(p):
     try:
         with p.open("rb") as f:
             raw = f.read(MAX_REF_CONFIG + 1)
-        data = json.loads(raw.decode("utf-8")) if len(raw) <= MAX_REF_CONFIG else None
+        data = json.loads(raw.decode("utf-8"), object_pairs_hook=_pairs) if len(raw) <= MAX_REF_CONFIG else None
     except (OSError, ValueError, RecursionError):
         data = None
     if not isinstance(data, dict):
