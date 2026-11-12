@@ -1895,7 +1895,7 @@ def test_po_guide_split_links_and_anchors():
     assert "docs/business-rules-reference.md" in _flat("workflows/ado-lifecycle/README.md")
     # the known limits sit under their own heading, not under "Decisions that span stories"
     kl = _flat("docs/business-rules-reference.md").split("## Known limits")[1]
-    for word in ("Synthetic fixtures", "`rules-unreachable` is unit-tested only", "`chain` drift", "a consistent edit passes", "Only the online `rule_drift` check",
+    for word in ("Synthetic fixtures", "`rules-unreachable` shows live only when ADO cannot be read", "`chain` drift", "a consistent edit passes", "Only the online `rule_drift` check",
                  "must be a **required** CI check", "`posted:` markers and `validated` lines are local claims", "A hand-computed `posted:` marker lifts a rule at `pr`",
                  "a hand-written `validated` line does at `done`", "terminal check on re-confirm is not a security boundary", "`rules.reconfirmed` is a note",
                  "An unposted decision cannot be superseded", "makes the verification record stale", "`fidelity-stale`"):
