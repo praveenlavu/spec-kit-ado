@@ -154,7 +154,12 @@ def _signoffs(client, args):
     met, findings = [], []
     for role in (r for r in signoff.ROLES if signoff.required(trust, r)):
         try:
-            met.append((role, signoff.check(client, trust, args.id, role, client.config)))
+            result = signoff.check(client, trust, args.id, role, client.config)  # first: a refusal of the whole gate (bypass token, unreadable thread) must not read as "awaiting"
+            if role == "bpo" and (open_ := signoff.open_decisions(client.config, args.id)) != ([], False):  # the business owner has nothing final to sign
+                ids = ", ".join(open_[0] + ["a line that breaks the format"] * open_[1])
+                findings.append({"rule": "signoff-bpo", "reason": "open-decisions", "fix": signoff.E_OPEN_DECISIONS.format(story=int(args.id), ids=ids)})
+                continue
+            met.append((role, result))
         except signoff.SignoffMissing as e:
             findings.append({"rule": f"signoff-{role}", "reason": e.rule, "fix": str(e)})
         except signoff.SignoffRefused as e:  # about the whole gate, not one role
@@ -626,6 +631,23 @@ def _signoff_check(args):
         return signoff.offline(trust, args.id, role, _config(args))
     client = AdoClient(_config(args))
     return signoff.check(client, trust, args.id, role, client.config)
+
+
+def _approvals_request(args):
+    """`approvals request ID --gate signoff-bpo [--plan-out F] [--apply --expect-plan F]`: the one write of the sign-off stack, gated by a preview. The preview is the exact
+    comment (`signoff.request_plan`, reads only). `--apply` needs `--expect-plan`, the preview a person approved: without it, or when the plan changed since, nothing is posted."""
+    if args.gate != "signoff-bpo":
+        raise ValueError(signoff.E_REQUEST_GATE)
+    if args.apply and not args.expect_plan:
+        raise ValueError(signoff.E_REQUEST_PLAN)
+    trust, client = trusted("."), None
+    if not signoff.required(trust, "bpo"):
+        raise ValueError(signoff.E_REQUEST_OFF)
+    client = AdoClient(_config(args))
+    plan = signoff.request_plan(client, trust, args.id, client.config)
+    _plan(args, signoff.render_request_plan(args.id, plan))
+    result = signoff.post_request(client, trust, args.id, plan, client.config) if args.apply else plan["state"]
+    return {"id": args.id, "gate": "signoff-bpo", "hash": plan["hash"], "applied": bool(args.apply), "request": result}
 
 
 def _approvals_sync(args):
@@ -1209,6 +1231,14 @@ def main(argv=None):
     q.add_argument("--gate", required=True, metavar="GATE", help="one of: " + ", ".join(approvals.GATES + signoff.GATES))
     q.add_argument("--offline", action="store_true", help="signoff gates only: print the exact `/approve signoff-<role> <hash>` line a signer comments, from the "
                    "working tree alone (no token, no request; exit 2, never a pass)")
+    q = asub.add_parser("request", help="Ask the business owner to sign off (signoff-bpo only): a preview of the exact approval-request comment (decisions, in-scope rules with their "
+                        "AC ids and QA results, exclusions), and with --apply --expect-plan FILE one comment posted to the story. Refused (exit 2) when the role is not required, "
+                        "comment mode is off, the token can bypass rules, or the sign-off is already met")
+    q.add_argument("id", type=int, help="story id")
+    q.add_argument("--gate", required=True, metavar="GATE", help="signoff-bpo")
+    q.add_argument("--apply", action="store_true", help="post the comment (needs --expect-plan; default: preview only)")
+    q.add_argument("--plan-out", metavar="PATH", help="write the markdown preview here")
+    q.add_argument("--expect-plan", metavar="PATH", help="with --apply: refuse unless the plan is exactly this approved preview file")
     q = asub.add_parser("sync", help="The poller (comment mode only, for a local or persistent runner): reads the gate a Spec Kit run is paused at, prints "
                         "{gate, verdict: approve|reject|waiting} from the approvers' comments, and with --resume resumes the run with that verdict. When "
                         "`unattended.approval_requests` is true on the target branch it also posts one approval-request comment per hash (the one write "
@@ -1266,7 +1296,7 @@ def main(argv=None):
         parser.error(f"--probe-item must be a work item id between 1 and {prs.MAX_ID}")
     if args.command in ("status", "qa") and not 1 <= args.id <= prs.MAX_ID:
         parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
-    if args.command == "approvals" and args.approvals_command == "check" and not 1 <= args.id <= prs.MAX_ID:
+    if args.command == "approvals" and args.approvals_command in ("check", "request") and not 1 <= args.id <= prs.MAX_ID:
         parser.error(f"the story id must be between 1 and {prs.MAX_ID}")
     if args.command == "rules" and not 1 <= args.id <= 999999999:
         parser.error("the story id must be between 1 and 999999999")
@@ -1307,7 +1337,7 @@ def main(argv=None):
               and not os.path.lexists(decisions.decisions_file(_config(args).dod_path, args.id))):  # a link, even a dangling one, is a file that cannot be read
             out = {"id": args.id, "synced": False, "note": E_NO_DECISIONS_FILE}
         elif args.command == "approvals":  # `check` reads only (terminal mode needs no token); `sync` is the poller
-            out = _approvals_check(args) if args.approvals_command == "check" else _approvals_sync(args)
+            out = {"check": _approvals_check, "request": _approvals_request, "sync": _approvals_sync}[args.approvals_command](args)
         elif args.command == "comments" and args.author_ids:  # reads only; stdout lines, no file
             lines, truncated = comments.author_id_lines(AdoClient(_config(args)), args.id)
             print("\n".join(lines), end="\n" if lines else "")

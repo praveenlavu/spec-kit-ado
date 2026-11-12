@@ -80,6 +80,25 @@ def parse_cases(md):
     return cases, malformed
 
 
+def scoped(cfg, story_id, ledger):
+    """`(readable, scope, files, parsed)`: the story's in-scope business rules (`rules.scope`, phase `pr`) from the ledger's `Rules from:` files and the
+    decisions file. `readable` is False when the header, a rules file or the decisions file cannot be read (nothing is then in scope); `files` and `parsed`
+    (the parsed decisions) are what `scope` was computed from, `{}` and None when it was not."""
+    empty = {"in_scope": [], "excluded": [], "bad_exclusions": []}
+    frm = dod.ledger_rules_from(ledger)
+    if not frm["valid"]:
+        return False, empty, {}, None
+    if not frm["ids"]:
+        return True, empty, {}, None
+    files = rules.local_files(cfg, ledger, ".")
+    dpath = decisions.decisions_file(cfg.dod_path, story_id)
+    dmd = rules.read_file(dpath, ".", cfg.dod_path) if os.path.lexists(dpath) else ""
+    if dmd is None or any(w not in files or files[w]["invalid"] for w in frm["ids"]):
+        return False, empty, files, None
+    parsed = decisions.parse_decisions(dmd)
+    return True, rules.scope(files, frm["ids"], parsed, "pr"), files, parsed
+
+
 def check(cfg, story_id):
     path = qa_file(cfg.dod_path, story_id)
     text = rules.read_file(path, ".", cfg.dod_path)
@@ -92,17 +111,8 @@ def check(cfg, story_id):
     covered = {c for case in cases for c in case["covers"]}
     findings = [{"finding": "malformed-case", "line": n} for n in malformed]
     findings += [{"finding": "uncovered-ac", "id": f"AC-{n}"} for n in range(1, len(dod.ac_lines(ledger)) + 1) if f"AC-{n}" not in covered]
-    frm, readable, in_scope = dod.ledger_rules_from(ledger), True, []
-    if not frm["valid"]:
-        readable = False
-    elif frm["ids"]:
-        files = rules.local_files(cfg, ledger, ".")
-        dpath = decisions.decisions_file(cfg.dod_path, story_id)
-        dmd = rules.read_file(dpath, ".", cfg.dod_path) if os.path.lexists(dpath) else ""
-        if dmd is None or any(w not in files or files[w]["invalid"] for w in frm["ids"]):
-            readable = False
-        else:
-            in_scope = rules.scope(files, frm["ids"], decisions.parse_decisions(dmd), "pr")["in_scope"]
+    readable, scope, _, _ = scoped(cfg, story_id, ledger)
+    in_scope = scope["in_scope"]
     findings += [{"finding": "uncovered-rule", "id": r} for r in in_scope if r not in covered]
     findings += [] if readable else [{"finding": "rules-unreadable"}]
     results = {k: sum(c["result"] == k for c in cases) for k in ("pass", "fail", "blocked")}
