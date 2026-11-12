@@ -64,12 +64,12 @@ def _plan(args, text):
         Path(f"{out}.new").unlink(missing_ok=True)
 
 
-def _stricter_trust(base, is_strict, ci=False):
+def _stricter_trust(base, is_strict, ci=False, key=None, msg=None):
     """`(Trust, refs)`: the stricter of the target branch (`--base`, when it resolves to a commit here) and `origin/HEAD`; `refs` are the full refs read.
     `is_strict(trust)` picks the strict side(s); with both strict the approvers must be the same set (two lists cannot be ordered: refuse, exit 2). When the
     base does not resolve, `origin/HEAD` alone (as every other apply). An unreadable target config raises. `ci` (`done`): a `--base` that is no commit here
     raises as it always did (nothing is believed without it, and with no `origin/HEAD` the working tree's config is the PR's), and a missing `origin/HEAD`
-    leaves the target alone (a CI checkout may have none)."""
+    leaves the target alone (a CI checkout may have none). `key(trust)` (with `msg`) replaces the approvers as what two strict sides must agree on."""
     home_ref = strict.default_base(".")
     ref = strict.base_ref(".", base) if base else ""
     if not ref or not (ci or strict._resolve_base(".", ref)):
@@ -80,7 +80,9 @@ def _stricter_trust(base, is_strict, ci=False):
     refs = [r for r in (home_ref, ref) if r]
     if not strict_ones:
         return (home or target), refs
-    if len(strict_ones) == 2 and set(home.approvers) != set(target.approvers):
+    if len(strict_ones) == 2 and (key(home) != key(target) if key else set(home.approvers) != set(target.approvers)):
+        if key:
+            raise ValueError(msg)
         if ci:
             raise ValueError("--base and the default branch (origin/HEAD) name different approvers, so it is unclear who may approve; a human closes the "
                              "story: `ado done <id>` without --base, or in Azure DevOps (docs/configuration.md, 'Done-time cross-check')")
@@ -137,6 +139,37 @@ def _xcheck(client, args, dec):
     return strict.xcheck_run(client, args.id, md, approvers), blocking
 
 
+def _signoffs(client, args):
+    """`done`'s sign-off gate (piece 5): every role in the stricter of `--base` and origin/HEAD's `roles.signoff` must be met on the bytes now on disk (hash alone: a
+    squash or merge changes no byte), else strict.Refused (exit 2, nothing sent). `signoff-<role>` is "awaiting" (the CI close step skips it); `signoff-bypass`,
+    `-unreadable`, `-terminal` and `-trust` are refusals. Returns `(met, warnings)`; nothing for a target with no required role."""
+    try:
+        trust = _stricter_trust(args.base, lambda t: any(signoff.required(t, r) for r in signoff.ROLES), ci=True, msg=signoff.E_TRUST,
+                                key=lambda t: (sorted(t.approvers), t.approval, json.dumps(t.roles, sort_keys=True)))[0]
+    except ValueError as e:
+        if str(e) != signoff.E_TRUST:
+            raise
+        raise strict.Refused({"phase": "done", "mode": client.config.mode, "ok": False, "overrides_used": [],
+                              "findings": [{"rule": "signoff-trust", "fix": signoff.E_TRUST}]}) from None  # red in CI, not "could not evaluate"
+    met, findings = [], []
+    for role in (r for r in signoff.ROLES if signoff.required(trust, r)):
+        try:
+            met.append((role, signoff.check(client, trust, args.id, role, client.config)))
+        except signoff.SignoffMissing as e:
+            findings.append({"rule": f"signoff-{role}", "reason": e.rule, "fix": str(e)})
+        except signoff.SignoffRefused as e:  # about the whole gate, not one role
+            findings = [{"rule": e.rule, "fix": str(e)}]
+            break
+        except ValueError as e:
+            if str(e) != signoff.E_ARTIFACT:
+                raise
+            findings.append({"rule": f"signoff-{role}", "reason": "artifact", "fix": str(e)})
+    if findings:
+        raise strict.Refused({"phase": "done", "mode": client.config.mode, "ok": False, "findings": findings, "overrides_used": []})
+    authors = [r["author"] for _, r in met]
+    return met, [signoff.ONE_PERSON] * any(authors.count(a) > 1 for a in authors)
+
+
 def _done(client, args):
     if args.base is not None and not args.base:
         raise ValueError("--base must not be empty")  # an empty base would fall back to origin/HEAD, the merged branch, whose config the PR wrote
@@ -155,6 +188,7 @@ def _done(client, args):
     if xf and blocking:
         raise strict.Refused({"phase": "done", "mode": "strict", "ok": False, "findings": xf, "overrides_used": []})
     chk = done.check(ledger_md)
+    met, so_warn = _signoffs(client, args) if chk["ready"] else ([], [])  # a ledger that is not ready closes nothing: sign-offs are asked only of a story that could close
     work_item = None
     if chk["ready"] or not args.apply:  # one read-only GET drives the preview, the idempotent apply and `already_done` (CI must not move a done story)
         try:
@@ -164,12 +198,14 @@ def _done(client, args):
                 raise  # never write blind
     known = {"already_done": done._status(work_item, "", client.config.done_state)[0]} if work_item else {}
     dec = dec if os.path.lexists(dec) else None  # attached next to the ledger only when it exists (checked above)
-    _plan(args, done.render_plan(args.id, chk, client.config, work_item, dec))
+    sha = signoff.head_sha() if met else ""
+    _plan(args, done.render_plan(args.id, chk, client.config, work_item, dec) + signoff.plan_lines(met, sha))
     if args.apply and chk["ready"]:
         _stamp_used(client, args, used)
-    result = done.apply(client, args.id, path, work_item, dec) if args.apply and chk["ready"] else {}
+    result = done.apply(client, args.id, path, work_item, dec, note=signoff.history_note(met, sha)) if args.apply and chk["ready"] else {}
     return {"id": args.id, "applied": bool(args.apply and chk["ready"]), **chk, **known,
-            **({"decisions_file": str(dec)} if dec else {}), **({"warnings": [f"{f['rule']}: {f['detail']}" for f in xf]} if xf else {}), **result}
+            **({"decisions_file": str(dec)} if dec else {}), **({"warnings": [f"{f['rule']}: {f['detail']}" for f in xf] + so_warn} if xf or so_warn else {}),
+            **({"signoffs": {r: v["comment_id"] for r, v in met}, "bytes": sha} if met else {}), **result}
 
 
 def _read_body(path):

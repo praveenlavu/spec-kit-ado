@@ -9,6 +9,8 @@ the TARGET branch's `roles` counts (`config.trusted`). This is process enforceme
 admin rights. Every refusal here is a fixed text; nothing from a comment is ever shown."""
 import os
 import pathlib
+import re
+import subprocess
 
 from . import approvals, comments, dod, gate, qa, rules
 from .config import SIGNOFF_ROLES
@@ -21,6 +23,9 @@ MAX_TOTAL = 8 << 20
 E_ARTIFACT = ("sign-off: what this gate covers cannot be read (the ledger or its Spec dir, or the QA file, is missing, a link, outside the working tree, over "
               "1 MiB, not UTF-8 or not in the form needed; or the Spec dir holds more than 200 files, an odd file name or more than 8 MiB), so there is nothing to sign")
 E_TERMINAL = "a required sign-off is checked from the story's comments, so `approval` must be \"comment\" on the target branch; it is not"
+E_TRUST = ("--base and the default branch (origin/HEAD) differ in `roles`, `approvers` or `approval`, so it is unclear who may sign off; "
+           "a human closes the story: `ado done <id>` without --base")
+ONE_PERSON = "signoff-one-person: one identity gave more than one sign-off (allowed; shown so the team knows)"
 E_OFFLINE = "not verified online: this is only the line a signer comments; run the check without --offline"
 E_OFFLINE_GATE = "--offline applies to the sign-off gates only (signoff-tpo, signoff-qa, signoff-bpo)"
 NOT_REQUIRED = "not required: `roles.signoff` on the target branch does not list this role (or `roles` is absent)"
@@ -183,3 +188,31 @@ def check(client, trust, story_id, role, cfg, repo=".", ci_identity=None):
                                                     bad=approvals._bad(win["bad_newer"]) if win and win["bad_newer"] else ""))
     return {"gate": gate_id, "mode": "comment", "met": True, "required": True, "hash": h,
             "comment_id": int(win["id"]) if str(win["id"]).isdigit() else None, "author": win["author"]}  # ADO's id is printed only when it is a number
+
+
+# ---- what `done` records ------------------------------------------------------------------------------------------------------------------------
+
+def head_sha(repo="."):
+    """The commit the working tree is at, `unknown` when there is none; with uncommitted changes the hash covers bytes that commit lacks, and it says so."""
+    try:
+        out = subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "HEAD"], capture_output=True, text=True, timeout=10).stdout.strip()
+        dirty = subprocess.run(["git", "-C", repo, "status", "--porcelain"], capture_output=True, text=True, timeout=30).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return "unknown"
+    if not re.fullmatch(r"[0-9a-f]{40,64}", out):
+        return "unknown"
+    return f"{out} (uncommitted changes: the bytes signed are not exactly this commit)" if dirty else out
+
+
+def _cid(result):
+    return "comment " + (str(result["comment_id"]) if result["comment_id"] is not None else "(id not shown)")
+
+
+def plan_lines(met, sha):
+    """The lines `done`'s plan adds for the sign-offs it relied on (`met`: `[(role, check result)]`); nothing when none were required."""
+    return "".join([f"\nSign-offs met on the bytes now on disk:\n"] + [f"signoff {r}: {_cid(v)}\n" for r, v in met] + [f"bytes: {sha}\n"]) if met else ""
+
+
+def history_note(met, sha):
+    """The one line recorded on the story with the state change, or None."""
+    return "Sign-offs: " + "; ".join(f"{r} {_cid(v)}" for r, v in met) + f"; bytes {sha}" if met else None
