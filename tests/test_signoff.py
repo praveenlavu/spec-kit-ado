@@ -317,6 +317,21 @@ def test_an_edited_reject_by_the_holder_still_blocks_the_older_approval(tmp_path
     assert run(cfg, [sign("qa", tmp_path, cfg), stranger], "qa", tmp_path)["met"] is True
 
 
+def test_a_deeply_nested_spec_dir_is_an_artifact_refusal_not_a_crash(tmp_path, cfg):
+    tree(tmp_path)
+    deep = tmp_path / "specs/001-x" / "/".join("d" for _ in range(signoff.MAX_DEPTH + 2))
+    deep.mkdir(parents=True)
+    (deep / "x.md").write_text("x\n")
+    with pytest.raises(ValueError, match="cannot be read"):
+        signoff.artifact("tpo", STORY, cfg, str(tmp_path))
+    ok = tmp_path / "specs/001-x/a/b"
+    ok.mkdir(parents=True)  # a few levels are fine
+    import shutil
+    shutil.rmtree(tmp_path / "specs/001-x/d")
+    (ok / "y.md").write_text("y\n")
+    assert signoff.artifact("tpo", STORY, cfg, str(tmp_path))
+
+
 def test_a_changed_file_after_signing_makes_the_signoff_stale(tmp_path, cfg):
     raws = [sign("qa", tmp_path, cfg), sign("tpo", tmp_path, cfg, cid=12)]
     assert run(cfg, raws, "qa", tmp_path)["met"] and run(cfg, raws, "tpo", tmp_path)["met"]

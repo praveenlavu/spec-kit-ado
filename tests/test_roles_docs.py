@@ -91,7 +91,7 @@ def test_roles_doc_opens_with_the_qa_only_recipe_and_names_every_approver_side_e
 
 def test_roles_doc_states_the_limits():
     doc = _flat("docs/roles.md")
-    for needle in ("UTF-8 text under 1 MiB", "at most 200 files and 8 MiB", "tasks.md", "`qa` frame label", "non-holder's `/reject` is ignored",
+    for needle in ("UTF-8 text under 1 MiB", "at most 200 files, 8 MiB and 32 folders deep", "tasks.md", "`qa` frame label", "non-holder's `/reject` is ignored",
                    "a posted request voids a standing approval", "person with the web UI signs, no token", "process enforcement, not a security boundary",
                    "`bsa` is the same role as `tpo`", "`dev` is a role id only", "awaiting signoff-bpo", "a human runs `ado done --apply`",
                    "`signoff-one-person`", "`--base` and `origin/HEAD` differ"):

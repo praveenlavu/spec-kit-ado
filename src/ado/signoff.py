@@ -20,6 +20,7 @@ ROLES = tuple(sorted(SIGNOFF_ROLES, key=("tpo", "qa", "bpo").index))  # the orde
 GATES = tuple(f"signoff-{r}" for r in ROLES)
 PREFIX = "signoff-"
 MAX_FILES = 200
+MAX_DEPTH = 32  # folders below the Spec dir; deeper is `artifact`, never a RecursionError
 MAX_TOTAL = 8 << 20
 E_ARTIFACT = ("sign-off: what this gate covers cannot be read (the ledger or its Spec dir, or the QA file, is missing, a link, outside the working tree, over "
               "1 MiB, not UTF-8 or not in the form needed; or the Spec dir holds more than 200 files, an odd file name or more than 8 MiB), so there is nothing to sign")
@@ -101,10 +102,12 @@ def _spec_dir(story_id, cfg, repo):
     return "/".join(parts)
 
 
-def _walk(repo, rel, out, budget):
+def _walk(repo, rel, out, budget, depth=0):
     """Collect `(repo-relative path, text)` of every file under `rel`: a link, a hard link (it may name a file outside the repo), a special file, a name
     with a control character, a file that `gate._read` refuses (over 1 MiB, not UTF-8, outside the tree), too many files or more than `budget[0]` bytes
-    in all is ValueError(E_ARTIFACT)."""
+    in all, or folders nested more than MAX_DEPTH deep, is ValueError(E_ARTIFACT)."""
+    if depth > MAX_DEPTH:
+        raise ValueError(E_ARTIFACT)
     try:
         with os.scandir(os.path.join(repo, rel)) as it:
             entries = sorted(it, key=lambda e: e.name.encode("utf-8"))
@@ -115,7 +118,7 @@ def _walk(repo, rel, out, budget):
         if e.is_symlink() or any(ord(c) < 32 or ord(c) == 127 for c in e.name):
             raise ValueError(E_ARTIFACT)
         if e.is_dir(follow_symlinks=False):
-            _walk(repo, path, out, budget)
+            _walk(repo, path, out, budget, depth + 1)
         elif e.is_file(follow_symlinks=False):
             st = e.stat(follow_symlinks=False)
             budget[0] -= st.st_size
