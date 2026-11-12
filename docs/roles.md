@@ -108,7 +108,7 @@ what QA wrote, so re-running a check or a gate never changes it. The QA bytes ar
 - Nothing is attached for them. The plan lists `signoff <role>: comment <id>` per role and `bytes: <commit>` (with a note when the tree has uncommitted
   changes), and the story's history records the same line.
 - `--base` is the pull request's target branch and `origin/HEAD` the default branch; when both are strict they must agree on `roles`, `approvers` and
-  `approval`, else `done` refuses with `signoff-trust`: close the story without `--base`.
+  `approval`, else `done` refuses (`signoff-trust` for `roles`; a difference in `approvers` or `approval` is refused by the cross-check before it): close the story without `--base`.
 - In CI the close step never closes a story that is waiting on a person: it prints `awaiting signoff-bpo` (or the roles named) as a green
   warning, exit 0, whenever every refusal is a per-role one (missing, `stale`, `rejected`, `not-role`, `edited`, `artifact`, `open-decisions` and the like), and a
   human runs `ado done --apply` once they are in. `signoff-bypass`, `signoff-unreadable`, `signoff-terminal` and `signoff-trust` stay a red failure, as does
@@ -130,9 +130,9 @@ Every refusal is a fixed text; no comment text is ever shown. The rule id is in 
 | `artifact` | what the gate covers cannot be read | see Limits |
 | `open-decisions` | with `bpo` required, a `D<n>` in `Decisions_<id>.md` is still open | a person validates or rejects it: `ado decisions <id> --sync` |
 | `signoff-terminal` | `approval` is not `"comment"` on the target branch | set it there |
-| `signoff-bypass` | the token can bypass branch rules, so comment mode cannot be trusted | use a token without that permission |
+| `signoff-bypass` | the token holds the "Bypass rules on work item updates" permission (or that could not be read), so comment mode cannot be trusted | use a token without that permission |
 | `signoff-unreadable` | the story's comments could not be read in full | retry; nothing is guessed |
-| `signoff-trust` | `--base` and `origin/HEAD` differ in `roles`, `approvers` or `approval` | close the story without `--base` |
+| `signoff-trust` | `--base` and `origin/HEAD` differ in `roles` (both are strict) | close the story without `--base`. A difference in `approvers` or `approval` is refused earlier by the cross-check every strict `done` runs (exit 2, an error text, not a rule id) |
 | `signoff-one-person` | one identity gave two or more sign-offs | a warning only |
 
 ## Limits
@@ -144,6 +144,10 @@ Every refusal is a fixed text; no comment text is ever shown. The rule id is in 
   `signoff-bpo` is already met.
 - A sign-off comment that was edited never counts and a deleted one is missing; who may edit or delete comments is decided by Azure DevOps. A `/reject` the signer edited keeps blocking; a deleted `/reject` cannot be told from one never posted.
 - Rules whose text changed since the business owner approved are still in scope; the request comment shows the current text, not a diff.
+- **The hash covers the files on disk, not the files in git.** An untracked or ignored file in the Spec dir (a `.DS_Store`, an editor swap file) is part of what the signer's `--offline` line covers and is not in the merged checkout CI sees; CRLF line endings from `core.autocrlf` change the bytes too. Either shows as `stale` or `artifact` in CI, never as a pass: commit what the Spec dir holds and keep it free of stray files before the line is copied.
+- **A business-owner sign-off covers the QA file only, not the decisions.** `ado done` refuses while a `D<n>` is open, but a `/approve signoff-bpo` given while one was open still counts once it is validated or rejected, because the QA bytes did not change; `ado approvals check --gate signoff-bpo` also reports met while `done` refuses for an open decision. If the outcome of a decision matters to the business owner, ask them to approve again after it is resolved.
+- **A signer who closes the story with their own token is excluded locally.** `ado done` run with the token of a person who is also the signer reads their sign-off as `excluded-author`, while CI (a different token) accepts the same comment. The same happens when the agent ran under that person's token and posted any kit comment on the story. Run `done` with a token that is not a signer's.
+- A sign-off comment that is `forged` or `on-behalf` leaves the story open like the other per-role refusals, so CI shows it as the green "awaiting" line too; the refusal text names the reason.
 - The workflow `ado-lifecycle` does not wait for sign-offs; `implement` is never blocked by one. The checks are at `ado done`.
 
 ## Not promised
