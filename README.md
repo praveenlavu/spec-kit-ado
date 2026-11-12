@@ -317,6 +317,21 @@ yourself, or run `speckit.ado.pull` interactively. The workflow ends at the open
 Closing happens after merge: CI link-on-merge with `close-story: true` (`closeStory: true` on Azure Pipelines),
 or `speckit.ado.done` run by hand.
 
+## Upgrading from 0.3.x
+
+0.4.0 adds role modes and sign-offs (see [docs/roles.md](docs/roles.md)). They are off until you add a `roles` key to `ado.config.json` on the target
+branch: with no `roles` key every verb behaves as it did in 0.3.2. In each project:
+
+1. **CLI.** `pipx install --force git+https://github.com/praveenlavu/spec-kit-ado@v0.4.0` (or `uv tool install --force ...@v0.4.0`), then check
+   `ado --version`. Do this first: the 0.4.0 extension requires `ado` 0.4.0 or later, because its commands call `ado mode` and `ado qa`.
+2. **Extension.** `specify extension add ado --force --from https://github.com/praveenlavu/spec-kit-ado/archive/refs/tags/v0.4.0.zip`: 14 commands
+   (`speckit.ado.mode` is new). The `ado-lifecycle` workflow has a new version string only; re-add it if you want the 0.4.0 number
+   (`specify workflow remove ado-lifecycle`, then the bundle install or `specify workflow add`).
+3. **A `roles` key that is not a valid roles block is now an error.** 0.3.2 ignored a key it did not know; 0.4.0 refuses every verb with exit 2
+   (`ado doctor` `config` fails). If your `ado.config.json` already has an unrelated `roles` key, remove or fix it first.
+4. **Nothing else to refresh.** Config, ledgers and CI templates keep working; CI consumers pinned to `@v0` follow the new tag, and the close step
+   gains the "awaiting signoff-..." warning only when `roles.signoff` is set.
+
 ## Upgrading from 0.2.0
 
 0.3.0 removes no command and renames no config key, and its new features are all opt-in. It does change behaviour for existing
