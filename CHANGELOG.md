@@ -2,6 +2,10 @@
 
 All notable changes are listed here. Versions follow [VERSIONING.md](https://github.com/praveenlavu/spec-kit-ado/blob/main/VERSIONING.md).
 
+**Unreleased documentation**
+
+- Explain the board upkeep and delivery documentation the agent helps with, add matching family artwork and maintainer credit, and make the full reference expandable. Installation and tool behavior are unchanged.
+
 ## 0.4.0 — 2026-11-12
 
 ### Added
