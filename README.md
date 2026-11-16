@@ -1,10 +1,12 @@
 # spec-kit-ado
 
-![spec-kit-ado: your AI agent does the grunt work on an Azure DevOps story, and you say yes before anything on the board changes](docs/assets/banner.svg)
+![Spec Kit for Azure DevOps: less board upkeep, more time to build](docs/assets/banner.svg)
 
-**Your AI agent does the Azure DevOps grunt work. You press yes.**
+**Keep Azure Boards in step with the work.**
 
-Pick a story. The agent reads it, writes the spec, makes the plan and builds it. You stay in charge of what matters: the questions, the tangents worth exploring, and the yes. Before anything touches your board, you see the exact change and decide. No surprises, no cleanup.
+spec-kit-ado connects [Spec Kit](https://github.com/github/spec-kit) and your AI coding agent to Azure DevOps stories. The agent helps turn a story into a spec, a plan, code and tests, then prepares the board updates and delivery documentation for your review.
+
+Less copying tasks into Azure Boards. Less chasing down decisions or assembling the evidence for a review. Your team sets priorities, answers product questions and approves the changes.
 
 > [!NOTE]
 > **Azure DevOps Boards only (Azure Repos or GitHub for code); Jira and GitHub Issues are not supported.**
@@ -23,21 +25,23 @@ Pick a story. The agent reads it, writes the spec, makes the plan and builds it.
 
 </div>
 
-spec-kit-ado is an add-on for [Spec Kit](https://github.com/github/spec-kit), a toolkit that has your AI coding agent agree a written spec and plan with you before it writes code.
-This add-on connects that agent to your Azure DevOps (ADO) board, so it can read your stories and do the grunt work of planning, coding and testing.
-It can only write to the board after you approve, which leaves your time for the questions, the tangents and the yes.
-
 ## Why you'll like it
 
-- ✅ **Proof, not promises.** Every acceptance criterion (a line saying what "done" means) is tied to a test that proves it, all in one checklist per story.
-- 🛑 **Nothing happens behind your back.** New Tasks, comments and pull requests are shown first and written only after you say yes.
-- 💬 **The right questions get asked up front.** The agent lists what is unclear, you approve what is posted to the story for the product owner, and the answers come back into the plan.
-- 🧩 **Works with your stack.** It uses whatever Spec Kit setup you already have, for any language.
-- 🔒 **Your token stays private.** The access token (PAT) is typed into your own terminal and never goes through the agent chat.
+| The upkeep | What the agent helps with |
+|---|---|
+| Copying a plan into the board | Creates or updates child Tasks from the task list, after you review the preview. |
+| Keeping progress current | Prepares Task state updates from the work recorded during implementation. |
+| Finding the reason behind a choice | Records questions, assumptions and decisions, and prepares them for the story discussion. |
+| Checking what supports “done” | Keeps a story checklist that maps acceptance criteria to named tests and evidence; configured checks report gaps. |
+| Writing the handover | Prepares the pull request description and attaches the checklist when you close the story. |
+
+The benefit is a board your team can check against the work, with less manual upkeep. Updates happen when you run the commands or workflow; this is not a background service that cleans up every story.
+
+The agent prepares and applies approved changes. People decide scope, validate product decisions, review the work and merge. See [the tracker boundary](docs/tracker-boundary.md) for the exact reads and writes.
 
 ## How it works
 
-Nine steps from story to done. The agent does the grunt work, and you give three yeses, marked in yellow.
+Start with a story and finish with a reviewed change and its supporting record. Yellow marks key approval points; other board writes also need approval.
 
 ```mermaid
 flowchart TD
@@ -57,7 +61,7 @@ flowchart TD
     class D,G,J you;
 ```
 
-The yellow steps are your moments to decide: send the questions, create the Tasks, open the pull request. The agent can read from Azure DevOps freely but cannot write to it until you approve.
+The diagram highlights the main handoffs. The agent commands preview board changes for approval, including Task updates and closing the story. Direct CLI commands and CI have their own behavior; see [Human in the loop](#human-in-the-loop).
 The story is closed after the merge, by your CI or by you running `speckit.ado.done`.
 
 ## Quick setup
@@ -126,13 +130,13 @@ The picture above is an illustration with made-up data. This is the moment that 
 | 1 | `/speckit.ado.pull 1001` | Reads the story and starts the spec and the checklist file. |
 | 2 | `/speckit.ado.plan 1001` | Writes the plan and lists questions for the product owner. You approve before they are posted. |
 | 3 | `/speckit.ado.tasks 1001` | Turns the plan into a task list. |
-| 4 | `/speckit.ado.push 1001` | Shows the child Tasks it would create on the board. They are created after your yes. Running it again updates them, it never duplicates. |
+| 4 | `/speckit.ado.push 1001` | Shows the child Tasks it would create on the board. They are created after approval. Later runs match existing Tasks and show the proposed updates. |
 | 5 | `/speckit.ado.implement 1001` | The agent writes the code and the tests, and ticks Tasks off after your yes. |
 | 6 | `/speckit.ado.gate` and `/speckit.ado.review` | Checks the work against the checklist and reviews the change. Results are saved in the checklist file. |
 | 7 | `/speckit.ado.pr` | Builds the pull request description and opens the pull request after your yes. |
 | 8 | `/speckit.ado.done` | After the merge: attaches the checklist and closes the story, after your yes. |
 
-Every board change goes in two moves: a preview you read, then an apply that refuses to run if the plan changed after you read it.
+Agent-driven board changes use a saved preview and an apply that refuses if the plan changed after approval.
 The agent does both and asks for your yes in between. A full walk-through with the exact commands is in the
 [quickstart](docs/quickstart.md); you can also [watch it catch a fake "green" commit](docs/demo.md) with no Azure DevOps account.
 
@@ -159,7 +163,22 @@ The agent does both and asks for your yes in between. A full walk-through with t
 These are guard rails for a team that reviews its pull requests, not a security lock. Details are in
 [What this does and does not do](#what-this-does-and-does-not-do).
 
+## Part of a family
+
+Built and maintained by [praveenlavu](https://github.com/praveenlavu), these independent Spec Kit add-ons share a practical aim: let agents handle routine delivery work while people make the decisions.
+
+| Where your team tracks work | Use |
+|---|---|
+| Azure DevOps Boards | **spec-kit-ado** — this repo; Azure Repos or GitHub for code |
+| Jira Cloud | [spec-kit-jira](https://github.com/praveenlavu/spec-kit-jira) — team-managed projects in 0.1 |
+| GitHub Issues and Projects | [spec-kit-ghp](https://github.com/praveenlavu/spec-kit-ghp) — user-owned Projects in 0.1 |
+
+Each has its own setup and releases. Choose the kit for your tracker.
+
 ---
+
+<details>
+<summary><strong>Full reference: commands, configuration and technical details</strong></summary>
 
 # Full reference
 
@@ -760,6 +779,8 @@ the names that must never appear in the repo (client, people), one per line, pas
 into Settings → Secrets and variables → Actions. CI's scrub check reads it; on a push
 to `main` the check fails when it is missing, because an empty list proves nothing.
 Locally the same list lives in the untracked `.scrub-denylist` file. Never commit it.
+
+</details>
 
 ## License
 
