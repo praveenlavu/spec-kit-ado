@@ -7,12 +7,16 @@ import copy
 import datetime
 import json
 import os
-import pty
 import re
 import stat
 import subprocess
 import sys
 from pathlib import Path
+
+try:
+    import pty
+except ImportError:  # Windows has no pseudo-terminal: the tests that need one skip
+    pty = None
 
 import pytest
 
@@ -584,6 +588,8 @@ def test_stdin_terminal_stdout_piped_prints_no_profile_text_in_a_real_process(re
     setup(repo, profile(stacks=[{"id": "python", "root": ".", "commands": {"test": {"run": f"echo {MARKER}", "source": "unverified"}}}]))
     env = {**os.environ, "PYTHONPATH": str(ROOT / "src")}
     env.pop("ADO_CONFIG", None)
+    if pty is None:
+        pytest.skip("needs a pseudo-terminal (POSIX only)")
     master, slave = pty.openpty()  # stdin is a terminal, stdout is a pipe (`ado stack approve | tee x`)
     try:
         res = subprocess.run([sys.executable, "-m", "ado", "stack", "approve"], cwd=repo, env=env, stdin=slave, stdout=subprocess.PIPE,

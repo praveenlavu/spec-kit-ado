@@ -1927,7 +1927,12 @@ def test_ci_test_job_runs_on_python_3_9_and_3_13_with_the_pins_kept():
     assert re.fullmatch(r"actions/checkout@[0-9a-f]{40}", checkout["uses"]) and checkout["with"] == {"fetch-depth": 0, "persist-credentials": False}
     assert checkout["uses"] == next(s for s in steps(load("speckit-contract")) if s.get("uses", "").startswith("actions/checkout@"))["uses"]
     # the rest of the workflow is as before: same jobs, read-only permissions, no secret in the matrix job
-    assert sorted(wf["jobs"]) == ["actionlint", "scrub", "test"] and wf["permissions"] == {"contents": "read"}
+    assert sorted(wf["jobs"]) == ["actionlint", "scrub", "test", "test-windows"] and wf["permissions"] == {"contents": "read"}
+    # the Windows job runs the whole suite on Python 3.13 with CI blanked (the Spec Kit repo tests skip there) and the same pinned actions
+    win = wf["jobs"]["test-windows"]
+    assert win["runs-on"] == "windows-latest" and win["timeout-minutes"] == 60
+    assert next(s for s in win["steps"] if s.get("run") == "pytest -q")["env"] == {"CI": "", "ADO_REQUIRE_BASELINE": "1"}
+    assert next(s for s in win["steps"] if s.get("uses", "").startswith("actions/setup-python@"))["with"] == {"python-version": "3.13"}
     assert "secrets." not in json.dumps(job) and "permissions" not in job
 
 

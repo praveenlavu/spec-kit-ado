@@ -1,7 +1,6 @@
 import copy
 import json
 import os
-import pty
 import re
 import select
 import shutil
@@ -10,6 +9,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+try:
+    import pty
+except ImportError:  # Windows has no pseudo-terminal: the tests that need one skip
+    pty = None
 
 import pytest
 
@@ -261,6 +265,8 @@ def run_in_pty(args, cwd, answer=None, before=None, stdout_pty=True, stdin_pty=T
     then is killed and the test fails. `argv` replaces `python -m ado ARGS` (for testing the helper itself)."""
     env = {**os.environ, "PYTHONPATH": _SRC}
     env.pop("ADO_CONFIG", None)
+    if pty is None:
+        pytest.skip("needs a pseudo-terminal (POSIX only)")
     master, slave = pty.openpty()
     proc = subprocess.Popen(argv or [sys.executable, "-m", "ado", *args], cwd=cwd, env=env, stdin=slave if stdin_pty else subprocess.DEVNULL,
                             stdout=slave if stdout_pty else subprocess.PIPE, stderr=subprocess.PIPE)
