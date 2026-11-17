@@ -65,6 +65,13 @@ jobs:
           assert want <= names, sorted(want - names)
           PY
 
+      # PyPI will reject metadata or a README it cannot render; build both artifacts and check them the way `twine upload` would.
+      - name: The package builds and passes twine check
+        run: |
+          pip install --quiet build twine
+          python -m build --outdir "$RUNNER_TEMP/dist"
+          twine check "$RUNNER_TEMP"/dist/*
+
   scrub:
     runs-on: ubuntu-latest
     env:

@@ -1,6 +1,6 @@
 # spec-kit-ado
 
-![Spec Kit for Azure DevOps: less board upkeep, more time to build](docs/assets/banner.svg)
+![Spec Kit for Azure DevOps: less board upkeep, more time to build](https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/main/docs/assets/banner.svg)
 
 **Keep Azure Boards in step with the work.**
 
@@ -121,7 +121,7 @@ Replace `1001` with your story number. In Claude Code, GitHub Copilot and Cursor
 > [!TIP]
 > Not sure what comes next? Run `ado status 1001` in your terminal. It prints where the story is and the one command to run next.
 
-![An illustrated terminal session: the agent previews four Tasks for story 1001 and asks for a yes before anything is written](docs/assets/demo.svg)
+![An illustrated terminal session: the agent previews four Tasks for story 1001 and asks for a yes before anything is written](https://raw.githubusercontent.com/praveenlavu/spec-kit-ado/main/docs/assets/demo.svg)
 
 The picture above is an illustration with made-up data. This is the moment that matters: the agent shows the change, and nothing is written until you answer yes.
 

@@ -5,6 +5,7 @@ All notable changes are listed here. Versions follow [VERSIONING.md](https://git
 **Unreleased documentation**
 
 - Explain the board upkeep and delivery documentation the agent helps with, add matching family artwork and maintainer credit, and make the full reference expandable. Installation and tool behavior are unchanged.
+- Add the package metadata PyPI shows (readme, author handle, keywords, classifiers, project links), make the two README images absolute URLs so the PyPI page renders them, and check the built package with `twine` in CI. Nothing is published yet.
 
 ## 0.4.0 — 2026-11-12
 
