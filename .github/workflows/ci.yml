@@ -65,6 +65,34 @@ jobs:
           assert want <= names, sorted(want - names)
           PY
 
+  test-windows:
+    # Windows is not a claimed platform yet (docs say "use WSL"). This job reports what passes so the docs can claim only that.
+    # CI is blanked so the Spec Kit repo tests skip, as on a machine without `specify`: they are covered on the Linux 3.13 leg.
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2 (the commit speckit-contract.yml pins)
+        with:
+          # Full history, as on the Linux job: the byte-identity tests compare against baseline commits.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0 (the commit speckit-contract.yml pins)
+        with:
+          python-version: "3.13"
+      - name: Install package + dev deps
+        run: pip install --quiet -e ".[dev]"
+      # On the hosted Windows image `bash` is the WSL stub (it prints "Windows Subsystem for Linux has no installed distributions"),
+      # not Git Bash, so the tests that run the workflows' shell snippets cannot work. GITHUB_PATH prepends for the following steps.
+      - name: Put Git Bash first on PATH
+        shell: pwsh
+        run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\Git\bin'
+      # -n auto: the first full run took 28 minutes serially.
+      - name: Run the test suite
+        env:
+          CI: ""
+          ADO_REQUIRE_BASELINE: "1"
+        run: pytest -q -n auto
+
   scrub:
     runs-on: ubuntu-latest
     env:

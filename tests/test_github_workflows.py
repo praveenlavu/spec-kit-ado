@@ -10,6 +10,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests.conftest import BASH
+
 WF_DIR = Path(__file__).resolve().parent.parent / ".github" / "workflows"
 REUSABLE = ["ado-link-on-merge", "ado-gate", "ado-branch-guard"]
 SECRETFREE = ["ado-strict-verify"]  # V3-14b: reusable, but declares no secret at all
@@ -136,7 +138,7 @@ def _lint_repo(tmp_path, subject, main_moves=False):
 
 
 def _lint(tmp_path, base):
-    return subprocess.run(["bash", "-c", _commit_lint_run()], cwd=tmp_path, capture_output=True, text=True,
+    return subprocess.run([BASH, "-c", _commit_lint_run()], cwd=tmp_path, capture_output=True, text=True,
                           env={**os.environ, "BASE_SHA": base})
 
 
@@ -332,7 +334,7 @@ def _run_snippet(tmp_path, snippet, branch, *, get_code=0, config=True, have_ado
            "ADO_CONFIG": str(cfg), "BRANCH": branch, "SOURCE_BRANCH": branch, "TARGET_BRANCH": "refs/heads/main"}
     if temp is False:  # the runner did not set its temp dir
         env.pop("RUNNER_TEMP")
-    r = subprocess.run(["bash", *flags, str(script)], env=env, cwd=tmp_path, capture_output=True, text=True)
+    r = subprocess.run([BASH, *flags, str(script)], env=env, cwd=tmp_path, capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -410,7 +412,7 @@ def _run_gate_step(tmp_path, path, config, *, block=(), temp=None, ado_body=None
     env.update(extra_env or {})
     if temp is False:  # the runner did not set its temp dir
         env.pop("RUNNER_TEMP")
-    r = subprocess.run(["bash", *flags, str(script)], env=env, cwd=tmp_path, capture_output=True, text=True)
+    r = subprocess.run([BASH, *flags, str(script)], env=env, cwd=tmp_path, capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr, tmp_path
 
 
@@ -497,7 +499,7 @@ def test_ann_neutralises_hostile_text_in_a_real_bash(tmp_path, family, name):
     prefix, paths = ANN_FAMILIES[family]
     script = f'{_ann_line(paths[0])}\nprintf \'%s\\n\' "{prefix}$(ann)"\n'
     raw = HOSTILE[name]
-    r = subprocess.run(["bash", "-c", script], env={**os.environ, "LC_ALL": "C"}, capture_output=True, cwd=tmp_path,
+    r = subprocess.run([BASH, "-c", script], env={**os.environ, "LC_ALL": "C"}, capture_output=True, cwd=tmp_path,
                        input=raw.encode("utf-8", "surrogateescape"))  # raw bytes on stdin, NUL and invalid UTF-8 included
     assert r.returncode == 0, r.stderr
     out = r.stdout.decode("utf-8")  # strict: a split multibyte character fails here
@@ -677,7 +679,7 @@ def test_commit_lint_ann_ignores_planted_modules_in_the_checkout(tmp_path):
     git("commit", "-q", "--allow-empty", "-m", "not conventional")
     seen = _plant(tmp_path)
     run = next(s["run"] for s in steps(load("commit-lint")) if "ann()" in s.get("run", ""))
-    r = subprocess.run(["bash", "-c", run], env={**os.environ, "BASE_SHA": base}, cwd=tmp_path, capture_output=True, text=True)
+    r = subprocess.run([BASH, "-c", run], env={**os.environ, "BASE_SHA": base}, cwd=tmp_path, capture_output=True, text=True)
     assert r.returncode == 1 and "not conventional" in r.stdout, r.stdout + r.stderr  # the ann path ran
     assert seen() == []
 
@@ -877,7 +879,7 @@ def _blocks(path):
 @pytest.mark.parametrize("path", CI_TEMPLATES, ids=lambda p: f"{p.parent.name}/{p.name}")
 def test_every_shell_block_parses_with_bash_n(path):
     for text in _blocks(path):
-        r = subprocess.run(["bash", "-n"], input=text, capture_output=True, text=True)
+        r = subprocess.run([BASH, "-n"], input=text, capture_output=True, text=True)
         assert r.returncode == 0, (path.name, r.stderr, text[:80])
 
 
@@ -953,7 +955,7 @@ def _gh_run(tmp_path, step, env, *, no_temp=False, cwd=None, **bodies):
     if no_temp:  # the runner did not set its temp dir
         full.pop("RUNNER_TEMP")
     (tmp_path / "step.sh").write_text(step["run"])
-    r = subprocess.run(["bash", *SHELL_FLAGS, str(tmp_path / "step.sh")], env=full, cwd=cwd or tmp_path, capture_output=True, text=True)
+    r = subprocess.run([BASH, *SHELL_FLAGS, str(tmp_path / "step.sh")], env=full, cwd=cwd or tmp_path, capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -1464,7 +1466,7 @@ def _run_az_verify(tmp_path, ado, *, branch="feature/ab1001-x", target="refs/hea
     if temp:
         env["AGENT_TEMPDIRECTORY"] = str(tmp_path / "at")
     (tmp_path / "step.sh").write_text(step["script"])
-    r = subprocess.run(["bash", *SHELL_FLAGS, str(tmp_path / "step.sh")], env=env, cwd=tmp_path, capture_output=True, text=True)
+    r = subprocess.run([BASH, *SHELL_FLAGS, str(tmp_path / "step.sh")], env=env, cwd=tmp_path, capture_output=True, text=True)
     return r.returncode, r.stdout + r.stderr
 
 
@@ -1927,7 +1929,15 @@ def test_ci_test_job_runs_on_python_3_9_and_3_13_with_the_pins_kept():
     assert re.fullmatch(r"actions/checkout@[0-9a-f]{40}", checkout["uses"]) and checkout["with"] == {"fetch-depth": 0, "persist-credentials": False}
     assert checkout["uses"] == next(s for s in steps(load("speckit-contract")) if s.get("uses", "").startswith("actions/checkout@"))["uses"]
     # the rest of the workflow is as before: same jobs, read-only permissions, no secret in the matrix job
-    assert sorted(wf["jobs"]) == ["actionlint", "scrub", "test"] and wf["permissions"] == {"contents": "read"}
+    assert sorted(wf["jobs"]) == ["actionlint", "scrub", "test", "test-windows"] and wf["permissions"] == {"contents": "read"}
+    # the Windows job runs the whole suite on Python 3.13 with CI blanked (the Spec Kit repo tests skip there) and the same pinned actions
+    win = wf["jobs"]["test-windows"]
+    assert win["runs-on"] == "windows-latest" and win["timeout-minutes"] == 60
+    assert next(s for s in win["steps"] if s.get("run") == "pytest -q -n auto")["env"] == {"CI": "", "ADO_REQUIRE_BASELINE": "1"}
+    # `bash` on the hosted image is the WSL stub: Git Bash must come first on PATH before the tests run
+    names = [s.get("name") for s in win["steps"]]
+    assert names.index("Put Git Bash first on PATH") < names.index("Run the test suite")
+    assert next(s for s in win["steps"] if s.get("uses", "").startswith("actions/setup-python@"))["with"] == {"python-version": "3.13"}
     assert "secrets." not in json.dumps(job) and "permissions" not in job
 
 
