@@ -84,6 +84,7 @@ jobs:
       # On the hosted Windows image `bash` is the WSL stub (it prints "Windows Subsystem for Linux has no installed distributions"),
       # not Git Bash, so the tests that run the workflows' shell snippets cannot work. GITHUB_PATH prepends for the following steps.
       - name: Put Git Bash first on PATH
+        shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\Git\bin'
       # -n auto: the first full run took 28 minutes serially.
       - name: Run the test suite
