@@ -17,6 +17,10 @@ except ImportError:  # Windows has no pseudo-terminal: the tests that need one s
 
 import pytest
 
+# `bash` by name resolves, on Windows, to C:\Windows\System32\bash.exe (the WSL stub) before the PATH is searched, because CreateProcess
+# looks in the system directories first. shutil.which follows PATH order, so it finds Git Bash when the job puts it first.
+BASH = shutil.which("bash") or "bash"
+
 from ado import dod, stack
 from ado.config import Config
 
