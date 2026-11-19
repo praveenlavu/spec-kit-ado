@@ -81,11 +81,16 @@ jobs:
           python-version: "3.13"
       - name: Install package + dev deps
         run: pip install --quiet -e ".[dev]"
+      # On the hosted Windows image `bash` is the WSL stub (it prints "Windows Subsystem for Linux has no installed distributions"),
+      # not Git Bash, so the tests that run the workflows' shell snippets cannot work. GITHUB_PATH prepends for the following steps.
+      - name: Put Git Bash first on PATH
+        run: Add-Content -Path $env:GITHUB_PATH -Value 'C:\Program Files\Git\bin'
+      # -n auto: the first full run took 28 minutes serially.
       - name: Run the test suite
         env:
           CI: ""
           ADO_REQUIRE_BASELINE: "1"
-        run: pytest -q
+        run: pytest -q -n auto
 
   scrub:
     runs-on: ubuntu-latest

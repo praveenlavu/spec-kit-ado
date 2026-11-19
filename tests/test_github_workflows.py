@@ -1931,7 +1931,10 @@ def test_ci_test_job_runs_on_python_3_9_and_3_13_with_the_pins_kept():
     # the Windows job runs the whole suite on Python 3.13 with CI blanked (the Spec Kit repo tests skip there) and the same pinned actions
     win = wf["jobs"]["test-windows"]
     assert win["runs-on"] == "windows-latest" and win["timeout-minutes"] == 60
-    assert next(s for s in win["steps"] if s.get("run") == "pytest -q")["env"] == {"CI": "", "ADO_REQUIRE_BASELINE": "1"}
+    assert next(s for s in win["steps"] if s.get("run") == "pytest -q -n auto")["env"] == {"CI": "", "ADO_REQUIRE_BASELINE": "1"}
+    # `bash` on the hosted image is the WSL stub: Git Bash must come first on PATH before the tests run
+    names = [s.get("name") for s in win["steps"]]
+    assert names.index("Put Git Bash first on PATH") < names.index("Run the test suite")
     assert next(s for s in win["steps"] if s.get("uses", "").startswith("actions/setup-python@"))["with"] == {"python-version": "3.13"}
     assert "secrets." not in json.dumps(job) and "permissions" not in job
 
